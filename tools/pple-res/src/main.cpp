@@ -472,7 +472,18 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
     std::printf("  <Cards> box  : %dx%d (the scale reference)\n", box.width, box.height);
 
     pple::ConcentrationBoard board;
-    if (!board.reset(*chosen, pools, constants, box, seed)) {
+    // The board needs the difficulty's whole <Levels> list, because Board::NewLevel advances
+    // through it: Intermediate plays two boards and Advanced four.
+    std::vector<pple::ConcentrationLevel> chosen_levels;
+    std::size_t chosen_at = 0;
+    for (const pple::ConcentrationLevel& l : levels) {
+        if (l.difficulty != chosen->difficulty) continue;
+        if (l.level_index == chosen->level_index) chosen_at = chosen_levels.size();
+        chosen_levels.push_back(l);
+    }
+    std::printf("  levels       : %zu in \"%s\" (Board::NewLevel walks them)\n", chosen_levels.size(),
+                chosen->difficulty.c_str());
+    if (!board.reset(chosen_levels, chosen_at, pools, constants, box, seed)) {
         std::fprintf(stderr, "board reset failed\n");
         return 1;
     }
@@ -543,14 +554,30 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
             }
         }
         if (first < 0 || second < 0) break;
-        board.click(first);
-        board.click(second);
+        const int level_before = board.level_position();
+        const pple::ClickResult r1 = board.click(first);
+        // A level change re-deals the board, so the second half of the pair no longer means
+        // anything: stop here and let the next pass read the new layout.
+        if (board.level_position() != level_before) {
+            ++clicks;
+            continue;
+        }
+        const pple::ClickResult r2 = board.click(second);
         ++clicks;
-        if (board.face(first) != pple::CardFace::Matched) ++mismatches;
+        // Card::DoMatcher's mismatch branch is the only one that arms the lockout; a Wild Card
+        // match succeeds without a MatchMade (`++matches_` is not run for it), so count the
+        // mismatches from the result rather than from the face.
+        if (r2.mismatch) ++mismatches;
+        if (r1.relaid_out || r2.relaid_out) {
+            // The Mixer reshuffled the remaining cards: the pair list is stale.
+            order.assign(static_cast<std::size_t>(board.cell_count()), 0);
+            for (std::size_t i = 0; i < order.size(); ++i) order[i] = static_cast<int>(i);
+            std::shuffle(order.begin(), order.end(), rng);
+        }
     }
 
     std::printf("\n  autoplay     : %d pairs clicked, %d not matched, score %d, matches %d/%d\n", clicks,
-                mismatches, board.score(), board.matches(), board.pairs_total());
+                mismatches, board.score(), board.matches(), board.round_pairs_total());
     if (chosen->timed())
         std::printf("                 time left %.1f s of %d s, %s\n",
                     static_cast<double>(board.seconds_remaining()), chosen->total_time_seconds,

@@ -109,7 +109,7 @@ Measured over 840 XML resources: 3652 references, 3047 resolved — 2039 exact, 
 | `find <pe>... <text> [--limit N]` | Case-insensitive search (ASCII and UTF-16LE) over every resource payload; prints resource, offset and context |
 | `split <pe>...` | The `SPLITLIST.XML` table, with each split sheet's four `x2` page resources |
 | `cards <pe>...` | The Concentration card deck (`UI\CONCENTRATION\CARDS.XML`) and the `<type>` -> pool mapping |
-| `pairs <pe> [--difficulty D] [--level N] [--seed N] [--layout] [--autoplay]` | Builds a real Purble Pairs board from the shipped data; `--layout` prints every cell, `--autoplay` plays it out |
+| `pairs <pe> [--difficulty D] [--level N] [--seed N] [--layout] [--autoplay]` | Builds a real Purble Pairs board from the shipped data; `--layout` prints every cell, `--autoplay` plays the whole round out |
 | `strings <file.mui> [--id N] [--grep TEXT] [--limit N]` | Dumps the `RT_STRING` table by id |
 | `muicheck <file.mui> <pe>...` | Compares every `\|id\|context\|English` reference in the XML resources against the MUI |
 | `audio <pe>... [--list]` | `AUDIO.XML` events with their `File`/`Volume`/`Buffers`, and how each `File` resolves under `AUDIO\SFX\` |
@@ -180,10 +180,12 @@ Two engine rules that the layout interpreter applies because the shipped data de
 `--script-click "x,y;x,y"` injects clicks in **scene** coordinates through the same handler the
 mouse uses, so menu → game → menu and the card flip can be verified without a mouse;
 `--shot-delay MS` waits that long before capturing, which is what catches a flip mid-animation.
-`--pairs-solve` clicks every matchable pair (equal `<id>`, or either card the Wild Card) and
-`--pairs-ticks N` advances the engine's fixed 30 Hz step N times first, so the time bar, the red
-threshold and the loss state are reachable immediately. `--bench N` renders N frames with vsync
-off and reports the card-layer cost; `--bench-build N` reports the cost of N whole scene rebuilds.
+`--pairs-solve` plays the whole round out — every `<Level>` of the difficulty — by clicking
+matchable pairs (equal `<id>`, or the Wild Card against anything) through the same handler the
+mouse uses, and `--pairs-ticks N` advances the engine's fixed 30 Hz step N times first, so the
+time bar, the red threshold and the loss state are reachable immediately. `--bench N` renders N
+frames with vsync off and reports the card-layer cost; `--bench-build N` reports the cost of N
+whole scene rebuilds.
 
 Sheet handling follows the engine: a `.sht` reference is loaded as `<stem>.jpg` (colour) plus
 `<stem>.bmp` → `<stem>.BMP.CAB` (alpha) and the two are composed, a frame whose node sets
@@ -258,12 +260,12 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-xml` | **840 XML resources parsed, 0 failures**; 3425 distinct element paths |
 | Re-extracted assets vs independent Python extraction | byte-identical |
 | `pple-view --shot` | PNG, CAB→BMP and JPEG paths all render; sprite frames verified |
-| `pple-view --scene` | `CONCENTRATIONGAME.XML` on its own renders 11 sprites and no labels, because `ConcentrationGame::LoadGameUI` deletes the five Media-Center nodes; with `--mce` it is 13 sprites + 3 labels, and `NewGame`/`ExitGame` measure 0% art (correctly transparent — see the note above). The untimed Beginner bar background is hidden |
+| `pple-view --scene` | `CONCENTRATIONGAME.XML` on its own renders **14 sprites and no labels**, because `ConcentrationGame::LoadGameUI` deletes the five Media-Center nodes; with `--mce` it is **16 sprites + 3 labels**, and `NewGame`/`ExitGame` measure 0% art (correctly transparent — see the note above). Adding `--pairs` hides the three time-bar nodes, two of them templates (`/TimeBarGreen` and `/TimeBarRed` are deleted by `TimeBar::InitUI` `0x10008517C`) and the background on an untimed difficulty, so a Beginner board reports 11 |
 | `pple-res split` | 11 split sheets, each with exactly four `x2` page resources (44 in `PurblePlace.dll`) |
 | `pple-view --sprite --state` | `BUILDAPURBLEBUTTON.XML` state 0 transparent, state 1 light art, state 2 dark art, matching the running game's own menu screenshot |
 | `pple-res rgmhrt` | All four `RGMH` files on disk (3 settings + 1 savegame, 83,826–87,542 bytes) re-emitted **byte-identical**; `windowprefs.xml` correctly rejected as not `RGMH` |
 | `pple-view --movie` | `PRO_IDLE.XML` 61 frames / 31 parts, all drawn, frames 0/20/35/50 differ; `SMILEYBURSTMOVIE.XML` 88 frames / **322 parts**, all drawn |
-| `pple-res pairs --autoplay` | Beginner 12/12 pairs score 240, Intermediate 18/18 score 360, Advanced 32/32 score 640, no mismatches — the deck, match rule and scoring agree end to end |
+| `pple-res pairs --autoplay` | The whole round, not one board: Beginner **1 board, 12 pairs + the odd board's forced Wild Card, score 410**, Intermediate **2 boards, 36 pairs, score 1120**, Advanced **4 boards, 128 pairs, score 3920**, all `WON`, no mismatches. `Board::NewLevel` (`0x10008AAD4`) advances through the difficulty's `<Levels>` list, so Intermediate plays 2 boards and Advanced 4, each with its own `<CardPairs>` and `<TotalTime>` |
 | `pple-view --pairs` | Advanced 8x8 draws **all 64 cells** from real card sprites; cell 49x49 at scale 40%, face-up 64 / backs 0 / sprite failures 0 |
 | `pple-res muicheck` | Against `PurblePlace.dll` alone: **798 ids referenced, 796 (99.7%) byte-identical** to `en-US\PurblePlace.exe.mui`, 2 divergent, 0 absent. Adding `CardGames.dll` raises the total to 1,154 ids with 245 absent — all of them Solitaire ids that this MUI does not carry |
 | `pple-view --mui` | Installs the MUI as the label localiser; the menu title's font changes `Comic Sans MS` → `Segoe UI` and `LOADING...` gains the MUI's trailing space |
@@ -272,15 +274,21 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-res asf` | **All 201 ASF/WMA resources parse**, every one WMA v2, 2ch 44.1 kHz 16-bit, with real durations |
 | `pple-res wma --all` | All 201 decode through Media Foundation, 0 failures, 343.35 s total; decoded length agrees with the container's declared duration for **201 of 201** |
 | `pple-view --play` | `UI_BUTTON` resolves through `AUDIO.XML` to `PURBLE_BUTTON_STEREO.WMA`, decodes to 0.325 s and plays through the SDL **wasapi** driver |
-| `pple-view --pairs` sounds | `Con_TileFlip`/`Con_Correct`/`Con_TileFlip_Incorrect` load at the manifest's 30% volume; `--pairs-click 0,1` on seed 9 scores a match (20) and `--pairs-click 2,6` arms the reveal timer |
+| `pple-view --pairs` sounds | 14 `Con_*` events decoded once through Media Foundation at the manifest's own volume and played from `ClickResult`, which carries one flag per branch of `Card::DoMatcher`: `Con_TileFlip` on every flip, then `Con_Correct` / `Con_TileFlip_Incorrect` / `Con_PowerUp` / `Con_PurbleChef` / `Con_Mixer` / `Con_TimeDelay` / `Con_SneakPeek_Get`, plus `Con_NewScreen` per board, `Con_BoardCleared` on the clear, and `Con_Win` / `Con_GameOver` at the round's end. The proto→name mapping is `AUDIO.XML`'s **element** order in `<Sounds>` (`GameAudio::LoadGameAudio` `0x10009DDF8`) and was checked against every call site; see section 18.1 of the notes. Note `OnWinAnimStop`/`OnLoseAnimStop` play nothing — `Con_BoardCleared` comes from `Jar::Update` |
+| `pple-view --pairs` progress meter | Drawn from its real sprites: `Board::Init` (`0x1000888C4`) copies `UI\Concentration\CardBacks.xml`'s first four `/progpath` values to `(Board+0x20)[i]+0x508`, and `ProgressMeter::InitUI` (`0x100084720`) makes one indicator per `<Level>` at `/ProgressMeterContainer` `665,40`, stacked 55 px apart. The frame is the state: `node+0x180 = 1` while `i < Round+0x124`, which `ConRoundData::ToXml` (`0x10008035C`) names `Level`. Beginner 1 indicator, Intermediate 2, Advanced 4; at Advanced's level 4/4 the first three are filled and the fourth hollow (`s4-meter-zoom.png`), at Intermediate's level 2/2 the first is filled (`s4-levelup-meter.png`) |
+| `pple-view --pairs` special cards | All four now act, and each prints its effect: the Chef's cake sweeps every card with the Chef id and plays `Con_PurbleChef`; the Mixer plays `Con_Mixer` and `Board::DoMixer` (`0x100089870`) reshuffles the cards left; the Time Bonus adds `<TimeBonusPercent> / 200 * Level+0x0C` ticks (**+787** on Intermediate's 6300, **+675** on Advanced's 5400) and plays `Con_TimeDelay`; a card carrying the sneak icon pays `<SneakMatchBonus>` 20 and plays `Con_SneakPeek_Get`. A match with **exactly one** Wild Card is the engine's else branch: a flat **+10** with no `MatchMade`, and `Con_PowerUp` |
+| `pple-view --pairs` scoring | `Board::MatchMade` (`0x10008B0AC`) is reached with the multiplier input `(a[+0x50] + b[+0x50]) / 2`, and `Card::Init` (`0x10007B6E4`, at `0x10007B717`) is the only writer of `Card+0x50` and stores 0 — so the shipped build always takes the `*= 3` branch. Beginner's 12 pairs score 360 plus one `<SneakMatchBonus>` of 20 and the odd board's forced Wild Card 30 = **410**; the previous `x2` branch was 2/3 of that |
+| `pple-view --pairs` sneak peek | The tokens are real: `SneakPeakArea::InitUI` (`0x1000849C0`) builds `<NumStartTokens>` of them from `/SneakPeekTokens`, all at `/SneakPeekContainer`'s own origin (`3,401` 45x46, since the shipped `<SneakPeekToken>` entries carry only a `<Sprite>`), and hides token `i` when `i + 1 > Round+0x11C`. Clicking one spends it and calls `Board::SneakPeaker` (`0x10008B280`), which turns every card over for `<SneakPeakIconDur>`; the run prints `sneak token 0 -> 1 left, peek for 600 ticks` and `s4-peek.png` shows the whole board face up with the HUD at `tokens 1` |
+| `pple-view --pairs` card back | `Card::InitUI` (`0x10007B8D8`) calls `Card::InitCardButton(this, Level+0x148)`, and `Card::InitCardButton` (`0x10007CB4C`) builds `Card+0x98` from `GetXml((Board+0x20)[level] + 8)` — the CardBack's `/buttonpath`. So the back is per level: `ShamButton.xml`, `HeartButton.xml`, `SmileyButton.xml`, `GumButton.xml`. `blankcardbutton.xml` is a different node (`Card+0xB0`, "BlankCard") for the intro state. `s4-cardback-compare.png` puts the shipped thumbnail next to the fixed screen |
 | `pple-view --menu` | runs `UI\PurblePlace\PurblePlaceManager.xml` from `PurblePlace.dll`: 8 items drawn, **4 hot-spots** at `509,145 292x250` (Build-a-Purble), `210,153 248x256` (Comfy Cakes), `2,82 212x213` (Purble Pairs), `2,373 93x100` (Exit). `menu-hotspots2.png` overlays the same rectangles on `PurblePlaceForeground.png` and every one lands on its painted icon |
 | `pple-view --menu --script-click "330,280"` | enters the Comfy Cakes hot-spot: the menu rebuilds with that button on `<Animation>` 1 and the house gains its bright hover glow in the right place, the HUD names `ComfyCakesButton`, and the click reports the game as unimplemented |
 | `pple-view --menu --script-click` | `100,180;200,60;760,470` logs `menu: ConcentrationButton -> Purble Pairs`, `click 0 -> revealed`, `pairs: ReturnToMainMenu -> main menu` — menu → game → flip → menu, in one run; the window stays up |
-| `pple-view --pairs-solve` | a whole round through the viewer's own click handler on all three difficulties: Beginner **12/12 score 240**, Intermediate **18/18 score 360**, Advanced **32/32 score 640**, all `WON`, each then swapping to `ProfessorWinAnimation` — the same scores `pple-res pairs --autoplay` gives. The solver matches exact ids first and spends the Wild Cards last, because the Advanced deck has a single Time Bonus and a single Chef's cake and a greedy wild match strands them |
-| `pple-view --pairs "Intermediate,0" --pairs-ticks N` | 3000 ticks → 110 s left, bar half drained; 5500 → 27 s left and the last segment is **red**; 6300 → `LOST`, `professor -> ProfessorLoseAnimation`, and the bar is empty. 226 segments, `TimeBarGreen`'s own `<FrameCount>` |
+| `pple-view --pairs-solve` | a whole round through the viewer's own click handler on all three difficulties: Beginner **12 pairs + the forced Wild Card, score 410**, Intermediate **2 boards / 36 pairs, score 1180**, Advanced **4 boards / 128 pairs, score 4040**, all `WON`, each then swapping to `ProfessorWinAnimation`. The solver matches exact ids first and spends the Wild Cards last, because a single-Wild match is the engine's flat `+10` branch and consumes the partner |
+| `pple-view --pairs "Intermediate,0" --pairs-ticks N` | 3000 ticks → 110 s left, bar half drained; 5500 → 27 s left and the last segment is **red**; 6300 → `LOST`, `professor -> ProfessorLoseAnimation`, and the bar is empty. 226 segments, `TimeBarGreen`'s own `<FrameCount>`. The loss test is `Level+0x0C > 0 && Round+0x154 != 0 && Round+0x118 <= 0`, so Beginner — whose `Level+0x0C` is `30 * -1` — cannot lose |
+| `pple-view --pairs` level change | `--pairs "Intermediate,0" --pairs-click <36 cells>` clears the first board through the click handler, prints `board relaid out -> level 2/2`, re-deals the second `<Level>`'s deck and back art, and the meter goes from one hollow indicator to one filled + one hollow. `Jar::StopExplosion` (`0x100083A20`) is the engine's decision point: no next `<Level>`, or `Round+0x124 >= Difficulty+0x20`, means the round is won; otherwise `Board::NewLevel` |
 | `pple-view --pairs` card flip | `--script-click "100,180;200,60" --shot-delay 60` captures the back collapsed to ~1/3 width, `--shot-delay 130` the face expanding — the two phases of `Card::UpdateFlipForward` (`0x10007EA20`) |
-| `pple-view --mce` | 13 sprites and 3 labels instead of 11 and 0; `New Game` and `Exit Game` labels appear in the 51 px header strip and the clicks log `pairs: NewGame -> new round` and `pairs: ExitGame -> main menu`. Without `--mce` the same clicks do nothing |
-| `pple-view --bench-build 20 --pairs "Beginner,0"` | a whole scene rebuild with every sheet cached: **17.183 ms/call**. `--bench 300` with the reveal timer armed: the card layer, which is what replaced it, is **0.188 ms/call** over 84 calls — about 91x cheaper per 30 Hz tick |
+| `pple-view --mce` | 16 sprites and 3 labels instead of 14 and 0; `New Game` and `Exit Game` labels appear in the 51 px header strip and the clicks log `pairs: NewGame -> new round` and `pairs: ExitGame -> main menu`. Without `--mce` the same clicks do nothing |
+| `pple-view --bench-build 20 --pairs "Beginner,0"` | a whole scene rebuild with every sheet cached: **17.430 ms/call** (21 calls, the extra one is the priming build). `--bench 300` with the reveal timer armed: the card layer, which is what replaced it, is **0.192 ms/call** over 87 calls — about 91x cheaper per 30 Hz tick |
 | `pple-view --scene` container offsets | `TimeBarBkg` moves `3,21` → `63,4`, the jar to `15,315`, the peek background and its tokens to `0,398`, the Professor's movie anchor to `295,70`; `CONCENTRATIONGAME.XML` renders as the shipped screen (`new-conc.png` next to the game's own 256x192 thumbnail) |
 | `pple-view --scene` power-of-two padding | `<PlayArea>`'s `148,0 800x500` now lands on a 1024x512 texture, so the 800x496 PNG is not stretched; the blue board's right edge lands at screen x **588.9**, which is where the game's own screenshot puts it (589). The unpadded reading gives 661.6 |
 
@@ -310,25 +318,33 @@ Viewable items: `PurblePlace.dll` 211 (67 PNG + 71 CAB + 73 JPEG), `PurblePlace2
 * The three games: Purble Pairs is **playable** (`pple-view --menu`, or headless with
   `pple-res pairs --autoplay`). Comfy Cakes and Purble Shop are not started; their menu
   hot-spots are drawn and clickable and say so when clicked. The card deck, board geometry,
-  match rule, scoring, placement, container parenting and flip animation are reversed; see
-  sections 14 and 17 of `D:\Development\re\notes\purbleplace.md`. Not implemented:
-  * the special cards beyond the Wild Card — the Mixer, the Chef's cake, the Time Bonus and the
-    sneak peek all currently behave as ordinary pairs. The Wild Card **is** implemented
-    (`Card::DoMatcher` `0x10007D224`: equal `<id>`, or either id is `Board+0x180`), and
-    `--pairs-solve` exercises it;
-  * the `x3`/`x2`/`x1` multiplier that `Board::MatchMade` applies, whose input is read from a
-    stack slot with no corresponding argument (the reconstruction uses the `x2` branch);
-  * `<NumCardTypes>`, which is read from the XML into `Level+8` and has no reader I could find;
-  * the **progress meter**: `ProgressMeter::InitUI` (`0x100084720`) builds four indicator sprites
-    from `*(Board+0x20) + 8*i` at `+0x508` (1,288) and stacks them `55` px apart, lighting one
-    per matched pair (`Board+0x124`). Those per-level indicator sprite names are not produced by
-    `Difficulty::Init` (`0x10008BA7C`), which only reads `<TotalTime>`, `<NumCardTypes>` and
-    `<CardPairs>` per level, so the reconstruction does not know the sprite names and draws no
-    meter. The jar, the sneak-peek tokens and the Professor are drawn;
-  * the **sneak peek** tokens are drawn at the right place out of `NumStartTokens`' three token
-    slots, but they are inert: `Board::SneakPeaker` / `SneakPeakCheck` / `SelectSneakCard` are not
-    reversed;
-  * `<NumStartTokens>` is parsed and used for the token count only.
+  match rule, scoring, placement, container parenting, flip animation, sound map, progress
+  meter, multi-level rounds, special cards, sneak peek and per-level card back are reversed; see
+  sections 14, 17 and 18 of `D:\Development\re\notes\purbleplace.md`. Not implemented:
+  * **the jar's coins.** `Jar::InitUI` (`0x100083218`) is an `ArcContainer` with a coin array and
+    `Board::DoFlyIntoJar` (`0x10008AF54`) sends a matched pair across; the reconstruction draws
+    `JarBase`/`JarBkg`/`JarFg` and plays `Con_BoardCleared` once when the board is cleared, where
+    the engine plays it from `Jar::Update` (`0x10008373C`) as the pair is banked. The jar's match
+    count therefore still comes from the board's own counter;
+  * **`ConRoundData::CalcEndGame`** (`0x100080718`), the second scoring stage that adds a
+    `RANKS.XML` `<TimeBonus>` and `<FlipBonus>` to `Round+0x120` and picks a rank. The
+    reconstruction reports `Round+0x120` itself, which is what the game's own status bar shows
+    (`ConcentrationGame::UpdateStatusBar` `0x100082D68`), not the final ranked score;
+  * **the Professor's level-change tips** `ProIntLevelChange` / `ProAdvLevelChange`
+    (`Jar::StopExplosion` `0x100083A20`); the reconstruction prints the level change and keeps the
+    idle movie;
+  * **the card's own effects**: `card_glow.xml`, `highlite_outline.xml`, `tileglow.xml`,
+    `tilecover.xml`, the `/BonusTileAnimation` movie and the `SparkleSprite_y` sparks are all
+    created by `Card::InitUI` (`0x10007B8D8`) and none of them is drawn;
+  * the Mixer's once-per-level guard `Board+0x1DC` is approximated by `Card::DoMixerCheck`'s
+    `> 3` card gate alone;
+  * `<NumCardTypes>`, which is read from the XML into `Level+8` and has no reader I could find.
+    It agrees with the number of letter runs for Beginner (4) but not for Intermediate (stored 5,
+    8 runs) or Advanced (`-1`, 9-12 runs);
+  * `<NumStartTokens>` drives the token count and the sneak peek, but nothing else;
+  * the fifth `<Back>` (Star) in `CardBacks.xml` is never loaded (`Board::Init`'s loop is four
+    iterations), and `/imagepath`, `/animpath`, `/moviepath` and `/jarpath` have no reader in this
+    build.
 * The engine's own HUD text on an untimed round has no time bar, which the reconstruction
   reproduces (`TimeBar::InitUI` `0x10008538E` hides `/TimeBarBkg` when the difficulty is 0).
 * 240 distinct references (464 occurrences) do not resolve — content variants that were never

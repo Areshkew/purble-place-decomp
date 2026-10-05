@@ -375,6 +375,31 @@ std::string play_pcm(const pple::PcmAudio& audio, float volume, std::string& err
 
 // Purble Pairs sound effects, decoded once from the AUDIO.XML manifest and queued on their own
 // SDL streams so a click never waits for the previous sound to finish.
+//
+// The engine plays sounds by "proto": a compile-time index into GameAudio::aSoundEffects.
+// GameAudio::LoadGameAudio (0x10009DDF8) fills that array by walking <Sounds> in document order
+// and calling Array<SoundEffect*>::SetAt(index, ...), and XmlNode children are elements only --
+// comments are not nodes -- so a proto is the element's position among the elements of <Sounds>,
+// counting from zero.  Reading the array off AUDIO\AUDIO.XML of PurblePlace.dll that way gives
+// the names below, and every proto this file uses was checked against its call site:
+//
+//   0x6D Con_BoardCleared      Jar::Update 0x1000838A7
+//   0x6E Con_Correct           Card::DoMatcher 0x10007D8B5   (the match branch)
+//   0x6F Con_GameOver          OnEnterLoseGameState 0x1000825C2 (and again at 0x1000825FF)
+//   0x70 Con_Mixer             Card::DoMixerCheck 0x10007DA1C
+//   0x71 Con_NewScreen         Board::InitUI 0x10008934D
+//   0x72 Con_PowerUp           Card::DoMatcher 0x10007D75D   (exactly one Wild Card)
+//   0x73 Con_TileFlip          Card::FlipForward 0x10007CFCD
+//   0x74 Con_TileFlip_Incorrect Card::DoMatcher 0x10007D298  (the mismatch branch)
+//   0x75 Con_Win               OnEnterWonGameState 0x100082512
+//   0x76 Con_PurbleChef        Card::DoMatcher 0x10007D68C   (the Chef's cake sweep)
+//   0x77 Con_TimeDelay         Board::MatchMade 0x10008B115, Board::DoTimeBonus 0x10008B1BA
+//   0x78 Con_SneakPeek_Starburst SneakPeakArea::HandleEvent 0x100084FEB
+//   0x79 Con_SneakPeek_Get     Card::DoMatcher 0x10007D6FD   (the sneak-peek icon match)
+//   0x7A Con_SneakPeek_Click   SneakPeakArea::HandleEvent 0x100084EE0
+//
+// Note that OnWinAnimStop (0x100082670) and OnLoseAnimStop (0x10008272C) play nothing at all:
+// Con_BoardCleared comes from the jar, not from the Professor's exit.
 struct PairSfx {
     pple::PcmAudio audio;
     SDL_AudioStream* stream = nullptr;
@@ -382,35 +407,40 @@ struct PairSfx {
     std::string event;
     std::string resource;
     bool ok = false;
+    bool tried = false;
 };
 
-PairSfx g_sfx_flip;
-PairSfx g_sfx_correct;
-PairSfx g_sfx_wrong;
+const Bundle* g_sfx_bundle = nullptr;
+std::map<std::string, PairSfx> g_sfx;
 bool g_sfx_ready = false;
 bool g_sfx_enabled = true;
 std::string g_sfx_driver;
 
-void load_pair_sfx(const Bundle& bundle, const std::string& event, PairSfx& out) {
-    out = PairSfx{};
-    out.event = event;
+PairSfx& pair_sfx(const std::string& event) {
+    static PairSfx missing;
+    PairSfx& slot = g_sfx[event];
+    if (slot.tried) return slot;
+    slot.tried = true;
+    slot.event = event;
+    if (g_sfx_bundle == nullptr) return slot;
+    const Bundle& bundle = *g_sfx_bundle;
     const std::string file = audio_event_file(bundle, event);
-    if (file.empty()) return;
+    if (file.empty()) return slot;
     std::string resource = "AUDIO\\SFX\\" + file;
     for (char& c : resource)
         if (c == '/') c = '\\';
     std::string how;
-    const auto* slot = bundle.resolve(resource, how);
-    if (slot == nullptr) return;
+    const auto* res = bundle.resolve(resource, how);
+    if (res == nullptr) return slot;
     std::string error;
-    if (!pple::wma_decode(bundle.read(*slot), out.audio, error)) return;
+    if (!pple::wma_decode(bundle.read(*res), slot.audio, error)) return slot;
     SDL_AudioSpec spec{};
     spec.format = SDL_AUDIO_S16;
-    spec.channels = static_cast<int>(out.audio.channels);
-    spec.freq = static_cast<int>(out.audio.sample_rate);
-    out.stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
-    if (out.stream == nullptr) return;
-    out.resource = slot->entry->name;
+    spec.channels = static_cast<int>(slot.audio.channels);
+    spec.freq = static_cast<int>(slot.audio.sample_rate);
+    slot.stream = SDL_OpenAudioDeviceStream(SDL_AUDIO_DEVICE_DEFAULT_PLAYBACK, &spec, nullptr, nullptr);
+    if (slot.stream == nullptr) return slot;
+    slot.resource = res->entry->name;
     // The manifest's own <Volume> field, as a fraction.
     std::string vol_text;
     {
@@ -427,16 +457,34 @@ void load_pair_sfx(const Bundle& bundle, const std::string& event, PairSfx& out)
         }
     }
     const int volume = vol_text.empty() ? 100 : std::atoi(vol_text.c_str());
-    out.volume = static_cast<float>(volume) / 100.0f;
-    SDL_SetAudioStreamGain(out.stream, out.volume);
-    out.ok = true;
+    slot.volume = static_cast<float>(volume) / 100.0f;
+    SDL_SetAudioStreamGain(slot.stream, slot.volume);
+    slot.ok = true;
+    return slot;
 }
 
-void play_pair_sfx(PairSfx& sfx) {
-    if (!g_sfx_enabled || !sfx.ok || sfx.stream == nullptr) return;
+void play_pair_sfx(const std::string& event) {
+    if (!g_sfx_enabled || !g_sfx_ready) return;
+    PairSfx& sfx = pair_sfx(event);
+    if (!sfx.ok || sfx.stream == nullptr) return;
     SDL_PutAudioStreamData(sfx.stream, sfx.audio.samples.data(),
                            static_cast<int>(sfx.audio.samples.size() * sizeof(std::int16_t)));
     SDL_ResumeAudioStreamDevice(sfx.stream);
+}
+
+// The sounds one click owes, in the order Card::DoMatcher reaches them.  Card::FlipForward
+// (0x10007CFA4) plays Con_TileFlip for every card, including the first of a pair; everything
+// else is inside DoMatcher's `v6 != 0` block, i.e. only once the second card has been revealed.
+void play_click_sfx(const pple::ClickResult& r) {
+    play_pair_sfx("Con_TileFlip");
+    if (!r.second) return;
+    if (r.mismatch) play_pair_sfx("Con_TileFlip_Incorrect");
+    if (r.chef) play_pair_sfx("Con_PurbleChef");
+    if (r.sneak_get) play_pair_sfx("Con_SneakPeek_Get");
+    if (r.wild_match) play_pair_sfx("Con_PowerUp");
+    if (r.match) play_pair_sfx("Con_Correct");
+    if (r.mixer) play_pair_sfx("Con_Mixer");
+    if (r.time_bonus > 0) play_pair_sfx("Con_TimeDelay");
 }
 
 // A sprite node definition, resolved to a sheet and one frame rectangle.
@@ -1383,6 +1431,19 @@ int main(int argc, char** argv) {
     bool pairs_ready = false;
     pple::CardPools pairs_pools;
     pple::CardsBox pairs_box;
+    // Kept so the click handler can reach the constants the peek timers use.
+    pple::ConcentrationConstants pairs_constants;
+    // The sneak-peek token rects, one per <NumStartTokens>, at /SneakPeekContainer.
+    std::vector<SDL_FRect> pairs_tokens;
+    // The progress meter: /ProgressMeterContainer (665,40) and one indicator per <Level>, stacked
+    // /ProgressMeterIndicators/yOffSet (55) apart, drawn from the CardBack <progpath> sprites.
+    struct MeterDraw {
+        SDL_Texture* tex = nullptr;
+        SDL_FRect src_unlit{};
+        SDL_FRect src_lit{};
+        SDL_FRect dst{};
+    };
+    std::vector<MeterDraw> pairs_meter;
     // The PlayArea node's placement, so a mouse position can be turned back into a cell.
     float pairs_origin_x = 0.0f, pairs_origin_y = 0.0f, pairs_outer_scale = 1.0f;
     std::string pairs_sheet_note;
@@ -1445,11 +1506,17 @@ int main(int argc, char** argv) {
     std::string pairs_title = "Purble Pairs";
     const auto refresh_hud = [&]() {
         if (!pairs_ready) return;
+        const int level_no = pairs_board.level_position() + 1;
+        const int level_max = pairs_board.level_count();
         hud_lines = {
             pairs_title,
             "score " + std::to_string(pairs_board.score()) + "   matches " +
                 std::to_string(pairs_board.matches()) + "/" +
-                std::to_string(pairs_board.pairs_total()),
+                std::to_string(pairs_board.round_pairs_total()) +
+                (level_max > 1 ? "   level " + std::to_string(level_no) + "/" +
+                                     std::to_string(level_max)
+                               : std::string()) +
+                "   tokens " + std::to_string(pairs_board.tokens()),
             pairs_board.timed() ? "time " + std::to_string(static_cast<int>(pairs_board.seconds_remaining())) + " s"
                                 : std::string("untimed"),
             pairs_board.won() ? "WON - N or R for a new game"
@@ -1479,6 +1546,13 @@ int main(int argc, char** argv) {
     std::vector<Hotspot> conc_hotspots;
     bool menu_ready = false;
     std::string menu_hover_name;
+    // Set when build_pairs must rebuild the art for a board that already moved on: the Mixer
+    // reshuffled the cards, or Board::NewLevel advanced to the next <Level>.
+    bool pairs_keep_state = false;
+    // One end-of-round sound per round.
+    bool pairs_end_played = false;
+    // Set by a click that changed the layout; the main loop does the rebuild.
+    bool pairs_rebuild_pending = false;
     const auto build_pairs = [&]() {
         const Uint64 build_t0 = SDL_GetPerformanceCounter();
         std::string scene_how;
@@ -1501,6 +1575,7 @@ int main(int argc, char** argv) {
             return;
         }
         pple::concentration_cards_box_parse(scene_bytes, pairs_box, error);
+        pairs_constants = constants;
         // --pairs "Difficulty,Level[,Seed]"
         std::string want_difficulty = "Beginner";
         int want_level = 0;
@@ -1518,7 +1593,15 @@ int main(int argc, char** argv) {
             if (parts.size() > 2 && !parts[2].empty()) seed_for_pairs = std::stoul(parts[2]);
         }
         const pple::ConcentrationLevel* chosen = nullptr;
-        for (const pple::ConcentrationLevel& l : levels)            if (l.difficulty == want_difficulty && l.level_index == want_level) chosen = &l;
+        // A rebuild after the Mixer reshuffled the cards or after Board::NewLevel advanced the
+        // level must NOT re-deal: the board already carries the new state.  The scene, the
+        // Professor and the art are rebuilt, the board is left alone.
+        const bool keep_state = pairs_keep_state;
+        pairs_keep_state = false;
+        if (keep_state && pairs_ready)
+            chosen = &pairs_board.level();
+        else
+            for (const pple::ConcentrationLevel& l : levels)            if (l.difficulty == want_difficulty && l.level_index == want_level) chosen = &l;
         if (chosen == nullptr && !levels.empty()) chosen = &levels.front();
         if (chosen == nullptr) {
             std::fprintf(stderr, "pairs: no level\n");
@@ -1556,28 +1639,54 @@ int main(int argc, char** argv) {
         if (!g_sfx_ready) {
             g_sfx_ready = true;
             g_sfx_enabled = !mute;
+            g_sfx_bundle = &bundle;
             if (g_sfx_enabled && SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-                load_pair_sfx(bundle, "Con_TileFlip", g_sfx_flip);
-                load_pair_sfx(bundle, "Con_Correct", g_sfx_correct);
-                load_pair_sfx(bundle, "Con_TileFlip_Incorrect", g_sfx_wrong);
+                // The three the sound check in the README names, plus every other event this
+                // screen can reach.  Each is decoded once, at the manifest's own <Volume>.
+                const char* kEvents[] = {
+                    "Con_TileFlip",     "Con_Correct",    "Con_TileFlip_Incorrect",
+                    "Con_NewScreen",    "Con_BoardCleared", "Con_Win",
+                    "Con_GameOver",     "Con_PowerUp",    "Con_Mixer",
+                    "Con_PurbleChef",   "Con_TimeDelay",  "Con_SneakPeek_Get",
+                    "Con_SneakPeek_Click", "Con_SneakPeek_Starburst",
+                };
+                int loaded = 0;
+                std::string names;
+                for (const char* event : kEvents) {
+                    PairSfx& sfx = pair_sfx(event);
+                    if (sfx.ok) ++loaded;
+                    if (sfx.ok) {
+                        if (!names.empty()) names += ", ";
+                        names += event;
+                    }
+                }
                 const char* driver = SDL_GetCurrentAudioDriver();
                 g_sfx_driver = driver == nullptr ? "(none)" : driver;
-                std::printf("  audio %s: %s %.0f%%, %s %.0f%%, %s %.0f%%\n",
-                            g_sfx_driver.c_str(), g_sfx_flip.ok ? "Con_TileFlip" : "-",
-                            static_cast<double>(g_sfx_flip.volume * 100.0f),
-                            g_sfx_correct.ok ? "Con_Correct" : "-",
-                            static_cast<double>(g_sfx_correct.volume * 100.0f),
-                            g_sfx_wrong.ok ? "Con_TileFlip_Incorrect" : "-",
-                            static_cast<double>(g_sfx_wrong.volume * 100.0f));
+                std::printf("  audio %s: %d/%zu events decoded: %s\n", g_sfx_driver.c_str(), loaded,
+                            sizeof(kEvents) / sizeof(kEvents[0]), names.c_str());
             } else {
                 std::printf("  audio: disabled\n");
             }
         }
-        if (!pairs_board.reset(*chosen, pairs_pools, constants, pairs_box, seed_for_pairs)) {
-            std::fprintf(stderr, "pairs: board reset failed\n");
-            return;
+        if (keep_state) {
+            // The board keeps its slot layout, deck, score, level and tick budget.
+        } else {
+            // The board needs the difficulty's whole <Levels> list: Board::NewLevel walks it, so
+            // Intermediate plays two boards and Advanced four.
+            std::vector<pple::ConcentrationLevel> chosen_levels;
+            std::size_t chosen_at = 0;
+            for (const pple::ConcentrationLevel& l : levels) {
+                if (l.difficulty != chosen->difficulty) continue;
+                if (l.level_index == chosen->level_index) chosen_at = chosen_levels.size();
+                chosen_levels.push_back(l);
+            }
+            if (!pairs_board.reset(chosen_levels, chosen_at, pairs_pools, constants, pairs_box,
+                                   seed_for_pairs)) {
+                std::fprintf(stderr, "pairs: board reset failed\n");
+                return;
+            }
         }
-        if (pairs_reveal) {
+        if (!keep_state && pairs_reveal) {
             // Reveal the whole deck, for inspecting the card art of every level.
             pairs_board.reveal_all();
         }
@@ -1586,7 +1695,7 @@ int main(int argc, char** argv) {
         // Card::DoMatcher's: equal <id>, or either card is the Wild Card.  The wild is matched
         // last, because spending it on the first partner that happens to be available strands
         // the deck's single Time Bonus / Chef's cake cards.
-        if (pairs_solve) {
+        if (!keep_state && pairs_solve) {
             const int wild = pairs_pools.wild;
             const auto id_of = [&](int i) { return pairs_board.card_id(i); };
             const auto hidden = [&](int i) {
@@ -1608,13 +1717,32 @@ int main(int argc, char** argv) {
                                              : phase == 1 ? (wild_a != wild_b)
                                                           : (wild_a && wild_b);
                             if (!take) continue;
-                            const int before = pairs_board.matches();
-                            if (!pairs_board.click(i)) break;
-                            if (!pairs_board.click(j)) break;
+                            const int level_before = pairs_board.level_position();
+                            if (!pairs_board.click(i).accepted) break;
+                            const pple::ClickResult r = pairs_board.click(j);
+                            if (!r.accepted) break;
                             std::printf("  solve click %d,%d -> %s, score %d, matches %d/%d\n", i, j,
-                                        pairs_board.matches() > before ? "MATCH" : "revealed",
+                                        r.match ? "MATCH"
+                                                : (r.wild_match ? "WILD (+10)"
+                                                                : (r.mismatch ? "MISS" : "revealed")),
                                         pairs_board.score(), pairs_board.matches(),
-                                        pairs_board.pairs_total());
+                                        pairs_board.round_pairs_total());
+                            // The special cards, so each one's effect is visible in the output
+                            // rather than only in the code.
+                            if (r.chef)
+                                std::printf("    chef cake: swept every card with the Chef id\n");
+                            if (r.mixer)
+                                std::printf("    mixer: Board::DoMixer reshuffled the cards left\n");
+                            if (r.sneak_get)
+                                std::printf("    sneak icon: +%d (SneakMatchBonus)\n",
+                                            pairs_constants.sneak_match_bonus);
+                            if (r.time_bonus > 0)
+                                std::printf("    time bonus: +%d ticks, %.0f s left\n", r.time_bonus,
+                                            static_cast<double>(pairs_board.seconds_remaining()));
+                            if (pairs_board.level_position() != level_before)
+                                std::printf("    level cleared -> %d/%d\n",
+                                            pairs_board.level_position() + 1,
+                                            pairs_board.level_count());
                             progress = true;
                             break;
                         }
@@ -1624,7 +1752,7 @@ int main(int argc, char** argv) {
             for (int phase = 0; phase < 3 && !pairs_board.finished(); ++phase) run_phase(phase);
             std::printf("  solve: %s, score %d, matches %d/%d\n",
                         pairs_board.won() ? "WON" : (pairs_board.lost() ? "LOST" : "unfinished"),
-                        pairs_board.score(), pairs_board.matches(), pairs_board.pairs_total());
+                        pairs_board.score(), pairs_board.matches(), pairs_board.round_pairs_total());
             if (!pairs_board.won()) {
                 for (int i = 0; i < pairs_board.cell_count(); ++i) {
                     if (pairs_board.face(i) == pple::CardFace::Matched) continue;
@@ -1637,22 +1765,25 @@ int main(int argc, char** argv) {
         }
         // --pairs-ticks N advances the engine's 30 Hz step N times before the first frame, so the
         // time bar, the red threshold and the loss state can be inspected without waiting.
-        if (pairs_ticks > 0) {
+        if (!keep_state && pairs_ticks > 0) {
             pairs_board.tick(pairs_ticks);
             std::printf("  %d tick(s): %.0f s left, %s\n", pairs_ticks,
                         static_cast<double>(pairs_board.seconds_remaining()),
                         pairs_board.lost() ? "LOST" : (pairs_board.won() ? "WON" : "running"));
         }
         pairs_ready = true;
+        pairs_end_played = false;
+        // Board::InitUI (0x10008934D) plays Con_NewScreen (proto 0x71) whenever it builds a new
+        // board, which is once per round and once per level change.
+        if (!keep_state) play_pair_sfx("Con_NewScreen");
         // --pairs-click 3,7,12 flips those cells through the same handler the mouse uses, so a
         // scripted run exercises the reveal, the match, the scoring and the sounds.
-        if (!pairs_click.empty()) {
+        if (!keep_state && !pairs_click.empty()) {
             std::size_t at = 0;
             while (at < pairs_click.size()) {
                 const std::size_t comma = pairs_click.find(',', at);
                 const int cell = std::atoi(pairs_click.substr(at, comma - at).c_str());
                 at = comma == std::string::npos ? pairs_click.size() : comma + 1;
-                const int matches_before = pairs_board.matches();
                 if (cell < 0 || cell >= pairs_board.cell_count()) {
                     std::printf("  click %d: out of range\n", cell);
                     continue;
@@ -1661,20 +1792,27 @@ int main(int argc, char** argv) {
                     std::printf("  click %d: already face up\n", cell);
                     continue;
                 }
-                if (!pairs_board.click(cell)) {
+                const pple::ClickResult r = pairs_board.click(cell);
+                if (!r.accepted) {
                     std::printf("  click %d: refused (lockout %d)\n", cell, pairs_board.lockout_ticks());
                     continue;
                 }
-                const bool matched = pairs_board.matches() > matches_before;
                 std::printf("  click %-3d -> %s, score %d, matches %d/%d%s\n", cell,
-                            matched ? "MATCH" : "revealed", pairs_board.score(), pairs_board.matches(),
-                            pairs_board.pairs_total(),
+                            r.match ? "MATCH" : (r.wild_match ? "WILD" : (r.mismatch ? "MISS" : "revealed")),
+                            pairs_board.score(), pairs_board.matches(),
+                            pairs_board.round_pairs_total(),
                             pairs_board.lockout_ticks() > 0 ? ", reveal timer armed" : "");
-                if (matched)
-                    play_pair_sfx(g_sfx_correct);
-                else if (pairs_board.lockout_ticks() > 0)
-                    play_pair_sfx(g_sfx_wrong);
-                play_pair_sfx(g_sfx_flip);
+                play_click_sfx(r);
+                if (r.board_cleared) play_pair_sfx("Con_BoardCleared");
+                if (r.level_up || r.relaid_out) {
+                    // Board::NewLevel re-deals: the rest of the script refers to the old board, so
+                    // stop here and let the main loop rebuild the art for the new one.
+                    std::printf("    board relaid out -> level %d/%d\n",
+                                pairs_board.level_position() + 1, pairs_board.level_count());
+                    pairs_rebuild_pending = true;
+                    pairs_keep_state = true;
+                    break;
+                }
             }
             // let the queued sounds actually reach the device before the capture or exit
             SDL_Delay(600);
@@ -1689,6 +1827,22 @@ int main(int argc, char** argv) {
                     pairs_origin_y = item.y;
                     pairs_outer_scale = 1.0f;
                 }
+            }
+        }
+        // The card BACK is the CardBack of the current <Level>.  Card::InitUI (0x10007B8D8)
+        // calls `Card::InitCardButton(this, *(DWORD *)(Board+0x40 + 328))` -- Board+0x40 is the
+        // Level and Level+0x148 is its index -- and Card::InitCardButton (0x10007CB4C) builds
+        // Card+0x98 ("CardButton") from `GetXml(*(CardBack[level] + 8))`, i.e. /buttonpath.
+        // Level 0 is ShamButton.xml, so the shipped Beginner screen's backs are shamrocks.
+        {
+            const auto* cardbacks = bundle.find("UI\\Concentration\\CardBacks.xml");
+            if (cardbacks != nullptr) {
+                const std::vector<pple::CardBackPaths> backs =
+                    pple::concentration_cardbacks(bundle.read(*cardbacks));
+                const std::size_t at = static_cast<std::size_t>(pairs_board.level_position());
+                if (at < backs.size() && !backs[at].button.empty()) pairs_back_xml = backs[at].button;
+                std::printf("  card back: level %d -> %s\n", pairs_board.level_position(),
+                            pairs_back_xml.c_str());
             }
         }
         const float card_scale = static_cast<float>(pairs_board.slots().front().scale_percent) / 100.0f;
@@ -1793,6 +1947,104 @@ int main(int argc, char** argv) {
             }
         }
         pairs_scene_draws = scene_draws.size();
+        // The progress meter.  Board::Init (0x1000888C4) copies the first four
+        // UI\Concentration\CardBacks.xml <Back> entries' /progpath into CardBack+0x508, and
+        // ProgressMeter::InitUI (0x100084720) makes one indicator per <Level> of the difficulty
+        // from `*(CardBack[i] + 1288)`, stacks them `(node->x, i * /ProgressMeterIndicators/yOffSet)`
+        // apart under /ProgressMeterContainer, and then lights indicator i while
+        // `i < Round+292` -- ConRoundData's `Level` field (ConRoundData::ToXml appends this[73]
+        // as "Level").  The lit state is the node's frame: ProgressShamrock.xml declares
+        // <FrameCount>2</FrameCount>, frame 0 is the hollow outline and frame 1 the filled art.
+        pairs_meter.clear();
+        pairs_tokens.clear();
+        if (loaded_scene) {
+            float mx = 0.0f, my = 0.0f, sx = 0.0f, sy = 0.0f;
+            bool have_meter = false, have_sneak = false;
+            for (const pple::SceneItem& item : loaded_scene->containers) {
+                const std::string& key = item.name.empty() ? item.instance : item.name;
+                if (key == "ProgressMeterContainer") {
+                    mx = item.x;
+                    my = item.y;
+                    have_meter = true;
+                } else if (key == "SneakPeekContainer") {
+                    sx = item.x;
+                    sy = item.y;
+                    have_sneak = true;
+                }
+            }
+            int y_offset = 55;
+            if (const auto* scene_slot2 = bundle.resolve(scene_xml, scene_how)) {
+                pple::XmlNode scene_root;
+                std::string scene_error;
+                if (pple::xml_parse(bundle.read(*scene_slot2), scene_root, scene_error)) {
+                    std::vector<const pple::XmlNode*> stack{&scene_root};
+                    while (!stack.empty()) {
+                        const pple::XmlNode* node = stack.back();
+                        stack.pop_back();
+                        if (node->name == "ProgressMeterIndicators") {
+                            const std::string text = node->child_text("yOffSet");
+                            if (!text.empty()) y_offset = std::atoi(text.c_str());
+                        }
+                        for (const pple::XmlNode& child : node->children) stack.push_back(&child);
+                    }
+                }
+            }
+            if (have_meter) {
+                const auto* cardbacks = bundle.find("UI\\Concentration\\CardBacks.xml");
+                if (cardbacks != nullptr) {
+                    const std::vector<pple::CardBackPaths> backs =
+                        pple::concentration_cardbacks(bundle.read(*cardbacks));
+                    const int count = std::min<int>(pairs_board.level_count(),
+                                                    static_cast<int>(backs.size()));
+                    for (int i = 0; i < count; ++i) {
+                        const std::string& progpath = backs[static_cast<std::size_t>(i)].prog;
+                        if (progpath.empty()) continue;
+                        const Sprite sp = resolve_sprite(bundle, progpath, 0);
+                        if (!sp.ok || sp.frames < 2) continue;
+                        std::string sheet_how;
+                        const auto* slot = bundle.resolve(sp.requested, sheet_how);
+                        if (slot == nullptr) continue;
+                        SDL_Texture* tex = load_sheet_texture(sp.requested, slot->entry->name, pairs_sheet_note);
+                        if (tex == nullptr) continue;
+                        pple::SceneItem geo;
+                        geo.src_x = sp.src.x;
+                        geo.src_y = sp.src.y;
+                        geo.src_w = sp.src.w;
+                        geo.src_h = sp.src.h;
+                        geo.frames = sp.frames;
+                        geo.per_row = sp.per_row;
+                        geo.prepped = sp.prepped;
+                        MeterDraw m;
+                        m.tex = tex;
+                        float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
+                        pple::sprite_frame_rect(geo, 0, fx, fy, fw, fh);
+                        m.src_unlit = SDL_FRect{fx, fy, fw, fh};
+                        pple::sprite_frame_rect(geo, 1, fx, fy, fw, fh);
+                        m.src_lit = SDL_FRect{fx, fy, fw, fh};
+                        m.dst = SDL_FRect{mx - sp.reg_x, my + static_cast<float>(i * y_offset) - sp.reg_y,
+                                          fw, fh};
+                        pairs_meter.push_back(m);
+                    }
+                    std::printf("  progress meter: %zu indicator(s) at %.0f,%.0f step %d\n",
+                                pairs_meter.size(), static_cast<double>(mx), static_cast<double>(my),
+                                y_offset);
+                }
+            }
+            if (have_sneak) {
+                // SneakPeakArea::InitUI -> ConUILoader::LoadSneakPeekToken (0x10008C48C): the
+                // shipped <SneakPeekToken> entries carry only <Sprite>, so /x and /y default to 0
+                // and every token lands on the container's own origin; the count shown is
+                // Round+0x11C (Tokens) via `index + 1 > Round.Tokens -> hide`.
+                const Sprite sp = resolve_sprite(bundle, "UI\\Concentration\\SneakPeakButton.xml", 0);
+                if (sp.ok) {
+                    const SDL_FRect rect{sx - sp.reg_x, sy - sp.reg_y, sp.src.w, sp.src.h};
+                    for (int i = 0; i < 3; ++i) pairs_tokens.push_back(rect);
+                    std::printf("  sneak tokens: %d at %.0f,%.0f (%.0f x %.0f)\n", pairs_board.tokens(),
+                                static_cast<double>(rect.x), static_cast<double>(rect.y),
+                                static_cast<double>(rect.w), static_cast<double>(rect.h));
+                }
+            }
+        }
         // Clickable elements of the game screen.  ReturnToMainMenu is a real node; the MCE
         // New Game / Exit Game pair are drawn only with --mce (see ConcentrationGame::LoadGameUI
         // 0x10008122B).  Their rect is the engine's: (x, y) - registration, sized SourceWidth x
@@ -1915,6 +2167,22 @@ int main(int argc, char** argv) {
             d.dst = SDL_FRect{entry.base_x + off_x, entry.base_y + off_y,
                               entry.w * static_cast<float>(f.scale_x) / 100.0f,
                               entry.h * static_cast<float>(f.scale_y) / 100.0f};
+            d.alpha = 255;
+            scene_draws.push_back(d);
+            extent_w = std::max(extent_w, d.dst.x + d.dst.w);
+            extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+        }
+        // The progress meter: indicator i shows its filled frame while
+        // `i < Round+0x124`, which is ConRoundData's Level index -- the number of levels of this
+        // difficulty already cleared.
+        for (std::size_t i = 0; i < pairs_meter.size(); ++i) {
+            const MeterDraw& m = pairs_meter[i];
+            if (m.tex == nullptr) continue;
+            const bool lit = static_cast<int>(i) < pairs_board.level_position();
+            DrawItem d;
+            d.texture = m.tex;
+            d.src = lit ? m.src_lit : m.src_unlit;
+            d.dst = m.dst;
             d.alpha = 255;
             scene_draws.push_back(d);
             extent_w = std::max(extent_w, d.dst.x + d.dst.w);
@@ -2370,23 +2638,66 @@ int main(int argc, char** argv) {
                 break;
             }
         }
-        if (hit < 0) return true;
-        const pple::CardFace before = pairs_board.face(hit);
-        const int matches_before = pairs_board.matches();
-        if (before != pple::CardFace::Hidden || !pairs_board.click(hit)) return true;
-        // Con_TileFlip always; then Con_Correct or Con_TileFlip_Incorrect once the second card of
-        // a pair has been turned.
-        if (pairs_board.matches() > matches_before)
-            play_pair_sfx(g_sfx_correct);
-        else if (pairs_board.lockout_ticks() > 0)
-            play_pair_sfx(g_sfx_wrong);
-        play_pair_sfx(g_sfx_flip);
+        if (hit < 0) {
+            // The sneak-peek tokens: SneakPeakArea::HandleEvent (0x100084D3C) plays
+            // Con_SneakPeek_Click (proto 0x7A) and starts the peek, which is Board::SneakPeaker
+            // (0x10008B280) turning the whole board over for <SneakPeekIconDur>.
+            if (pairs_board.tokens() <= 0) {
+                for (const SDL_FRect& r : pairs_tokens) {
+                    if (sx < r.x || sx >= r.x + r.w || sy < r.y || sy >= r.y + r.h) continue;
+                    // SneakPeakArea::InitUI hides token i when `i + 1 > Round+0x11C`, so a
+                    // difficulty with <NumStartTokens>0 shows none and the click lands nowhere.
+                    std::printf("  sneak token: none left at this difficulty (NumStartTokens 0)\n");
+                    return true;
+                }
+                return true;
+            }
+            for (std::size_t t = 0; t < pairs_tokens.size(); ++t) {
+                if (t >= static_cast<std::size_t>(pairs_board.tokens())) break;
+                const SDL_FRect& r = pairs_tokens[t];
+                if (sx < r.x || sx >= r.x + r.w || sy < r.y || sy >= r.y + r.h) continue;
+                if (!pairs_board.use_token()) {
+                    std::printf("  sneak token %zu: no token left\n", t);
+                    return true;
+                }
+                play_pair_sfx("Con_SneakPeek_Click");
+                play_pair_sfx("Con_SneakPeek_Starburst");
+                std::printf("  sneak token %zu -> %d left, peek for %d ticks\n", t,
+                            pairs_board.tokens(), 30 * pairs_constants.sneak_peak_icon_duration_seconds);
+                sync_flips();
+                timed_refresh();
+                refresh_hud();
+                return true;
+            }
+            return true;
+        }
+        const pple::ClickResult clicked = pairs_board.click(hit);
+        if (!clicked.accepted) return true;
+        play_click_sfx(clicked);
+        if (clicked.board_cleared) play_pair_sfx("Con_BoardCleared");
+        if (clicked.level_up) {
+            std::printf("  level cleared -> level %d of %d\n", pairs_board.level_position() + 1,
+                        pairs_board.level_count());
+            // Board::NewLevel rebuilds the level's UI: new deck, new art.  Deferred to the main
+            // loop so the board is never re-dealt from inside a click.
+            pairs_rebuild_pending = true;
+            pairs_keep_state = true;
+            return true;
+        }
+        if (clicked.relaid_out) {
+            pairs_rebuild_pending = true;
+            pairs_keep_state = true;
+            return true;
+        }
         sync_flips();
         timed_refresh();
         refresh_hud();
         std::printf("  click %-3d -> %s, score %d, matches %d/%d%s\n", hit,
-                    pairs_board.matches() > matches_before ? "MATCH" : "revealed",
-                    pairs_board.score(), pairs_board.matches(), pairs_board.pairs_total(),
+                    clicked.match ? "MATCH"
+                                  : (clicked.wild_match
+                                         ? "WILD (+10)"
+                                         : (clicked.mismatch ? "MISS" : "revealed")),
+                    pairs_board.score(), pairs_board.matches(), pairs_board.round_pairs_total(),
                     pairs_board.lockout_ticks() > 0 ? ", reveal timer armed" : "");
         return true;
     };
@@ -2498,6 +2809,12 @@ int main(int argc, char** argv) {
         }
         int out_w = 0, out_h = 0;
         SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
+        // A click that advanced the level or let the Mixer reshuffle re-deals the art here, once
+        // the click handler has returned.
+        if (pairs_rebuild_pending && pairs_ready) {
+            pairs_rebuild_pending = false;
+            build_pairs();
+        }
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {
             const Uint64 now = SDL_GetTicks();
@@ -2519,6 +2836,23 @@ int main(int argc, char** argv) {
                 // The flip runs on the same 30 Hz step as the engine's Card::Update.
                 if (advance_flips()) flipped = true;
                 professor.time += 1.0f / 30.0f;
+                // End of round.  Board::Update (0x10008A4F0) hands the cleared board to the jar
+                // (Jar::StopExplosion 0x100083A20), which either calls
+                // ConcentrationGame::OnEnterState(2) -- the win -- or Board::NewLevel; the loss is
+                // `Level+12 > 0 && Round+0x154 != 0 && Round+0x118 <= 0`, i.e. OnEnterState(3).
+                if (pairs_board.finished() && !pairs_end_played) {
+                    pairs_end_played = true;
+                    if (pairs_board.won()) {
+                        play_pair_sfx("Con_BoardCleared");
+                        play_pair_sfx("Con_Win");
+                        std::printf("  round over: WON at level %d/%d, score %d\n",
+                                    pairs_board.level_position() + 1, pairs_board.level_count(),
+                                    pairs_board.score());
+                    } else {
+                        play_pair_sfx("Con_GameOver");
+                        std::printf("  round over: LOST, score %d\n", pairs_board.score());
+                    }
+                }
             }
             if (ticked || flipped) {
                 timed_refresh();

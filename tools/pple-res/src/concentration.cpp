@@ -289,31 +289,62 @@ int ConcentrationBoard::match_score(int card_type, int multiplier_input) const {
     return points;
 }
 
-bool ConcentrationBoard::reset(const ConcentrationLevel& level, const CardPools& pools,
-                              const ConcentrationConstants& constants, const CardsBox& box,
-                              unsigned seed) {
-    level_ = level;
+bool ConcentrationBoard::reset(const std::vector<ConcentrationLevel>& levels, std::size_t start,
+                              const CardPools& pools, const ConcentrationConstants& constants,
+                              const CardsBox& box, unsigned seed) {
+    if (levels.empty()) return false;
+    levels_ = levels;
+    level_pos_ = std::min(start, levels.size() - 1);
     constants_ = constants;
     pools_ = &pools;
-    deck_ = concentration_build_deck(level, pools, seed);
-    slots_ = concentration_layout(level, box.width);
+    box_ = box;
+    seed_ = seed;
+    score_ = 0;
+    matches_ = 0;
+    deal(level_pos_, seed);
+    return !slots_.empty();
+}
+
+// Board::InitLevel (0x1000894E0) + Board::ShuffleCards (0x100089604) + Board::SelectSneakCard
+// (0x10008B348) for one <Level> entry: the grid, the shuffled deck, the sneak-peek icon and the
+// tick budget.
+void ConcentrationBoard::deal(std::size_t position, unsigned seed) {
+    level_pos_ = position;
+    const ConcentrationLevel& lv = levels_[level_pos_];
+    deck_ = concentration_build_deck(lv, *pools_, seed);
+    slots_ = concentration_layout(lv, box_.width);
 
     // ShuffleCards appends one Wild Card when the cell count is odd, and the deck it built
     // holds cells-1 cards in that case.
-    while (deck_.size() < slots_.size()) deck_.push_back(pools.wild);
+    while (deck_.size() < slots_.size()) deck_.push_back(pools_->wild);
     deck_.resize(slots_.size());
     for (std::size_t i = 0; i < slots_.size(); ++i) slots_[i].card_id = deck_[i];
 
     faces_.assign(slots_.size(), CardFace::Hidden);
+    sneak_icon_.assign(slots_.size(), false);
+    sneak_shown_.assign(slots_.size(), false);
     first_reveal_ = -1;
     lockout_ = 0;
-    ticks_left_ = level_.total_ticks();
-    score_ = 0;
-    matches_ = 0;
-    return !slots_.empty();
+    sneak_ticks_ = 0;
+    // Board::InitGame: Round+280 (TimeLeft) = Level+12, Round+292 (Level) = 0 on a new game and
+    // Round+284 (Tokens) = Level+48 = <NumStartTokens>.
+    ticks_left_ = lv.total_ticks();
+    tokens_ = lv.num_start_tokens;
+    // Board::SelectSneakCard picks one card that is not already matched (state != 2) at random
+    // and sets Card+0x18 on it, so a match that includes it pays <SneakMatchBonus>.
+    if (!slots_.empty()) {
+        std::mt19937 rng(seed ^ 0x5eec5eedu);
+        sneak_icon_[rng() % slots_.size()] = true;
+    }
 }
 
 int ConcentrationBoard::pairs_total() const { return static_cast<int>(slots_.size()) / 2; }
+
+int ConcentrationBoard::round_pairs_total() const {
+    int total = 0;
+    for (const ConcentrationLevel& lv : levels_) total += lv.cell_count() / 2;
+    return total;
+}
 
 int ConcentrationBoard::cards_remaining() const {
     int hidden = 0;
@@ -322,9 +353,20 @@ int ConcentrationBoard::cards_remaining() const {
     return hidden;
 }
 
+// Board::Update (0x10008A4F0): the board is complete when the cards still on it are only the
+// Wild and Mixer cards -- `NumCards - matched <= Board+0x1D4`, and Board+0x1D4 counts the cards
+// whose id is Board+0x180 (the Wild Card) or Board+0x174 (the Mixer).  Then every remaining card
+// is force-matched (Card+0x45) and flipped forward, which is how the lone Wild Card of an odd
+// board is cleared.
 bool ConcentrationBoard::won() const {
     if (slots_.empty()) return false;
-    return cards_remaining() <= 1;
+    int spared = 0;
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        if (faces_[i] == CardFace::Matched) continue;
+        const int id = slots_[i].card_id;
+        if (pools_ != nullptr && (id == pools_->wild || id == pools_->mixer)) ++spared;
+    }
+    return cards_remaining() <= spared;
 }
 
 CardFace ConcentrationBoard::face(int index) const {
@@ -342,15 +384,44 @@ const CardDef* ConcentrationBoard::card(int index) const {
     return pools_->find(card_id(index));
 }
 
-bool ConcentrationBoard::click(int index) {
-    if (finished() || lockout_ > 0) return false;
-    if (index < 0 || index >= static_cast<int>(faces_.size())) return false;
-    if (faces_[index] != CardFace::Hidden) return false;
+void ConcentrationBoard::force_match_remaining() {
+    // Board::Update's completion pass: every card still in state 0 is force-matched and flipped.
+    for (std::size_t i = 0; i < faces_.size(); ++i) {
+        if (faces_[i] == CardFace::Matched) continue;
+        faces_[i] = CardFace::Matched;
+        ++matches_;
+        const CardDef* def = card(static_cast<int>(i));
+        score_ += match_score(def != nullptr ? def->type : 0, 0);
+    }
+}
+
+bool ConcentrationBoard::use_token() {
+    if (tokens_ <= 0 || sneak_ticks_ > 0 || slots_.empty()) return false;
+    --tokens_;
+    // Board::SneakPeaker turns every card whose state is 0 or 4 face up and flags it with
+    // Card+0x46; Board::Update flips those back when Board+0x194 reaches zero.
+    const int hold = 30 * constants_.sneak_peak_icon_duration_seconds;
+    sneak_ticks_ = hold > 0 ? hold : 600;
+    for (std::size_t i = 0; i < faces_.size(); ++i) {
+        if (faces_[i] == CardFace::Matched) continue;
+        faces_[i] = CardFace::Shown;
+        sneak_shown_[i] = true;
+    }
+    first_reveal_ = -1;
+    return true;
+}
+
+ClickResult ConcentrationBoard::click(int index) {
+    ClickResult result;
+    if (finished() || lockout_ > 0 || sneak_ticks_ > 0) return result;
+    if (index < 0 || index >= static_cast<int>(faces_.size())) return result;
+    if (faces_[index] != CardFace::Hidden) return result;
 
     faces_[index] = CardFace::Shown;
+    result.accepted = true;
     if (first_reveal_ < 0) {
         first_reveal_ = index;
-        return true;
+        return result;
     }
 
     const int a = first_reveal_;
@@ -359,24 +430,112 @@ bool ConcentrationBoard::click(int index) {
     const int id_a = slots_[a].card_id;
     const int id_b = slots_[b].card_id;
     const int wild = pools_ != nullptr ? pools_->wild : -1;
-    // Card::DoMatcher: equal ids, or the Wild Card on either side.
-    const bool matched = id_a == id_b || (wild >= 0 && (id_a == wild || id_b == wild));
+    const bool wild_a = wild >= 0 && id_a == wild;
+    const bool wild_b = wild >= 0 && id_b == wild;
+    result.second = true;
 
-    if (matched) {
-        faces_[a] = CardFace::Matched;
-        faces_[b] = CardFace::Matched;
-        ++matches_;
-        const CardDef* def = card(b);
-        const int type = def != nullptr ? def->type : 0;
-        // The multiplier input is the one value in the scoring path that is not established;
-        // a plain pair reveals two cards, which yields the times-two branch.
-        score_ += match_score(type, 2);
-        return true;
+    // Card::DoMatcher's first test: the ids differ and neither is the Wild Card.
+    if (id_a != id_b && !wild_a && !wild_b) {
+        lockout_ = 30 * constants_.reveal_duration;
+        result.mismatch = true;
+        return result;
     }
 
-    // Mismatch: Board+452 is armed by DoMatcher and the pair flips back after RevealDuration.
-    lockout_ = 30 * constants_.reveal_duration;
-    return true;
+    faces_[a] = CardFace::Matched;
+    faces_[b] = CardFace::Matched;
+    ++matches_;
+
+    // The Chef's cake sweep.  Card::DoMatcher calls Board::GetChefCakeID (0x100089D00) and, when
+    // either card is that id, forces every card with the id to match and scores each pair.
+    const int chef = pools_ != nullptr ? pools_->chef : -1;
+    if (chef >= 0 && (id_a == chef || id_b == chef)) {
+        for (std::size_t i = 0; i < faces_.size(); ++i) {
+            if (faces_[i] == CardFace::Matched) continue;
+            if (slots_[i].card_id != chef) continue;
+            faces_[i] = CardFace::Matched;
+            ++matches_;
+            const CardDef* def = card(static_cast<int>(i));
+            score_ += match_score(def != nullptr ? def->type : 0, 0);
+        }
+        result.chef = true;
+    }
+
+    // The sneak-peek icon bonus: `*((_BYTE *)this + 24) != 0 || v83 != 0` -- either card
+    // carries it.  Card::PlayBonusAnim, SneakPeakArea::AddPeak and <SneakMatchBonus>.
+    const bool icon_a = a < static_cast<int>(sneak_icon_.size()) && sneak_icon_[a];
+    const bool icon_b = b < static_cast<int>(sneak_icon_.size()) && sneak_icon_[b];
+    if (icon_a || icon_b) {
+        score_ += constants_.sneak_match_bonus;
+        result.sneak_get = true;
+    }
+
+    if (wild_a != wild_b) {
+        // Exactly one is the Wild Card: Card::DoMatcher's else branch -- a flat +10 and no
+        // Board::MatchMade, so the match counter and the type table do not apply.
+        score_ += 10;
+        result.wild_match = true;
+    } else {
+        // Card::DoMixerCheck (0x10007D9DC) on both cards: the Mixer reshuffles the cards that
+        // are still on the board.  Its gate is `card id == Board+0x174` plus
+        // `NumCards - matched > 3`.
+        const int mixer = pools_ != nullptr ? pools_->mixer : -1;
+        if (mixer >= 0 && (id_a == mixer || id_b == mixer) &&
+            static_cast<int>(slots_.size()) - cards_remaining() > 3) {
+            // Board::DoMixer (0x100089870): Fisher-Yates over the live cards, then re-place them.
+            std::vector<std::size_t> live;
+            for (std::size_t i = 0; i < faces_.size(); ++i)
+                if (faces_[i] != CardFace::Matched) live.push_back(i);
+            std::mt19937 rng(seed_ + static_cast<unsigned>(matches_));
+            for (std::size_t i = live.size(); i-- > 1;) {
+                std::uniform_int_distribution<std::size_t> pick(0, i);
+                std::swap(slots_[live[i]].card_id, slots_[live[pick(rng)]].card_id);
+            }
+            for (std::size_t i = 0; i < deck_.size(); ++i) deck_[i] = slots_[i].card_id;
+            result.mixer = true;
+            result.relaid_out = true;
+        }
+        const CardDef* def = card(b);
+        const int type = def != nullptr ? def->type : 0;
+        // Card::DoMatcher passes `(this[+0x50] + other[+0x50]) / 2`, and Card::Init stores 0 in
+        // both, so the multiplier input is always 0.
+        score_ += match_score(type, 0);
+        result.match = true;
+    }
+
+    // The Time Bonus card pays ticks: Board::DoTimeBonus (0x10008B194).
+    const int bonus_card = pools_ != nullptr ? pools_->time_bonus : -1;
+    if (bonus_card >= 0 && (id_a == bonus_card || id_b == bonus_card)) {
+        const int total = level().total_ticks();
+        const int add = static_cast<int>(static_cast<double>(constants_.time_bonus_percent) / 200.0 *
+                                        static_cast<double>(total));
+        if (ticks_left_ + add < total) {
+            ticks_left_ += add;
+        } else {
+            // The engine's own clamp, `Level+12 + 1`, which makes TimeBar::CalculateTimer's
+            // (total - remaining) negative -- the bar goes empty.
+            ticks_left_ = total + 1;
+        }
+        result.time_bonus = add;
+    }
+
+    if (won()) {
+        // Board::Update's completion pass, then Jar::StopExplosion's decision: with no next
+        // <Level> the game is won, otherwise Board::NewLevel advances Round+0x124.
+        force_match_remaining();
+        if (level_pos_ + 1 < levels_.size()) {
+            ++level_pos_;
+            result.level_up = true;
+            result.relaid_out = true;
+            const int kept_score = score_;
+            const int kept_matches = matches_;
+            deal(level_pos_, seed_ + static_cast<unsigned>(level_pos_));
+            score_ = kept_score;
+            matches_ = kept_matches;
+        } else {
+            result.board_cleared = true;
+        }
+    }
+    return result;
 }
 
 void ConcentrationBoard::reveal_all() {
@@ -388,7 +547,7 @@ void ConcentrationBoard::reveal_all() {
 
 void ConcentrationBoard::tick(int ticks) {
     if (ticks <= 0) return;
-    if (level_.timed() && ticks_left_ > 0) {
+    if (level().timed() && ticks_left_ > 0) {
         ticks_left_ -= ticks;
         if (ticks_left_ < 0) ticks_left_ = 0;
     }
@@ -396,10 +555,39 @@ void ConcentrationBoard::tick(int ticks) {
         lockout_ -= ticks;
         if (lockout_ <= 0) {
             lockout_ = 0;
-            for (CardFace& f : faces_)
-                if (f == CardFace::Shown) f = CardFace::Hidden;
+            for (std::size_t i = 0; i < faces_.size(); ++i)
+                if (faces_[i] == CardFace::Shown) faces_[i] = CardFace::Hidden;
+        }
+    }
+    if (sneak_ticks_ > 0) {
+        sneak_ticks_ -= ticks;
+        if (sneak_ticks_ <= 0) {
+            sneak_ticks_ = 0;
+            for (std::size_t i = 0; i < faces_.size(); ++i) {
+                if (!sneak_shown_[i]) continue;
+                sneak_shown_[i] = false;
+                if (faces_[i] == CardFace::Shown) faces_[i] = CardFace::Hidden;
+            }
         }
     }
 }
 
+std::vector<CardBackPaths> concentration_cardbacks(std::span<const std::uint8_t> cardbacks_xml) {
+    std::vector<CardBackPaths> out;
+    XmlNode root;
+    std::string error;
+    if (!xml_parse(cardbacks_xml, root, error)) return out;
+    for (const XmlNode& back : root.children) {
+        if (lower(back.name) != "back") continue;
+        // Board::Init's loop is four iterations of an unconditional 8-byte stride.
+        if (out.size() == 4) break;
+        CardBackPaths paths;
+        paths.button = back.child_text("buttonpath");
+        paths.prog = back.child_text("progpath");
+        out.push_back(std::move(paths));
+    }
+    return out;
+}
+
 }  // namespace pple
+
