@@ -1166,6 +1166,9 @@ int main(int argc, char** argv) {
     // UI\Concentration\hearts.xml itself as a child of the game's parent node, so it lands at
     // 0,0 and is Background.png, 800x496.
     std::string scene_background_xml;
+    // The index in scene_draws of the /JarFg sprite, so the jar's tray coins can be inserted
+    // between /JarBkg and it.  Set by build_scene.
+    int pairs_jar_front_at = -1;
     // Builds the scene draw list: every described instance resolved to a sheet frame,
     // plus labels rendered through TTF.
     const auto build_scene = [&]() {
@@ -1396,6 +1399,12 @@ int main(int argc, char** argv) {
             };
             d.alpha = item.alpha;
             scene_draws.push_back(d);
+            // The jar's tray coins go in front of /JarBkg and behind /JarFg, which is the order
+            // Jar::InitUI (0x100083218) builds them in.
+            {
+                const std::string& key = item.name.empty() ? item.instance : item.name;
+                if (key == "JarFg") pairs_jar_front_at = static_cast<int>(scene_draws.size()) - 1;
+            }
             scene_w = std::max(scene_w, d.dst.x + d.dst.w);
             scene_h = std::max(scene_h, d.dst.y + d.dst.h);
         }
@@ -1444,6 +1453,18 @@ int main(int argc, char** argv) {
         SDL_FRect dst{};
     };
     std::vector<MeterDraw> pairs_meter;
+    // The jar's tray: one coin sprite per <Level> (`CardBacks.xml`'s /imagepath, drawn at the 38
+    // percent scale Jar::DoFiller sets) placed at that level's *_Points.xml coordinates.
+    struct JarCoin {
+        SDL_Texture* tex = nullptr;
+        SDL_FRect src{};
+        float w = 0.0f, h = 0.0f;
+        float reg_x = 0.0f, reg_y = 0.0f;  // already scaled by 0.38
+        float x = 0.0f, y = 0.0f;          // inside /JarContainer
+        float rotation = 0.0f;
+    };
+    std::vector<JarCoin> pairs_jar_coins;
+    float pairs_jar_origin_x = 0.0f, pairs_jar_origin_y = 0.0f;
     // The PlayArea node's placement, so a mouse position can be turned back into a cell.
     float pairs_origin_x = 0.0f, pairs_origin_y = 0.0f, pairs_outer_scale = 1.0f;
     std::string pairs_sheet_note;
@@ -1843,6 +1864,69 @@ int main(int argc, char** argv) {
                 if (at < backs.size() && !backs[at].button.empty()) pairs_back_xml = backs[at].button;
                 std::printf("  card back: level %d -> %s\n", pairs_board.level_position(),
                             pairs_back_xml.c_str());
+                // The jar's tray.  Jar::DoFiller (0x100083B10) picks its point file by
+                // Round+0x124, the same level index:
+                //   `want = points / NumCards * Round+0x12C`, then one coin per point up to
+                //   `want`, each built from `GetXml(*(CardBack[level] + 264))` (/imagepath) with
+                //   its scale forced to 38 percent.
+                pairs_jar_coins.clear();
+                pairs_jar_origin_x = 0.0f;
+                pairs_jar_origin_y = 0.0f;
+                if (loaded_scene) {
+                    for (const pple::SceneItem& item : loaded_scene->containers) {
+                        const std::string& key = item.name.empty() ? item.instance : item.name;
+                        if (key != "JarContainer") continue;
+                        pairs_jar_origin_x = item.x;
+                        pairs_jar_origin_y = item.y;
+                    }
+                }
+                static const char* kPointFiles[4] = {
+                    "UI\\Concentration\\Shamrock_Points.xml", "UI\\Concentration\\Heart_Points.xml",
+                    "UI\\Concentration\\Smiley_Points.xml", "UI\\Concentration\\GumDrop_Points.xml"};
+                const std::size_t coin_at = std::min<std::size_t>(
+                    static_cast<std::size_t>(pairs_board.level_position()), 3);
+                const auto* points_slot = bundle.resolve(kPointFiles[coin_at], scene_how);
+                std::vector<pple::JarPoint> points;
+                if (points_slot != nullptr)
+                    points = pple::concentration_jar_points(bundle.read(*points_slot));
+                if (at < backs.size() && !backs[at].image.empty() && !points.empty()) {
+                    const Sprite coin = resolve_sprite(bundle, backs[at].image, 0);
+                    std::string coin_how;
+                    const auto* coin_slot = coin.ok ? bundle.resolve(coin.requested, coin_how) : nullptr;
+                    if (coin.ok && coin_slot != nullptr) {
+                        SDL_Texture* tex = load_sheet_texture(coin.requested, coin_slot->entry->name,
+                                                              pairs_sheet_note);
+                        if (tex != nullptr) {
+                            pple::SceneItem geo;
+                            geo.src_x = coin.src.x;
+                            geo.src_y = coin.src.y;
+                            geo.src_w = coin.src.w;
+                            geo.src_h = coin.src.h;
+                            geo.frames = coin.frames;
+                            geo.per_row = coin.per_row;
+                            geo.prepped = coin.prepped;
+                            float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
+                            pple::sprite_frame_rect(geo, 0, fx, fy, fw, fh);
+                            const float scale = 0.38f;  // Jar::DoFiller's `+ 6) = 38`
+                            for (const pple::JarPoint& p : points) {
+                                JarCoin c;
+                                c.tex = tex;
+                                c.src = SDL_FRect{fx, fy, fw, fh};
+                                c.w = fw * scale;
+                                c.h = fh * scale;
+                                c.reg_x = coin.reg_x * scale;
+                                c.reg_y = coin.reg_y * scale;
+                                c.x = static_cast<float>(p.x);
+                                c.y = static_cast<float>(p.y);
+                                c.rotation = p.rotation;
+                                pairs_jar_coins.push_back(c);
+                            }
+                            std::printf("  jar: %s, %zu coin slot(s), coin %s at 38%%\n",
+                                        kPointFiles[coin_at], pairs_jar_coins.size(),
+                                        backs[at].image.c_str());
+                        }
+                    }
+                }
             }
         }
         const float card_scale = static_cast<float>(pairs_board.slots().front().scale_percent) / 100.0f;
@@ -2187,6 +2271,38 @@ int main(int argc, char** argv) {
             scene_draws.push_back(d);
             extent_w = std::max(extent_w, d.dst.x + d.dst.w);
             extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+        }
+        // The jar's tray.  Jar::DoFiller (0x100083B10):
+        //   want = (int)(points / NumCards * Round+0x12C)
+        // with Round+0x12C the cards Board::Update has counted in state 2, so the jar fills in
+        // proportion to the round's progress and the count comes from the board, not from text.
+        // The coins go between /JarBkg and /JarFg.
+        if (!pairs_jar_coins.empty() && pairs_jar_front_at >= 0) {
+            const int total_cards = std::max(1, pairs_board.round_cards());
+            const double want_d = static_cast<double>(pairs_jar_coins.size()) /
+                                  static_cast<double>(total_cards) *
+                                  static_cast<double>(pairs_board.cards_removed_total());
+            const int want = static_cast<int>(want_d);
+            std::vector<DrawItem> coins;
+            for (int i = 0; i < want && i < static_cast<int>(pairs_jar_coins.size()); ++i) {
+                const JarCoin& c = pairs_jar_coins[static_cast<std::size_t>(i)];
+                if (c.tex == nullptr) continue;
+                DrawItem d;
+                d.texture = c.tex;
+                d.src = c.src;
+                // NodeSprite::UpdateZero: the drawn corner is (x, y) - scale * registration / 100.
+                d.dst = SDL_FRect{pairs_jar_origin_x + c.x - c.reg_x,
+                                  pairs_jar_origin_y + c.y - c.reg_y, c.w, c.h};
+                d.alpha = 255;
+                d.rotation = c.rotation;
+                coins.push_back(d);
+            }
+            if (!coins.empty()) {
+                const std::size_t at = static_cast<std::size_t>(std::min<int>(
+                    pairs_jar_front_at, static_cast<int>(scene_draws.size())));
+                scene_draws.insert(scene_draws.begin() + static_cast<std::ptrdiff_t>(at),
+                                   coins.begin(), coins.end());
+            }
         }
         // The time bar: segment i is lit while i >= elapsed, red for the last 900 ticks.
         const int pending = pairs_board.pending_reveal();

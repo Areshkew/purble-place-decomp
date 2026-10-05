@@ -301,6 +301,7 @@ bool ConcentrationBoard::reset(const std::vector<ConcentrationLevel>& levels, st
     seed_ = seed;
     score_ = 0;
     matches_ = 0;
+    cards_removed_total_ = 0;
     deal(level_pos_, seed);
     return !slots_.empty();
 }
@@ -353,6 +354,20 @@ int ConcentrationBoard::cards_remaining() const {
     return hidden;
 }
 
+// Board::Update's `++Round+0x12C` for every card whose state is 2.
+int ConcentrationBoard::cards_removed() const {
+    int gone = 0;
+    for (CardFace f : faces_)
+        if (f == CardFace::Matched) ++gone;
+    return gone;
+}
+
+int ConcentrationBoard::round_cards() const {
+    int total = 0;
+    for (const ConcentrationLevel& lv : levels_) total += lv.cell_count();
+    return total;
+}
+
 // Board::Update (0x10008A4F0): the board is complete when the cards still on it are only the
 // Wild and Mixer cards -- `NumCards - matched <= Board+0x1D4`, and Board+0x1D4 counts the cards
 // whose id is Board+0x180 (the Wild Card) or Board+0x174 (the Mixer).  Then every remaining card
@@ -390,6 +405,7 @@ void ConcentrationBoard::force_match_remaining() {
         if (faces_[i] == CardFace::Matched) continue;
         faces_[i] = CardFace::Matched;
         ++matches_;
+        ++cards_removed_total_;
         const CardDef* def = card(static_cast<int>(i));
         score_ += match_score(def != nullptr ? def->type : 0, 0);
     }
@@ -444,6 +460,7 @@ ClickResult ConcentrationBoard::click(int index) {
     faces_[a] = CardFace::Matched;
     faces_[b] = CardFace::Matched;
     ++matches_;
+    cards_removed_total_ += 2;
 
     // The Chef's cake sweep.  Card::DoMatcher calls Board::GetChefCakeID (0x100089D00) and, when
     // either card is that id, forces every card with the id to match and scores each pair.
@@ -454,6 +471,7 @@ ClickResult ConcentrationBoard::click(int index) {
             if (slots_[i].card_id != chef) continue;
             faces_[i] = CardFace::Matched;
             ++matches_;
+            ++cards_removed_total_;
             const CardDef* def = card(static_cast<int>(i));
             score_ += match_score(def != nullptr ? def->type : 0, 0);
         }
@@ -583,8 +601,29 @@ std::vector<CardBackPaths> concentration_cardbacks(std::span<const std::uint8_t>
         if (out.size() == 4) break;
         CardBackPaths paths;
         paths.button = back.child_text("buttonpath");
+        paths.image = back.child_text("imagepath");
+        paths.movie = back.child_text("moviepath");
         paths.prog = back.child_text("progpath");
         out.push_back(std::move(paths));
+    }
+    return out;
+}
+
+// Jar::DoFiller walks the root's children and reads `/@x`, `/@y` and `/@rotation` off each one's
+// first child -- which in these files is the `<Frame num="0" .../>` inside an `<ImageInstance>`.
+std::vector<JarPoint> concentration_jar_points(std::span<const std::uint8_t> points_xml) {
+    std::vector<JarPoint> out;
+    XmlNode root;
+    std::string error;
+    if (!xml_parse(points_xml, root, error)) return out;
+    for (const XmlNode& instance : root.children) {
+        if (instance.children.empty()) continue;
+        const XmlNode& frame = instance.children.front();
+        JarPoint p;
+        p.x = std::atoi(frame.attr("x", "0").c_str());
+        p.y = std::atoi(frame.attr("y", "0").c_str());
+        p.rotation = static_cast<float>(std::atof(frame.attr("rotation", "0").c_str()) * 0.017453292);
+        out.push_back(p);
     }
     return out;
 }

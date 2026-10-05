@@ -280,6 +280,7 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-view --pairs` scoring | `Board::MatchMade` (`0x10008B0AC`) is reached with the multiplier input `(a[+0x50] + b[+0x50]) / 2`, and `Card::Init` (`0x10007B6E4`, at `0x10007B717`) is the only writer of `Card+0x50` and stores 0 — so the shipped build always takes the `*= 3` branch. Beginner's 12 pairs score 360 plus one `<SneakMatchBonus>` of 20 and the odd board's forced Wild Card 30 = **410**; the previous `x2` branch was 2/3 of that |
 | `pple-view --pairs` sneak peek | The tokens are real: `SneakPeakArea::InitUI` (`0x1000849C0`) builds `<NumStartTokens>` of them from `/SneakPeekTokens`, all at `/SneakPeekContainer`'s own origin (`3,401` 45x46, since the shipped `<SneakPeekToken>` entries carry only a `<Sprite>`), and hides token `i` when `i + 1 > Round+0x11C`. Clicking one spends it and calls `Board::SneakPeaker` (`0x10008B280`), which turns every card over for `<SneakPeakIconDur>`; the run prints `sneak token 0 -> 1 left, peek for 600 ticks` and `s4-peek.png` shows the whole board face up with the HUD at `tokens 1` |
 | `pple-view --pairs` card back | `Card::InitUI` (`0x10007B8D8`) calls `Card::InitCardButton(this, Level+0x148)`, and `Card::InitCardButton` (`0x10007CB4C`) builds `Card+0x98` from `GetXml((Board+0x20)[level] + 8)` — the CardBack's `/buttonpath`. So the back is per level: `ShamButton.xml`, `HeartButton.xml`, `SmileyButton.xml`, `GumButton.xml`. `blankcardbutton.xml` is a different node (`Card+0xB0`, "BlankCard") for the intro state. `s4-cardback-compare.png` puts the shipped thumbnail next to the fixed screen |
+| `pple-view --pairs` jar | The jar's match count is real and comes from the board. `Jar::DoFiller` (`0x100083B10`) is `want = points / Board+0x28 * Round+0x12C` over that level's `Shamrock/Heart/Smiley/GumDrop_Points.xml` (28 points each), one coin per point built from the level's `/imagepath` with **scale forced to 38** — which is what turns the 111x109 `/imagepath` sprite into a 42x41 coin that 28 of can fit in the 112x112 jar. The run prints `jar: UI\Concentration\GumDrop_Points.xml, 28 coin slot(s), coin UI\Concentration\Gumdrop.xml at 38%`, and `s5-jar-strip.png` shows the jar empty, half full of shamrocks, carrying its hearts into Intermediate level 2, and full of gumdrops at the end of an Advanced round |
 | `pple-view --menu` | runs `UI\PurblePlace\PurblePlaceManager.xml` from `PurblePlace.dll`: 8 items drawn, **4 hot-spots** at `509,145 292x250` (Build-a-Purble), `210,153 248x256` (Comfy Cakes), `2,82 212x213` (Purble Pairs), `2,373 93x100` (Exit). `menu-hotspots2.png` overlays the same rectangles on `PurblePlaceForeground.png` and every one lands on its painted icon |
 | `pple-view --menu --script-click "330,280"` | enters the Comfy Cakes hot-spot: the menu rebuilds with that button on `<Animation>` 1 and the house gains its bright hover glow in the right place, the HUD names `ComfyCakesButton`, and the click reports the game as unimplemented |
 | `pple-view --menu --script-click` | `100,180;200,60;760,470` logs `menu: ConcentrationButton -> Purble Pairs`, `click 0 -> revealed`, `pairs: ReturnToMainMenu -> main menu` — menu → game → flip → menu, in one run; the window stays up |
@@ -319,13 +320,17 @@ Viewable items: `PurblePlace.dll` 211 (67 PNG + 71 CAB + 73 JPEG), `PurblePlace2
   `pple-res pairs --autoplay`). Comfy Cakes and Purble Shop are not started; their menu
   hot-spots are drawn and clickable and say so when clicked. The card deck, board geometry,
   match rule, scoring, placement, container parenting, flip animation, sound map, progress
-  meter, multi-level rounds, special cards, sneak peek and per-level card back are reversed; see
-  sections 14, 17 and 18 of `D:\Development\re\notes\purbleplace.md`. Not implemented:
-  * **the jar's coins.** `Jar::InitUI` (`0x100083218`) is an `ArcContainer` with a coin array and
-    `Board::DoFlyIntoJar` (`0x10008AF54`) sends a matched pair across; the reconstruction draws
-    `JarBase`/`JarBkg`/`JarFg` and plays `Con_BoardCleared` once when the board is cleared, where
-    the engine plays it from `Jar::Update` (`0x10008373C`) as the pair is banked. The jar's match
-    count therefore still comes from the board's own counter;
+  meter, multi-level rounds, special cards, sneak peek, per-level card back and the jar's tray
+  coins are reversed; see sections 14, 17 and 18 of `D:\Development\re\notes\purbleplace.md`. Not
+  implemented:
+  * **the jar's flying coins and burst movie.** `Board::DoFlyIntoJar` (`0x10008AF54`) spawns two
+    `ArcBehavior` objects per match that fly along a quadratic Bézier over `/ArcAnimation/Frames`
+    (25) from the card to `(LidOffSet + CurJar.w/2, CurJar.h/2)`, and `Jar::Update` (`0x10008373C`)
+    then shows the level's `/moviepath` burst. The tray coins themselves are drawn (see the table
+    above), but the fill is recomputed from the board's running count each frame rather than grown
+    one node at a time, and `Con_BoardCleared` fires on the board clear rather than when the last
+    coin lands. The two particle emitters (`Emitter_gold.xml`, `Emitter_white.xml`) are not drawn
+    either;
   * **`ConRoundData::CalcEndGame`** (`0x100080718`), the second scoring stage that adds a
     `RANKS.XML` `<TimeBonus>` and `<FlipBonus>` to `Round+0x120` and picks a rank. The
     reconstruction reports `Round+0x120` itself, which is what the game's own status bar shows
@@ -343,8 +348,9 @@ Viewable items: `PurblePlace.dll` 211 (67 PNG + 71 CAB + 73 JPEG), `PurblePlace2
     8 runs) or Advanced (`-1`, 9-12 runs);
   * `<NumStartTokens>` drives the token count and the sneak peek, but nothing else;
   * the fifth `<Back>` (Star) in `CardBacks.xml` is never loaded (`Board::Init`'s loop is four
-    iterations), and `/imagepath`, `/animpath`, `/moviepath` and `/jarpath` have no reader in this
-    build.
+    iterations), and `/animpath` and `/jarpath` have no reader anywhere in the image. The other
+    four fields do: `/buttonpath` is the card back, `/imagepath` the jar coin, `/moviepath` the
+    jar's burst movie and `/progpath` the meter indicator.
 * The engine's own HUD text on an untimed round has no time bar, which the reconstruction
   reproduces (`TimeBar::InitUI` `0x10008538E` hides `/TimeBarBkg` when the difficulty is 0).
 * 240 distinct references (464 occurrences) do not resolve — content variants that were never

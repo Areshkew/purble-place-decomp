@@ -120,12 +120,31 @@ struct CardsBox {
 //    node (Card+0xB0, "BlankCard") that the intro state shows instead.
 //  * `/progpath` is the progress meter's indicator sprite.
 //
-// `/imagepath`, `/animpath`, `/moviepath` and `/jarpath` have no reader in this build.
+// `/imagepath`, `/animpath`, `/moviepath` and `/jarpath`:
+//  * `/imagepath` (+264) is the COIN.  `Jar::DoFiller` (0x100083B10) and `ArcBehavior::Init`
+//    (0x100083E48) both create a node from it, and `DoFiller` sets its scale to 38 percent
+//    (`*((_DWORD *)v14 + 6) = 38`, and NodeSprite+0x18 is the scale).
+//  * `/moviepath` (+1032) is the jar's per-level burst movie; `Jar::LoadMovies` (0x1000835D0)
+//    reads `(Board+0x20)[i] + 1032` for i = 0..3 into the array at Jar+0x48.
+//  * `/animpath` (+520) has no reader in the Concentration code (the two `add ..., 208h` hits in
+//    the image are ComfyCakes destructors).
+//  * `/jarpath` (+776) has no reader anywhere in the image.
 struct CardBackPaths {
-    std::string button;  // CardBack+8,      /buttonpath
-    std::string prog;    // CardBack+1288,   /progpath
+    std::string button;  // CardBack+8,      /buttonpath   the card BACK for this level
+    std::string image;   // CardBack+264,    /imagepath    the coin
+    std::string movie;   // CardBack+1032,   /moviepath    the jar's burst movie
+    std::string prog;    // CardBack+1288,   /progpath     the progress meter's indicator
 };
 std::vector<CardBackPaths> concentration_cardbacks(std::span<const std::uint8_t> cardbacks_xml);
+
+// One `<ImageInstance><Frame num="0" x= y= rotation=/>` of a `*_Points.xml`.  The four shipped
+// files (Shamrock/Heart/Smiley/GumDrop_Points.xml) each hold 28 of them.
+struct JarPoint {
+    int x = 0;
+    int y = 0;
+    float rotation = 0.0f;  // radians, as Jar::DoFiller stores it (degrees * 0.017453292)
+};
+std::vector<JarPoint> concentration_jar_points(std::span<const std::uint8_t> points_xml);
 
 bool concentration_pools_parse(std::span<const std::uint8_t> cards_xml, CardPools& pools,
                               std::string& error);
@@ -222,6 +241,14 @@ public:
     bool timed() const { return level().timed(); }
     int score() const { return score_; }
     int matches() const { return matches_; }
+    // Round+0x12C: Board::Update (0x10008A4F0) counts the cards in state 2 here, and Jar::DoFiller
+    // (0x100083B10) fills the jar from it.  Board::InitLevel zeroes it per level, but Jar::InitUI
+    // (0x100083218, at 0x100083593) only zeroes the jar's own coin count while the coin nodes it
+    // already made stay in place, so the shipped pile never shrinks.  `cards_removed_total` is the
+    // round's running total, which is the same visible behaviour without the duplicate nodes.
+    int cards_removed() const;
+    int cards_removed_total() const { return cards_removed_total_; }
+    int round_cards() const;
     int cards_remaining() const;
     int pairs_total() const;
     // The whole round, i.e. every <Level> of this difficulty: Round+0x120 accumulates across a
@@ -280,6 +307,7 @@ private:
     int ticks_left_ = 0;
     int score_ = 0;
     int matches_ = 0;
+    int cards_removed_total_ = 0;
     int tokens_ = 0;
     int sneak_ticks_ = 0;
 };
