@@ -1,0 +1,18 @@
+# Build output. The binaries land in build/pple-res/ next to copies of the SDL runtimes.
+build/
+
+# Vendored SDL development trees (SDL3, SDL3_image, SDL3_ttf), fetched from the libsdl-org
+# release archives for the viewer only. See tools/pple-res/README.md.
+tools/third_party/
+
+# Viewer captures and scratch files. The useful ones live in C:\re\traces\cpp\.
+*.ppm
+*.obj
+*.exe
+*.dll
+*.a
+
+# Editor and shell noise
+.vs/
+.vscode/
+*.swp
