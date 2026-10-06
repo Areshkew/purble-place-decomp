@@ -406,7 +406,7 @@ int cmd_cards(const std::vector<std::string>& files) {
 // autoplay is the rules test - it solves the board through the same click/tick API the viewer
 // would use, so a win proves the deck, the match rule and the scoring agree.
 int cmd_pairs(const std::string& path, const std::string& difficulty, int level_index, unsigned seed,
-              bool autoplay, bool show_layout) {
+              bool autoplay, bool show_layout, bool sneak_check) {
     std::string error;
     const auto pe = PeImage::load(path, error);
     if (!pe) {
@@ -518,6 +518,41 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
         }
     }
 
+    if (sneak_check) {
+        // Fixture grants one token, including Advanced (which starts with none), so the
+        // same clock/duration regression runs on each difficulty without a special-card match.
+        auto fixture = *chosen;
+        fixture.num_start_tokens = 1;
+        pple::ConcentrationBoard peek;
+        if (!peek.reset({fixture}, 0, pools, constants, box, seed)) return 1;
+        const int before = static_cast<int>(peek.ticks_remaining());
+        const int cost = fixture.timed() ? static_cast<int>(
+            (static_cast<float>(constants.sneak_time_decrement) / 100.0f) *
+            static_cast<float>(fixture.total_ticks())) : 0;
+        const bool spent = peek.use_token();
+        std::printf("  sneak start  : spent %d, tokens %d, time %.0f, active %d, face %d\n",
+                    spent, peek.tokens(), static_cast<double>(peek.ticks_remaining()),
+                    peek.sneak_active(), static_cast<int>(peek.face(0)));
+        bool ok = spent && peek.tokens() == 0 &&
+                  static_cast<int>(peek.ticks_remaining()) == (fixture.timed() ? std::max(0, before - cost) : before) &&
+                  !peek.use_token();
+        peek.tick(10);  // flip-forward before OnReveal arms the raw countdown
+        peek.tick(constants.sneak_reveal_duration - 1);
+        std::printf("  sneak before : active %d, face %d\n", peek.sneak_active(), static_cast<int>(peek.face(0)));
+        ok = ok && peek.sneak_active() && peek.face(0) == pple::CardFace::Shown;
+        peek.tick();
+        ok = ok && !peek.sneak_active() && peek.face(0) == pple::CardFace::Hidden;
+        if (fixture.timed()) {
+            peek.reset({fixture}, 0, pools, constants, box, seed);
+            peek.tick(fixture.total_ticks() - 1);
+            ok = ok && peek.use_token() && peek.ticks_remaining() == 0 && peek.lost();
+        }
+        std::printf("  sneak check  : one-token fixture, %d reveal ticks after 10 flip ticks, "
+                    "cost %d ticks, repeat rejected, expiry%s: %s\n",
+                    constants.sneak_reveal_duration, cost,
+                    fixture.timed() ? ", zero-clamp/loss" : "", ok ? "PASS" : "FAIL");
+        if (!ok) return 1;
+    }
     if (!autoplay) return 0;
 
     int clicks = 0, mismatches = 0;
@@ -1360,7 +1395,7 @@ void usage() {
                  "  pple-res strings <file.mui> [--id N] [--grep TEXT] [--limit N]\n"
                  "  pple-res muicheck <file.mui> <pe>...   validate the |id|context|text ids\n"
                  "  pple-res cards   <pe>...    the Concentration card deck and its pools\n"
-                 "  pple-res pairs   <pe> [--difficulty D] [--level N] [--seed N] [--autoplay] [--layout]\n"
+                 "  pple-res pairs   <pe> [--difficulty D] [--level N] [--seed N] [--autoplay] [--layout] [--sneak-check]\n"
                  "  pple-res png     <pe> <resource-name> [outfile.ppm]\n"
                  "  pple-res pngscan <pe>...\n"
                  "  pple-res rgmh    <file>\n"
@@ -1519,7 +1554,7 @@ int main(int argc, char** argv) {
         const int level_index = std::atoi(flag_value("--level", "0").c_str());
         const unsigned seed = static_cast<unsigned>(std::stoul(flag_value("--seed", "1")));
         return cmd_pairs(positional[0], difficulty, level_index, seed, has_flag("--autoplay"),
-                         has_flag("--layout"));
+                         has_flag("--layout"), has_flag("--sneak-check"));
     }
     if (cmd == "cards") {
         if (positional.empty()) { usage(); return 1; }

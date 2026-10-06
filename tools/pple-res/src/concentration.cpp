@@ -336,6 +336,7 @@ void ConcentrationBoard::deal(std::size_t position, unsigned seed) {
     first_reveal_ = -1;
     lockout_ = 0;
     sneak_ticks_ = 0;
+    sneak_delay_ = 0;
     // Board::InitGame: Round+280 (TimeLeft) = Level+12, Round+292 (Level) = 0 on a new game and
     // Round+284 (Tokens) = Level+48 = <NumStartTokens>.
     ticks_left_ = lv.total_ticks();
@@ -423,12 +424,22 @@ void ConcentrationBoard::force_match_remaining(std::vector<int>* flew) {
 }
 
 bool ConcentrationBoard::use_token() {
-    if (tokens_ <= 0 || sneak_ticks_ > 0 || slots_.empty()) return false;
+    if (finished() || tokens_ <= 0 || sneak_ticks_ > 0 || sneak_delay_ > 0 || slots_.empty())
+        return false;
     --tokens_;
     // Board::SneakPeaker turns every card whose state is 0 or 4 face up and flags it with
     // Card+0x46; Board::Update flips those back when Board+0x194 reaches zero.
-    const int hold = 30 * constants_.sneak_peak_icon_duration_seconds;
-    sneak_ticks_ = hold > 0 ? hold : 600;
+    // Card::OnReveal (0x10007FA50) copies raw /SneakRevealDuration to Board+0x194.
+    // The flip takes 10 ticks in this model; the reveal countdown starts after it.
+    sneak_ticks_ = constants_.sneak_reveal_duration;
+    sneak_delay_ = 10;
+    // SneakPeakArea::HandleEvent (0x100084F69): float32 percent of this level's
+    // clock, truncated to ticks, only while timed; do not charge the remaining clock.
+    if (timed()) {
+        const int cost = static_cast<int>((static_cast<float>(constants_.sneak_time_decrement) /
+                                          100.0f) * static_cast<float>(level().total_ticks()));
+        ticks_left_ = std::max(0, ticks_left_ - cost);
+    }
     for (std::size_t i = 0; i < faces_.size(); ++i) {
         if (faces_[i] == CardFace::Matched) continue;
         faces_[i] = CardFace::Shown;
@@ -627,8 +638,10 @@ void ConcentrationBoard::tick(int ticks) {
                 if (faces_[i] == CardFace::Shown) faces_[i] = CardFace::Hidden;
         }
     }
-    if (sneak_ticks_ > 0) {
-        sneak_ticks_ -= ticks;
+    if (sneak_ticks_ > 0 || sneak_delay_ > 0) {
+        const int flip_ticks = std::min(ticks, sneak_delay_);
+        sneak_delay_ -= flip_ticks;
+        sneak_ticks_ -= ticks - flip_ticks;
         if (sneak_ticks_ <= 0) {
             sneak_ticks_ = 0;
             for (std::size_t i = 0; i < faces_.size(); ++i) {

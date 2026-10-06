@@ -68,8 +68,8 @@ struct ConcentrationConstants {
     int match_points_blender = 0;     // read, but not used by MatchMade
     int match_points_tricky = 0;
     int match_points_super_tricky = 0;
-    int reveal_duration = 0;         // seconds a mismatched pair stays face up
-    int sneak_reveal_duration = 0;
+    int reveal_duration = 0;         // ticks a mismatched pair stays face up after the flip
+    int sneak_reveal_duration = 0;   // raw ticks after Card::OnReveal, not icon seconds
     int time_bonus_percent = 0;
     int sneak_time_decrement = 0;
 };
@@ -425,9 +425,12 @@ public:
     ClickResult click(int index);
 
     // Board::SneakPeaker (0x10008B280): spends one <NumStartTokens> token and turns the whole
-    // board face up for Board+0x194 ticks, then flips those cards back (Board::Update).
-    // Returns false when there is no token left or a peek is already running.
+    // board face up for raw /SneakRevealDuration ticks after the flip, then flips those
+    // cards back (Board::Update). HandleEvent (0x100084F69) charges /SneakTimeDecrement
+    // percent of the level clock when timed, truncates to ticks and clamps to zero.
+    // Returns false when finished, out of tokens or a peek is already running.
     bool use_token();
+    bool sneak_active() const { return sneak_ticks_ > 0 || sneak_delay_ > 0; }
 
     // Inspection helper: turns every face card up without scoring it.
     void reveal_all();
@@ -465,6 +468,7 @@ private:
     int cards_removed_total_ = 0;
     int tokens_ = 0;
     int sneak_ticks_ = 0;
+    int sneak_delay_ = 0;  // flip-forward before Card::OnReveal arms the countdown
     int clicks_ = 0;
     bool end_pending_ = false;
     bool round_over_ = false;

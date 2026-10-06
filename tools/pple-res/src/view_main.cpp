@@ -1476,6 +1476,11 @@ int main(int argc, char** argv) {
     pple::ConcentrationConstants pairs_constants;
     // The sneak-peek token rects, one per <NumStartTokens>, at /SneakPeekContainer.
     std::vector<SDL_FRect> pairs_tokens;
+    std::vector<DrawItem> pairs_token_draws;
+    pple::Movie pairs_sneak_movie;
+    bool pairs_sneak_movie_ok = false;
+    float pairs_sneak_frame = -1.0f;
+    float pairs_sneak_x = -18.0f, pairs_sneak_y = -70.0f;
     // The progress meter: /ProgressMeterContainer (665,40) and one indicator per <Level>, stacked
     // /ProgressMeterIndicators/yOffSet (55) apart, drawn from the CardBack <progpath> sprites.
     struct MeterDraw {
@@ -1609,6 +1614,7 @@ int main(int argc, char** argv) {
     // How many draws belong to the scene; everything past this is the card layer.
     std::size_t pairs_scene_draws = 0;
     std::vector<DrawItem> pairs_scene_layer;
+    float pairs_scene_width = 800.0f, pairs_scene_height = 496.0f;
     // Card flip, from Card::UpdateFlipForward (0x10007EA20) and UpdateFlipBackward (0x10007EFEC):
     // the visible side narrows by 17 percent per tick to a 15 percent floor, then the other side
     // widens by 17; the shadow tracks at 5 and the vertical scale drifts by 2 either way.  The
@@ -1998,6 +2004,7 @@ int main(int argc, char** argv) {
         hidden_instances.clear();
         hidden_instances.insert("TimeBarGreen");
         hidden_instances.insert("TimeBarRed");
+        hidden_instances.insert("SneakPeekToken");  // dynamic visibility follows Round.Tokens
         if (!chosen->timed()) hidden_instances.insert("TimeBarBkg");
         scene_background_xml = "UI\\Concentration\\hearts.xml";
         build_scene();
@@ -2486,6 +2493,8 @@ int main(int argc, char** argv) {
         }
         pairs_scene_draws = scene_draws.size();
         pairs_scene_layer = scene_draws;
+        pairs_scene_width = pple::kScreenWidth;
+        pairs_scene_height = pple::kScreenHeight + (mce_mode ? 51.0f : 0.0f);
         // The progress meter.  Board::Init (0x1000888C4) copies the first four
         // UI\Concentration\CardBacks.xml <Back> entries' /progpath into CardBack+0x508, and
         // ProgressMeter::InitUI (0x100084720) makes one indicator per <Level> of the difficulty
@@ -2496,8 +2505,10 @@ int main(int argc, char** argv) {
         // <FrameCount>2</FrameCount>, frame 0 is the hollow outline and frame 1 the filled art.
         pairs_meter.clear();
         pairs_tokens.clear();
+        pairs_token_draws.clear();
+        pairs_sneak_frame = -1.0f;
         if (loaded_scene) {
-            float mx = 0.0f, my = 0.0f, sx = 0.0f, sy = 0.0f;
+            float mx = 0.0f, my = 0.0f;
             bool have_meter = false, have_sneak = false;
             for (const pple::SceneItem& item : loaded_scene->containers) {
                 const std::string& key = item.name.empty() ? item.instance : item.name;
@@ -2506,8 +2517,6 @@ int main(int argc, char** argv) {
                     my = item.y;
                     have_meter = true;
                 } else if (key == "SneakPeekContainer") {
-                    sx = item.x;
-                    sy = item.y;
                     have_sneak = true;
                 }
             }
@@ -2570,17 +2579,56 @@ int main(int argc, char** argv) {
                 }
             }
             if (have_sneak) {
-                // SneakPeakArea::InitUI -> ConUILoader::LoadSneakPeekToken (0x10008C48C): the
-                // shipped <SneakPeekToken> entries carry only <Sprite>, so /x and /y default to 0
-                // and every token lands on the container's own origin; the count shown is
-                // Round+0x11C (Tokens) via `index + 1 > Round.Tokens -> hide`.
-                const Sprite sp = resolve_sprite(bundle, "UI\\Concentration\\SneakPeakButton.xml", 0);
-                if (sp.ok) {
-                    const SDL_FRect rect{sx - sp.reg_x, sy - sp.reg_y, sp.src.w, sp.src.h};
-                    for (int i = 0; i < 3; ++i) pairs_tokens.push_back(rect);
-                    std::printf("  sneak tokens: %d at %.0f,%.0f (%.0f x %.0f)\n", pairs_board.tokens(),
-                                static_cast<double>(rect.x), static_cast<double>(rect.y),
-                                static_cast<double>(rect.w), static_cast<double>(rect.h));
+                // scene_load reads each token's own x/y/scale; apply_container_offsets adds
+                // SneakPeekContainer. LoadSneakPeekToken (0x10008C48C) does the same.
+                for (const pple::SceneItem& item : loaded_scene->items) {
+                    const std::string& key = item.name.empty() ? item.instance : item.name;
+                    if (key != "SneakPeekToken" || item.sheet.empty()) continue;
+                    std::string how;
+                    const auto* slot = bundle.resolve(item.sheet, how);
+                    if (slot == nullptr) continue;
+                    DrawItem d;
+                    d.texture = load_sheet_texture(item.sheet, slot->entry->name, pairs_sheet_note);
+                    if (d.texture == nullptr) continue;
+                    d.src = SDL_FRect{item.src_x + (item.prepped ? 1.0f : 0.0f),
+                                      item.src_y + (item.prepped ? 1.0f : 0.0f),
+                                      item.src_w, item.src_h};
+                    d.dst = SDL_FRect{item.x - item.reg_x * item.scale,
+                                      item.y - item.reg_y * item.scale,
+                                      item.src_w * item.scale, item.src_h * item.scale};
+                    d.alpha = item.alpha;
+                    pairs_tokens.push_back(d.dst);
+                    pairs_token_draws.push_back(d);
+                    std::printf("  sneak token %zu: %.0f,%.0f %.0fx%.0f, scale %.0f%%\n",
+                                pairs_tokens.size() - 1, static_cast<double>(d.dst.x),
+                                static_cast<double>(d.dst.y), static_cast<double>(d.dst.w),
+                                static_cast<double>(d.dst.h), static_cast<double>(item.scale * 100.0f));
+                }
+                pairs_sneak_x = -18.0f;
+                pairs_sneak_y = -70.0f;
+                // SneakPeakArea::InitUI (0x100084B20) creates the movie Base under its
+                // input a2 (game Base), NOT SneakPeekContainer; SetPosition at 0x100084B35.
+                std::vector<std::uint8_t> bytes;
+                if (!pairs_sneak_movie_ok && fetch_resource(scene_xml, bytes)) {
+                    pple::XmlNode root;
+                    std::string error;
+                    if (pple::xml_parse(bytes, root, error)) {
+                        if (const auto* node = root.find("SneakMovie")) {
+                            if (const auto* desc = node->find("Desc")) {
+                                const std::string name = desc->child_text("Movie");
+                                if (fetch_resource(name, bytes)) {
+                                    pairs_sneak_movie_ok = pple::movie_load(bytes, fetch_resource,
+                                                                          pairs_sneak_movie, error);
+                                    std::printf("  sneak movie: %s, %d frame(s), %zu part(s), anchor %.0f,%.0f%s\n",
+                                                name.c_str(), pairs_sneak_movie.frame_count,
+                                                pairs_sneak_movie.parts.size(),
+                                                static_cast<double>(pairs_sneak_x),
+                                                static_cast<double>(pairs_sneak_y),
+                                                pairs_sneak_movie_ok ? "" : " FAILED");
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -2799,6 +2847,22 @@ int main(int argc, char** argv) {
                         scene_draws.begin() + static_cast<std::ptrdiff_t>(pairs_scene_draws),
                         scene_draws.end());
         }
+        // SneakPeekContainer precedes JarContainer. Its movie is reset/hidden until a
+        // token is spent, and token i is visible iff i + 1 <= Round+0x11C.
+        std::vector<DrawItem> sneak_layer;
+        if (pairs_sneak_movie_ok && pairs_sneak_frame >= 0.0f) {
+            append_movie(pairs_sneak_movie, static_cast<int>(pairs_sneak_frame),
+                         pairs_sneak_x, pairs_sneak_y, sneak_layer, extent_w, extent_h);
+        }
+        for (std::size_t i = 0; i < pairs_token_draws.size() &&
+                                i < static_cast<std::size_t>(std::max(0, pairs_board.tokens())); ++i)
+            sneak_layer.push_back(pairs_token_draws[i]);
+        const std::size_t sneak_draw_count = sneak_layer.size();
+        const std::size_t sneak_at = pairs_jar_base_at >= 0
+            ? std::min(scene_draws.size(), static_cast<std::size_t>(pairs_jar_base_at) + card_draw_count)
+            : scene_draws.size();
+        scene_draws.insert(scene_draws.begin() + static_cast<std::ptrdiff_t>(sneak_at),
+                           sneak_layer.begin(), sneak_layer.end());
         // The progress meter: indicator i shows its filled frame while
         // `i < Round+0x124`, which is ConRoundData's Level index -- the number of levels of this
         // difficulty already cleared.
@@ -2886,7 +2950,7 @@ int main(int argc, char** argv) {
         }
         if (!jar_layer.empty() && pairs_jar_front_at >= 0) {
             const std::size_t at = static_cast<std::size_t>(std::min<int>(
-                pairs_jar_front_at + static_cast<int>(card_draw_count),
+                pairs_jar_front_at + static_cast<int>(card_draw_count + sneak_draw_count),
                 static_cast<int>(scene_draws.size())));
             scene_draws.insert(scene_draws.begin() + static_cast<std::ptrdiff_t>(at),
                                jar_layer.begin(), jar_layer.end());
@@ -2920,8 +2984,10 @@ int main(int argc, char** argv) {
                 }
             }
         }
-        scene_w = extent_w;
-        scene_h = extent_h;
+        // Animated parts may leave the viewport; they must not enlarge its design bounds
+        // (otherwise the whole scene progressively zooms out during the sneak/burst movies).
+        scene_w = pairs_scene_width;
+        scene_h = pairs_scene_height;
         // The Professor: idle while the round runs, win or lose once it is over.  The engine's
         // reaction is a movie swap (OnEnterWonGameState 0x1000821D0 / OnEnterLoseGameState
         // 0x10008259C), so the same thing happens here.
@@ -2965,8 +3031,8 @@ int main(int argc, char** argv) {
                 extent_w = std::max(extent_w, d.dst.x + d.dst.w);
                 extent_h = std::max(extent_h, d.dst.y + d.dst.h);
             }
-            scene_w = std::max(scene_w, extent_w);
-            scene_h = std::max(scene_h, extent_h);
+            scene_w = pairs_scene_width;
+            scene_h = pairs_scene_height;
         }
     };
     // ---- card flip animation ---------------------------------------------------------
@@ -3514,7 +3580,7 @@ int main(int argc, char** argv) {
         if (hit < 0) {
             // The sneak-peek tokens: SneakPeakArea::HandleEvent (0x100084D3C) plays
             // Con_SneakPeek_Click (proto 0x7A) and starts the peek, which is Board::SneakPeaker
-            // (0x10008B280) turning the whole board over for <SneakPeekIconDur>.
+            // (0x10008B280) turning the whole board over for raw <SneakRevealDuration> ticks.
             if (pairs_board.tokens() <= 0) {
                 for (const SDL_FRect& r : pairs_tokens) {
                     if (sx < r.x || sx >= r.x + r.w || sy < r.y || sy >= r.y + r.h) continue;
@@ -3529,14 +3595,17 @@ int main(int argc, char** argv) {
                 if (t >= static_cast<std::size_t>(pairs_board.tokens())) break;
                 const SDL_FRect& r = pairs_tokens[t];
                 if (sx < r.x || sx >= r.x + r.w || sy < r.y || sy >= r.y + r.h) continue;
+                const int time_before = static_cast<int>(pairs_board.ticks_remaining());
                 if (!pairs_board.use_token()) {
                     std::printf("  sneak token %zu: no token left\n", t);
                     return true;
                 }
                 play_pair_sfx("Con_SneakPeek_Click");
                 play_pair_sfx("Con_SneakPeek_Starburst");
-                std::printf("  sneak token %zu -> %d left, peek for %d ticks\n", t,
-                            pairs_board.tokens(), 30 * pairs_constants.sneak_peak_icon_duration_seconds);
+                pairs_sneak_frame = pairs_sneak_movie_ok ? 0.0f : -1.0f;
+                std::printf("  sneak token %zu -> %d left, peek for %d ticks after flip, time cost %d ticks (%d -> %d)\n", t,
+                            pairs_board.tokens(), pairs_constants.sneak_reveal_duration,
+                            time_before - static_cast<int>(pairs_board.ticks_remaining()), time_before, static_cast<int>(pairs_board.ticks_remaining()));
                 sync_flips();
                 timed_refresh();
                 refresh_hud();
@@ -3705,9 +3774,11 @@ int main(int argc, char** argv) {
                 pairs_accumulator -= (1.0f / 30.0f);
                 const int before = pairs_board.pending_reveal();
                 const int lock_before = pairs_board.lockout_ticks();
+                const bool sneak_before = pairs_board.sneak_active();
                 pairs_board.tick();
                 if (pairs_board.pending_reveal() != before ||
-                    pairs_board.lockout_ticks() != lock_before) {
+                    pairs_board.lockout_ticks() != lock_before ||
+                    pairs_board.sneak_active() != sneak_before) {
                     ticked = true;
                     sync_flips();
                 }
@@ -3716,6 +3787,14 @@ int main(int argc, char** argv) {
                 if (advance_flips()) flipped = true;
                 if (advance_card_fx()) flipped = true;
                 professor.time += 1.0f / 30.0f;
+                if (pairs_sneak_movie_ok && pairs_sneak_frame >= 0.0f) {
+                    const float fps = pairs_sneak_movie.parts.empty() ? pairs_sneak_movie.fps
+                        : pple::movie_frame_rate(pairs_sneak_movie, pairs_sneak_movie.parts.front());
+                    pairs_sneak_frame += fps / 30.0f;
+                    if (pairs_sneak_frame >= static_cast<float>(pairs_sneak_movie.frame_count))
+                        pairs_sneak_frame = -1.0f;
+                    flipped = true;
+                }
                 // The jar (Jar::Update 0x10008373C).  The coins fly for /ArcAnimation/Frames
                 // ticks; when the array empties and the board is complete the burst starts; when
                 // the burst's movie runs out, Jar::StopExplosion ends the board.
