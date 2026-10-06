@@ -209,6 +209,10 @@ struct ClickResult {
     bool board_cleared = false;  // the last pair went in: Con_BoardCleared comes from the jar
     bool level_up = false;    // Board::NewLevel ran: Con_NewScreen and the art must be rebuilt
     bool relaid_out = false;  // the cards moved (the Mixer): the art must be rebuilt
+    // Board::DoFlyIntoJar (0x10008AF54) is called from Card::Update (0x10007DA3C, at 0x10007DB01)
+    // when a card's state goes 5 -> 2, so every card that became Matched sends one coin.  The
+    // caller flies them and only then lets the board end; see end_pending/end_board.
+    std::vector<int> flew;
 };
 
 class ConcentrationBoard {
@@ -270,6 +274,23 @@ public:
     bool lost() const { return timed() && ticks_left_ <= 0 && !won(); }
     bool finished() const { return won() || lost(); }
 
+    // A completed board does not end the round by itself.  Board::Update's completion pass leaves
+    // it complete, Jar::Update (0x10008373C) then plays Con_BoardCleared and shows the level's
+    // burst movie (CardBacks.xml's /moviepath, Jar::LoadMovies 0x1000835D0), and only when that
+    // movie has finished does Jar::StopExplosion (0x100083A20) decide:
+    //
+    //     no next <Level>, or Round+0x124 >= Difficulty+0x20  ->  OnEnterState(2), the win
+    //     otherwise                                            ->  Board::NewLevel
+    //
+    // `end_pending` is that gap.  The caller flies the coins and runs the burst, then calls
+    // `end_board`, which is StopExplosion.  The loss is separate: Board::Update tests
+    // `Level+0x0C > 0 && Round+0x154 != 0 && Round+0x118 <= 0` and goes straight to
+    // OnEnterState(3), with no jar involved, which `tick` records as `round_over`.
+    bool end_pending() const { return end_pending_; }
+    ClickResult end_board();
+    bool round_over() const { return round_over_; }
+    bool round_won() const { return round_over_ && won(); }
+
     // Reveals card `index`.  Returns false when the click cannot do anything.
     ClickResult click(int index);
 
@@ -289,7 +310,7 @@ public:
 
 private:
     void deal(std::size_t position, unsigned seed);
-    void force_match_remaining();
+    void force_match_remaining(std::vector<int>* flew);
 
     std::vector<ConcentrationLevel> levels_;
     std::size_t level_pos_ = 0;
@@ -310,6 +331,8 @@ private:
     int cards_removed_total_ = 0;
     int tokens_ = 0;
     int sneak_ticks_ = 0;
+    bool end_pending_ = false;
+    bool round_over_ = false;
 };
 
 

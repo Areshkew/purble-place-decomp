@@ -1465,6 +1465,82 @@ int main(int argc, char** argv) {
     };
     std::vector<JarCoin> pairs_jar_coins;
     float pairs_jar_origin_x = 0.0f, pairs_jar_origin_y = 0.0f;
+    // The same `/imagepath` sprite unscaled, which is what an in-flight coin draws.
+    SDL_Texture* pairs_coin_tex = nullptr;
+    SDL_FRect pairs_coin_src{};
+    float pairs_coin_w = 0.0f, pairs_coin_h = 0.0f, pairs_coin_reg_x = 0.0f, pairs_coin_reg_y = 0.0f;
+    // The jar's flying coins.  Board::DoFlyIntoJar (0x10008AF54) spawns one ArcBehavior per
+    // matched card and ArcBehavior::Init (0x100083E48) gives it three points -- source, an apex,
+    // destination -- which ArcBehavior::Update (0x100084128) walks as a quadratic Bezier over
+    // /ArcAnimation/Frames ticks.  All three are in the ArcContainer's own space, which
+    // Jar::InitUI (0x100083218) creates as a plain "Base" child of /JarContainer at 0,0, so the
+    // scene coordinates below are /JarContainer's origin plus the point.
+    struct ArcCoin {
+        SDL_Texture* tex = nullptr;
+        SDL_FRect src{};
+        float sprite_w = 0.0f, sprite_h = 0.0f;
+        float reg_x = 0.0f, reg_y = 0.0f;
+        float sx = 0.0f, sy = 0.0f;  // source: the card's scene position (+2 in y)
+        float cx = 0.0f, cy = 0.0f;  // the Bezier control point
+        float dx = 0.0f, dy = 0.0f;  // destination: (LidOffSet + CurJar.w/2, CurJar.h/2)
+        float scale0 = 100.0f;       // Board+0x170 + 10, in percent
+        int tick = 0;
+    };
+    std::vector<ArcCoin> pairs_arcs;
+    int pairs_arc_frames = 25;  // /ArcAnimation/Frames
+    float pairs_arc_lid = -15.0f;  // /ArcAnimation/LidOffSet
+    float pairs_curjar_w = 112.0f, pairs_curjar_h = 112.0f;  // /JarFg ("CurJar")
+    // Jar+0xC8, the number of coins on the tray.  Jar::DoFiller (0x100083B10) grows it from
+    // `points / Board+0x28 * Round+0x12C`, and both of those are the CURRENT level's numbers
+    // (Board::InitLevel 0x1000894E0 zeroes Round+0x12C and sets Board+0x28 to this level's card
+    // count), so the fill restarts at each level rather than accumulating over the round.
+    int pairs_jar_fill = 0;
+    // Jar::Update (0x10008373C) in three states: the coins fly, then the level's burst movie
+    // plays, then Jar::StopExplosion (0x100083A20) ends the board.
+    enum class JarPhase { Idle, Flying, Burst };
+    JarPhase pairs_jar_phase = JarPhase::Idle;
+    // The level's burst movie: CardBacks.xml's /moviepath, loaded by Jar::LoadMovies
+    // (0x1000835D0) and parented to /JarMovieContainer at -15,-425 inside /JarContainer.
+    struct BurstMovie {
+        bool ok = false;
+        pple::Movie movie;
+    };
+    std::map<std::string, BurstMovie> pairs_burst_cache;
+    std::string pairs_burst_name;  // the current level's /moviepath
+    float pairs_burst_anchor_x = 0.0f, pairs_burst_anchor_y = 0.0f;
+    float pairs_burst_frame = 0.0f;
+    // Loads a level's burst movie once and caches it.  Jar::LoadMovies does this at Jar::InitUI,
+    // but the document is 250 KB of keyframes (88 frames, 322 parts), so it is deferred to the
+    // moment the burst starts rather than paid on every scene rebuild.
+    const auto load_burst = [&](const std::string& name) -> const BurstMovie* {
+        if (name.empty()) return nullptr;
+        const auto found = pairs_burst_cache.find(name);
+        if (found != pairs_burst_cache.end()) return found->second.ok ? &found->second : nullptr;
+        BurstMovie entry;
+        std::vector<std::uint8_t> bytes;
+        const auto fetch = [&](const std::string& part_name, std::vector<std::uint8_t>& out) {
+            std::string how;
+            const auto* s = bundle.resolve(part_name, how);
+            if (s == nullptr) return false;
+            out = bundle.read(*s);
+            return true;
+        };
+        std::string error;
+        if (fetch(name, bytes) && pple::movie_load(bytes, fetch, entry.movie, error)) {
+            entry.ok = !entry.movie.parts.empty();
+            const float fps = entry.movie.parts.empty()
+                                  ? entry.movie.fps
+                                  : pple::movie_frame_rate(entry.movie, entry.movie.parts.front());
+            std::printf("  jar burst: %s, %d frame(s) at %.0f fps, %zu part(s), anchor %.0f,%.0f\n",
+                        name.c_str(), entry.movie.frame_count, static_cast<double>(fps),
+                        entry.movie.parts.size(), static_cast<double>(pairs_burst_anchor_x),
+                        static_cast<double>(pairs_burst_anchor_y));
+        } else {
+            std::printf("  jar burst: %s did not load (%s)\n", name.c_str(), error.c_str());
+        }
+        const auto placed = pairs_burst_cache.emplace(name, std::move(entry));
+        return placed.first->second.ok ? &placed.first->second : nullptr;
+    };
     // The PlayArea node's placement, so a mouse position can be turned back into a cell.
     float pairs_origin_x = 0.0f, pairs_origin_y = 0.0f, pairs_outer_scale = 1.0f;
     std::string pairs_sheet_note;
@@ -1540,9 +1616,12 @@ int main(int argc, char** argv) {
                 "   tokens " + std::to_string(pairs_board.tokens()),
             pairs_board.timed() ? "time " + std::to_string(static_cast<int>(pairs_board.seconds_remaining())) + " s"
                                 : std::string("untimed"),
-            pairs_board.won() ? "WON - N or R for a new game"
-                              : (pairs_board.lost() ? "TIME UP - N or R for a new game"
-                                                    : "click a card to flip it; N/R new game, ESC menu")};
+            pairs_board.round_won()
+                ? "WON - N or R for a new game"
+                : (pairs_board.round_over()
+                       ? "TIME UP - N or R for a new game"
+                       : (pairs_board.won() ? "board complete - the jar is filling"
+                                            : "click a card to flip it; N/R new game, ESC menu"))};
         rebuild_hud();
     };
     // Assigned once build_pairs exists; build_pairs itself only needs to call it.
@@ -1574,6 +1653,118 @@ int main(int argc, char** argv) {
     bool pairs_end_played = false;
     // Set by a click that changed the layout; the main loop does the rebuild.
     bool pairs_rebuild_pending = false;
+    // Jar::Update (0x10008389D): the flying-coin array is empty and the board is complete, so
+    // play Con_BoardCleared (proto 0x6D), put /JarBkg behind everything and show the level's
+    // burst movie (Jar+0x30, from CardBacks.xml's /moviepath).
+    const auto jar_begin_burst = [&]() {
+        if (!pairs_board.end_pending()) return;
+        play_pair_sfx("Con_BoardCleared");
+        pairs_burst_frame = 0.0f;
+        const BurstMovie* burst = load_burst(pairs_burst_name);
+        pairs_jar_phase = (burst != nullptr && burst->movie.frame_count > 0) ? JarPhase::Burst
+                                                                            : JarPhase::Idle;
+    };
+    // Jar::StopExplosion (0x100083A20): the board has finished bursting, so either the round is
+    // won or Board::NewLevel deals the next <Level>.  The scripted hooks call this directly,
+    // because they have no frames in which to animate the flight and the burst.
+    const auto finish_board_end = [&]() {
+        if (!pairs_board.end_pending()) return;
+        const pple::ClickResult r = pairs_board.end_board();
+        pairs_arcs.clear();
+        pairs_jar_phase = JarPhase::Idle;
+        pairs_burst_frame = 0.0f;
+        if (r.level_up) {
+            std::printf("    board relaid out -> level %d/%d\n", pairs_board.level_position() + 1,
+                        pairs_board.level_count());
+            pairs_rebuild_pending = true;
+            pairs_keep_state = true;
+        } else if (r.board_cleared) {
+            std::printf("  board cleared -> round WON at level %d/%d\n",
+                        pairs_board.level_position() + 1, pairs_board.level_count());
+        }
+    };
+    // One movie's parts appended to `out` at an anchor.  PurblePlaceMovie::InitFromXml
+    // (0x100087748) creates every <ImageDef> part as a child of the node it is handed, so a part
+    // draws at (anchor + part) - registration.
+    const auto append_movie = [&](const pple::Movie& mv, int movie_frame, float ax, float ay,
+                                  std::vector<DrawItem>& out, float& extent_w,
+                                  float& extent_h) -> int {
+        if (mv.parts.empty()) return 0;
+        std::vector<pple::MoviePlacement> placements;
+        pple::movie_evaluate(mv, movie_frame, placements);
+        int drawn = 0;
+        for (const pple::MoviePlacement& p : placements) {
+            if (p.part == nullptr || !p.part->resolved || p.part->sprite.sheet.empty()) continue;
+            std::string sheet_how;
+            const auto* sheet_slot = bundle.resolve(p.part->sprite.sheet, sheet_how);
+            if (sheet_slot == nullptr) continue;
+            std::string note;
+            SDL_Texture* tex =
+                load_sheet_texture(p.part->sprite.sheet, sheet_slot->entry->name, note);
+            if (tex == nullptr) continue;
+            float sx = 0.0f, sy = 0.0f, sw = 0.0f, sh = 0.0f;
+            pple::sprite_frame_rect(p.part->sprite, 0, sx, sy, sw, sh);
+            DrawItem d;
+            d.texture = tex;
+            d.src = SDL_FRect{sx, sy, sw, sh};
+            d.dst = SDL_FRect{ax + p.x - p.part->sprite.reg_x, ay + p.y - p.part->sprite.reg_y,
+                              sw * p.xscale, sh * p.yscale};
+            d.alpha = static_cast<int>(std::clamp(p.alpha * 255.0f, 0.0f, 255.0f));
+            d.rotation = p.rotation;
+            out.push_back(d);
+            extent_w = std::max(extent_w, d.dst.x + d.dst.w);
+            extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+            ++drawn;
+        }
+        return drawn;
+    };
+    // Board::DoFlyIntoJar (0x10008AF54) once per matched card.  The source is the card's own
+    // position -- Card::Update (0x10007DAFA) passes the card node's (x, y), which is
+    // <PlayArea>-relative, and the function adds PlayArea's 150,2 back while subtracting
+    // /JarContainer's origin, so the arc runs in /JarContainer's space.
+    const auto spawn_arcs = [&](const std::vector<int>& cells) {
+        if (pairs_coin_tex == nullptr || cells.empty()) return;
+        const float dx = pairs_jar_origin_x + pairs_arc_lid + pairs_curjar_w * 0.5f;
+        const float dy = pairs_jar_origin_y + pairs_curjar_h * 0.5f;
+        for (int cell : cells) {
+            if (cell < 0 || cell >= static_cast<int>(pairs_board.slots().size())) continue;
+            const pple::ConcentrationSlot& slot = pairs_board.slots()[static_cast<std::size_t>(cell)];
+            ArcCoin c;
+            c.tex = pairs_coin_tex;
+            c.src = pairs_coin_src;
+            c.sprite_w = pairs_coin_w;
+            c.sprite_h = pairs_coin_h;
+            c.reg_x = pairs_coin_reg_x;
+            c.reg_y = pairs_coin_reg_y;
+            c.sx = pairs_origin_x + static_cast<float>(slot.x);
+            c.sy = pairs_origin_y + static_cast<float>(slot.y) + 2.0f;
+            c.dx = dx;
+            c.dy = dy;
+            // ArcBehavior+0x28 is `card_y + 62` (0x10008B052) and the apex is
+            // `min(src.y, dst.y) - ArcBehavior+0x28` (0x1000840E8) in the arc's own space.  The
+            // source's y is `card_y + 2 - JarContainer.y`, so the two card_y terms cancel and the
+            // control point's height above the container is a constant 375 px for every card at
+            // or above the jar.  The control point is off the top of the 800x496 scene, but the
+            // drawn curve is not: a quadratic Bezier only reaches about half way to its control
+            // point, so the coin's highest drawn point stays on screen.
+            c.cx = dx + (c.sx - dx) * 0.5f;
+            c.cy = std::min(c.sy, c.dy) - static_cast<float>(slot.y) - 62.0f;
+            c.scale0 = static_cast<float>(slot.scale_percent + 10);  // Board+0x170 + 10
+            c.tick = 0;
+            pairs_arcs.push_back(c);
+        }
+        if (!pairs_arcs.empty()) pairs_jar_phase = JarPhase::Flying;
+    };
+    // Jar::Update's landing: the tray grows to `points / Board+0x28 * Round+0x12C`.  DoFiller
+    // only ever adds nodes, so the count never falls within a level.
+    const auto jar_grow = [&]() {
+        if (pairs_jar_coins.empty()) return;
+        const int total_cards = std::max(1, pairs_board.cell_count());
+        const double want = static_cast<double>(pairs_jar_coins.size()) /
+                            static_cast<double>(total_cards) *
+                            static_cast<double>(pairs_board.cards_removed());
+        pairs_jar_fill = std::max(pairs_jar_fill, static_cast<int>(want));
+    };
     const auto build_pairs = [&]() {
         const Uint64 build_t0 = SDL_GetPerformanceCounter();
         std::string scene_how;
@@ -1738,7 +1929,6 @@ int main(int argc, char** argv) {
                                              : phase == 1 ? (wild_a != wild_b)
                                                           : (wild_a && wild_b);
                             if (!take) continue;
-                            const int level_before = pairs_board.level_position();
                             if (!pairs_board.click(i).accepted) break;
                             const pple::ClickResult r = pairs_board.click(j);
                             if (!r.accepted) break;
@@ -1760,10 +1950,10 @@ int main(int argc, char** argv) {
                             if (r.time_bonus > 0)
                                 std::printf("    time bonus: +%d ticks, %.0f s left\n", r.time_bonus,
                                             static_cast<double>(pairs_board.seconds_remaining()));
-                            if (pairs_board.level_position() != level_before)
-                                std::printf("    level cleared -> %d/%d\n",
-                                            pairs_board.level_position() + 1,
-                                            pairs_board.level_count());
+                            // Jar::StopExplosion runs at the end of the jar's burst, which this
+                            // headless path has no frames for: end the board here so the solve
+                            // walks every <Level> the way the engine does.
+                            finish_board_end();
                             progress = true;
                             break;
                         }
@@ -1824,12 +2014,15 @@ int main(int argc, char** argv) {
                             pairs_board.round_pairs_total(),
                             pairs_board.lockout_ticks() > 0 ? ", reveal timer armed" : "");
                 play_click_sfx(r);
-                if (r.board_cleared) play_pair_sfx("Con_BoardCleared");
-                if (r.level_up || r.relaid_out) {
-                    // Board::NewLevel re-deals: the rest of the script refers to the old board, so
-                    // stop here and let the main loop rebuild the art for the new one.
-                    std::printf("    board relaid out -> level %d/%d\n",
-                                pairs_board.level_position() + 1, pairs_board.level_count());
+                // The scripted path has no frames to animate in, so the jar's flight and burst
+                // are skipped and Jar::StopExplosion is called straight away.
+                if (pairs_board.end_pending()) {
+                    jar_begin_burst();
+                    finish_board_end();
+                }
+                if (r.relaid_out) {
+                    // The rest of the script refers to the old board, so stop here and let the
+                    // main loop rebuild the art.
                     pairs_rebuild_pending = true;
                     pairs_keep_state = true;
                     break;
@@ -1872,12 +2065,49 @@ int main(int argc, char** argv) {
                 pairs_jar_coins.clear();
                 pairs_jar_origin_x = 0.0f;
                 pairs_jar_origin_y = 0.0f;
+                float movie_container_x = 0.0f, movie_container_y = 0.0f;
                 if (loaded_scene) {
                     for (const pple::SceneItem& item : loaded_scene->containers) {
                         const std::string& key = item.name.empty() ? item.instance : item.name;
-                        if (key != "JarContainer") continue;
-                        pairs_jar_origin_x = item.x;
-                        pairs_jar_origin_y = item.y;
+                        if (key == "JarContainer") {
+                            pairs_jar_origin_x = item.x;
+                            pairs_jar_origin_y = item.y;
+                        } else if (key == "JarMovieContainer") {
+                            // Jar::LoadMovies hands /JarMovieContainer to
+                            // PurblePlaceMovie::InitFromXml as the parts' parent.
+                            movie_container_x = item.x;
+                            movie_container_y = item.y;
+                        }
+                    }
+                }
+                // /JarFg is "CurJar": its own size is the jar the coins land in, and its x is
+                // what `LidOffSet + CurJar.w/2` measures.
+                pairs_curjar_w = 112.0f;
+                pairs_curjar_h = 112.0f;
+                if (loaded_scene) {
+                    for (const pple::SceneItem& item : loaded_scene->items) {
+                        const std::string& key = item.name.empty() ? item.instance : item.name;
+                        if (key != "JarFg") continue;
+                        float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
+                        pple::sprite_frame_rect(item, 0, fx, fy, fw, fh);
+                        if (fw > 0.0f) pairs_curjar_w = fw * item.scale;
+                        if (fh > 0.0f) pairs_curjar_h = fh * item.scale;
+                    }
+                }
+                // /ArcAnimation: the flight's length and the jar's lid offset.
+                if (loaded_scene) {
+                    pple::XmlNode root;
+                    std::string xml_error;
+                    if (pple::xml_parse(scene_bytes, root, xml_error)) {
+                        const pple::XmlNode* arc = root.find("ArcAnimation");
+                        if (arc != nullptr) {
+                            const std::string frames_text = arc->child_text("Frames");
+                            const int frames = frames_text.empty() ? 25 : std::atoi(frames_text.c_str());
+                            if (frames > 0) pairs_arc_frames = frames;
+                            const std::string lid_text = arc->child_text("LidOffSet");
+                            pairs_arc_lid = static_cast<float>(
+                                std::atof(lid_text.empty() ? "-15" : lid_text.c_str()));
+                        }
                     }
                 }
                 static const char* kPointFiles[4] = {
@@ -1907,6 +2137,16 @@ int main(int argc, char** argv) {
                             geo.prepped = coin.prepped;
                             float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
                             pple::sprite_frame_rect(geo, 0, fx, fy, fw, fh);
+                            // The same sprite unscaled is the in-flight coin: ArcBehavior::Init
+                            // (0x100083E48) sets its scale to Board+0x170 + 10 percent, and
+                            // Board+0x170 is the card scale Board::ShuffleCards (0x1000896C4)
+                            // computes, so the coin starts at the card's own size.
+                            pairs_coin_tex = tex;
+                            pairs_coin_src = SDL_FRect{fx, fy, fw, fh};
+                            pairs_coin_w = fw;
+                            pairs_coin_h = fh;
+                            pairs_coin_reg_x = coin.reg_x;
+                            pairs_coin_reg_y = coin.reg_y;
                             const float scale = 0.38f;  // Jar::DoFiller's `+ 6) = 38`
                             for (const pple::JarPoint& p : points) {
                                 JarCoin c;
@@ -1927,11 +2167,23 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
+                // Jar::LoadMovies (0x1000835D0): `(Board+0x20)[i] + 1032` for i = 0..3, so the
+                // burst movie is per level.  Jar+0x30 selects `Jar+0x48[Round+0x124]`.  The
+                // document itself is loaded lazily, when the burst starts.
+                pairs_burst_name = (at < backs.size()) ? backs[at].movie : std::string{};
+                pairs_burst_anchor_x = pairs_jar_origin_x + movie_container_x;
+                pairs_burst_anchor_y = pairs_jar_origin_y + movie_container_y;
             }
         }
         const float card_scale = static_cast<float>(pairs_board.slots().front().scale_percent) / 100.0f;
         int failed = 0;
         card_cache.clear();
+        // The jar starts each level empty: Jar::InitUI (0x100083218, at 0x100083593) zeroes
+        // Jar+0xC8 and the burst's own wipe has already hidden the previous level's coins.
+        pairs_arcs.clear();
+        pairs_jar_fill = 0;
+        pairs_jar_phase = JarPhase::Idle;
+        pairs_burst_frame = 0.0f;
         card_flip.assign(pairs_board.cell_count(), CardFlip{});
         card_face_shown.assign(pairs_board.cell_count(), pple::CardFace::Hidden);
         const auto build_card_sprite = [&](const std::string& xml, SDL_Texture** tex_out,
@@ -2272,37 +2524,81 @@ int main(int argc, char** argv) {
             extent_w = std::max(extent_w, d.dst.x + d.dst.w);
             extent_h = std::max(extent_h, d.dst.y + d.dst.h);
         }
+        // The jar's flying coins.  ArcBehavior::Update (0x100084128) walks a quadratic Bezier
+        // from the source through the apex to the destination with `(1-t)^2`, `2(1-t)t`, `t^2`,
+        // `t = tick / /ArcAnimation/Frames`, and interpolates the node's scale over the same
+        // curve from `s` to `2s` to `s/2` (ArcBehavior::Init's three Array adds).  The alpha
+        // (`node+0x24`) grows by 0.2 per tick.
+        // They are children of the "ArcContainer" Base, which Jar::InitUI creates *before* the
+        // Base that holds the tray coins, so they draw behind the tray and in front of /JarBkg.
+        std::vector<DrawItem> jar_layer;
+        for (const ArcCoin& a : pairs_arcs) {
+            if (a.tex == nullptr) continue;
+            double t = static_cast<double>(a.tick) / static_cast<double>(pairs_arc_frames);
+            if (t < 0.0) t = 0.0;
+            if (t > 1.0) t = 1.0;
+            const double u = 1.0 - t;
+            const double w0 = u * u, w1 = 2.0 * u * t, w2 = t * t;
+            const float px = static_cast<float>(w0 * a.sx + w1 * a.cx + w2 * a.dx);
+            const float py = static_cast<float>(w0 * a.sy + w1 * a.cy + w2 * a.dy);
+            const float scale =
+                static_cast<float>(w0 * a.scale0 + w1 * (2.0 * a.scale0) + w2 * (a.scale0 * 0.5)) /
+                100.0f;
+            DrawItem d;
+            d.texture = a.tex;
+            d.src = a.src;
+            d.dst = SDL_FRect{px - a.reg_x * scale, py - a.reg_y * scale, a.sprite_w * scale,
+                              a.sprite_h * scale};
+            d.alpha = static_cast<int>(std::clamp(0.2f * static_cast<float>(a.tick), 0.0f, 1.0f) *
+                                       255.0f);
+            jar_layer.push_back(d);
+            extent_w = std::max(extent_w, d.dst.x + d.dst.w);
+            extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+        }
         // The jar's tray.  Jar::DoFiller (0x100083B10):
-        //   want = (int)(points / NumCards * Round+0x12C)
-        // with Round+0x12C the cards Board::Update has counted in state 2, so the jar fills in
-        // proportion to the round's progress and the count comes from the board, not from text.
-        // The coins go between /JarBkg and /JarFg.
-        if (!pairs_jar_coins.empty() && pairs_jar_front_at >= 0) {
-            const int total_cards = std::max(1, pairs_board.round_cards());
-            const double want_d = static_cast<double>(pairs_jar_coins.size()) /
-                                  static_cast<double>(total_cards) *
-                                  static_cast<double>(pairs_board.cards_removed_total());
-            const int want = static_cast<int>(want_d);
-            std::vector<DrawItem> coins;
-            for (int i = 0; i < want && i < static_cast<int>(pairs_jar_coins.size()); ++i) {
-                const JarCoin& c = pairs_jar_coins[static_cast<std::size_t>(i)];
-                if (c.tex == nullptr) continue;
-                DrawItem d;
-                d.texture = c.tex;
-                d.src = c.src;
-                // NodeSprite::UpdateZero: the drawn corner is (x, y) - scale * registration / 100.
-                d.dst = SDL_FRect{pairs_jar_origin_x + c.x - c.reg_x,
-                                  pairs_jar_origin_y + c.y - c.reg_y, c.w, c.h};
-                d.alpha = 255;
-                d.rotation = c.rotation;
-                coins.push_back(d);
-            }
-            if (!coins.empty()) {
-                const std::size_t at = static_cast<std::size_t>(std::min<int>(
-                    pairs_jar_front_at, static_cast<int>(scene_draws.size())));
-                scene_draws.insert(scene_draws.begin() + static_cast<std::ptrdiff_t>(at),
-                                   coins.begin(), coins.end());
-            }
+        //   want = (int)(points / Board+0x28 * Round+0x12C)
+        // Board+0x28 and Round+0x12C are both the *current* level's numbers, so the fill is that
+        // level's fraction and Jar+0xC8 restarts at each level.  `pairs_jar_fill` is grown when a
+        // coin lands, which is when the engine calls DoFiller (ArcBehavior::Update's tail), not
+        // when the match is made.  The coins go between /JarBkg and /JarFg.
+        const BurstMovie* burst =
+            pairs_jar_phase == JarPhase::Burst ? load_burst(pairs_burst_name) : nullptr;
+        if (burst != nullptr) {
+            // Jar::Update's wipe: as the burst runs the tray's top coins are hidden, from
+            // `v17 = n - 1 - frame * ((n + 2) / frameCount)` upwards, and nothing ever shows them
+            // again -- the burst movie draws the coins erupting itself.
+            const double n = static_cast<double>(pairs_jar_fill);
+            const double v17 = n - 1.0 - static_cast<double>(pairs_burst_frame) *
+                                           ((n + 2.0) /
+                                            std::max(1.0, static_cast<double>(
+                                                              burst->movie.frame_count)));
+            const int left = v17 > 0.0 ? static_cast<int>(std::ceil(v17)) : 0;
+            if (left < pairs_jar_fill) pairs_jar_fill = left;
+        }
+        for (int i = 0; i < pairs_jar_fill && i < static_cast<int>(pairs_jar_coins.size()); ++i) {
+            const JarCoin& c = pairs_jar_coins[static_cast<std::size_t>(i)];
+            if (c.tex == nullptr) continue;
+            DrawItem d;
+            d.texture = c.tex;
+            d.src = c.src;
+            // NodeSprite::UpdateZero: the drawn corner is (x, y) - scale * registration / 100.
+            d.dst = SDL_FRect{pairs_jar_origin_x + c.x - c.reg_x,
+                              pairs_jar_origin_y + c.y - c.reg_y, c.w, c.h};
+            d.alpha = 255;
+            d.rotation = c.rotation;
+            jar_layer.push_back(d);
+        }
+        // The jar's burst movie, in the same layer: Jar+0x30 is the current level's /moviepath
+        // and Jar::Update shows it once the last coin has landed.
+        if (burst != nullptr) {
+            append_movie(burst->movie, static_cast<int>(pairs_burst_frame), pairs_burst_anchor_x,
+                         pairs_burst_anchor_y, jar_layer, extent_w, extent_h);
+        }
+        if (!jar_layer.empty() && pairs_jar_front_at >= 0) {
+            const std::size_t at = static_cast<std::size_t>(std::min<int>(
+                pairs_jar_front_at, static_cast<int>(scene_draws.size())));
+            scene_draws.insert(scene_draws.begin() + static_cast<std::ptrdiff_t>(at),
+                               jar_layer.begin(), jar_layer.end());
         }
         // The time bar: segment i is lit while i >= elapsed, red for the last 900 ticks.
         const int pending = pairs_board.pending_reveal();
@@ -2339,9 +2635,9 @@ int main(int argc, char** argv) {
         // reaction is a movie swap (OnEnterWonGameState 0x1000821D0 / OnEnterLoseGameState
         // 0x10008259C), so the same thing happens here.
         if (professor.ok) {
-            const char* want = pairs_board.won()
+            const char* want = pairs_board.round_won()
                                    ? "ProfessorWinAnimation"
-                                   : (pairs_board.lost() ? "ProfessorLoseAnimation" : nullptr);
+                                   : (pairs_board.round_over() ? "ProfessorLoseAnimation" : nullptr);
             if (want != nullptr && professor.which != want) {
                 if (load_professor(want)) std::printf("  professor -> %s\n", want);
             }
@@ -2790,17 +3086,13 @@ int main(int argc, char** argv) {
         const pple::ClickResult clicked = pairs_board.click(hit);
         if (!clicked.accepted) return true;
         play_click_sfx(clicked);
-        if (clicked.board_cleared) play_pair_sfx("Con_BoardCleared");
-        if (clicked.level_up) {
-            std::printf("  level cleared -> level %d of %d\n", pairs_board.level_position() + 1,
-                        pairs_board.level_count());
-            // Board::NewLevel rebuilds the level's UI: new deck, new art.  Deferred to the main
-            // loop so the board is never re-dealt from inside a click.
-            pairs_rebuild_pending = true;
-            pairs_keep_state = true;
-            return true;
-        }
+        // Board::DoFlyIntoJar, one coin per card that turned over.  A completed board does not
+        // end the round here: the jar's own state machine runs the flight and the burst and then
+        // calls Jar::StopExplosion (finish_board_end).
+        spawn_arcs(clicked.flew);
         if (clicked.relaid_out) {
+            // The Mixer reshuffled the cards: Board::DoMixer re-places them, so the art has to be
+            // rebuilt.  Deferred to the main loop so the board is never re-dealt from a click.
             pairs_rebuild_pending = true;
             pairs_keep_state = true;
             return true;
@@ -2952,14 +3244,48 @@ int main(int argc, char** argv) {
                 // The flip runs on the same 30 Hz step as the engine's Card::Update.
                 if (advance_flips()) flipped = true;
                 professor.time += 1.0f / 30.0f;
-                // End of round.  Board::Update (0x10008A4F0) hands the cleared board to the jar
-                // (Jar::StopExplosion 0x100083A20), which either calls
-                // ConcentrationGame::OnEnterState(2) -- the win -- or Board::NewLevel; the loss is
-                // `Level+12 > 0 && Round+0x154 != 0 && Round+0x118 <= 0`, i.e. OnEnterState(3).
-                if (pairs_board.finished() && !pairs_end_played) {
+                // The jar (Jar::Update 0x10008373C).  The coins fly for /ArcAnimation/Frames
+                // ticks; when the array empties and the board is complete the burst starts; when
+                // the burst's movie runs out, Jar::StopExplosion ends the board.
+                if (pairs_jar_phase == JarPhase::Flying) {
+                    bool landed = false;
+                    for (std::size_t i = 0; i < pairs_arcs.size();) {
+                        if (++pairs_arcs[i].tick >= pairs_arc_frames) {
+                            pairs_arcs.erase(pairs_arcs.begin() + static_cast<std::ptrdiff_t>(i));
+                            landed = true;
+                        } else {
+                            ++i;
+                        }
+                    }
+                    if (landed) jar_grow();  // ArcBehavior::Update's tail calls Jar::DoFiller
+                    if (pairs_arcs.empty()) {
+                        pairs_jar_phase = JarPhase::Idle;
+                        jar_begin_burst();
+                        if (pairs_jar_phase == JarPhase::Burst) flipped = true;
+                    }
+                }
+                if (pairs_jar_phase == JarPhase::Burst) {
+                    // The engine's default is 30 fps when the library carries no FPS attribute,
+                    // and one tick is 1/30 s, so the movie advances one frame per tick.
+                    const BurstMovie* burst = load_burst(pairs_burst_name);
+                    const int frames = burst != nullptr ? burst->movie.frame_count : 0;
+                    pairs_burst_frame += 1.0f;
+                    flipped = true;
+                    if (frames <= 0 || pairs_burst_frame >= static_cast<float>(frames))
+                        finish_board_end();
+                }
+                // A board that completed with nothing left to fly -- the coin sprite did not
+                // resolve, or a scripted hook ended it -- still runs the burst.
+                if (pairs_board.end_pending() && pairs_jar_phase == JarPhase::Idle) {
+                    jar_begin_burst();
+                    if (pairs_jar_phase == JarPhase::Idle) finish_board_end();
+                }
+                // End of round.  Board::Update's loss goes straight to OnEnterState(3), and
+                // OnEnterWonGameState is reached from Jar::StopExplosion, so `round_over` is the
+                // signal and `won()` alone is not.
+                if (pairs_board.round_over() && !pairs_end_played) {
                     pairs_end_played = true;
-                    if (pairs_board.won()) {
-                        play_pair_sfx("Con_BoardCleared");
+                    if (pairs_board.round_won()) {
                         play_pair_sfx("Con_Win");
                         std::printf("  round over: WON at level %d/%d, score %d\n",
                                     pairs_board.level_position() + 1, pairs_board.level_count(),

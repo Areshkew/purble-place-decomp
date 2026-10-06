@@ -302,6 +302,8 @@ bool ConcentrationBoard::reset(const std::vector<ConcentrationLevel>& levels, st
     score_ = 0;
     matches_ = 0;
     cards_removed_total_ = 0;
+    end_pending_ = false;
+    round_over_ = false;
     deal(level_pos_, seed);
     return !slots_.empty();
 }
@@ -399,13 +401,14 @@ const CardDef* ConcentrationBoard::card(int index) const {
     return pools_->find(card_id(index));
 }
 
-void ConcentrationBoard::force_match_remaining() {
+void ConcentrationBoard::force_match_remaining(std::vector<int>* flew) {
     // Board::Update's completion pass: every card still in state 0 is force-matched and flipped.
     for (std::size_t i = 0; i < faces_.size(); ++i) {
         if (faces_[i] == CardFace::Matched) continue;
         faces_[i] = CardFace::Matched;
         ++matches_;
         ++cards_removed_total_;
+        if (flew != nullptr) flew->push_back(static_cast<int>(i));
         const CardDef* def = card(static_cast<int>(i));
         score_ += match_score(def != nullptr ? def->type : 0, 0);
     }
@@ -461,6 +464,8 @@ ClickResult ConcentrationBoard::click(int index) {
     faces_[b] = CardFace::Matched;
     ++matches_;
     cards_removed_total_ += 2;
+    result.flew.push_back(a);
+    result.flew.push_back(b);
 
     // The Chef's cake sweep.  Card::DoMatcher calls Board::GetChefCakeID (0x100089D00) and, when
     // either card is that id, forces every card with the id to match and scores each pair.
@@ -472,6 +477,7 @@ ClickResult ConcentrationBoard::click(int index) {
             faces_[i] = CardFace::Matched;
             ++matches_;
             ++cards_removed_total_;
+            result.flew.push_back(static_cast<int>(i));
             const CardDef* def = card(static_cast<int>(i));
             score_ += match_score(def != nullptr ? def->type : 0, 0);
         }
@@ -537,22 +543,38 @@ ClickResult ConcentrationBoard::click(int index) {
     }
 
     if (won()) {
-        // Board::Update's completion pass, then Jar::StopExplosion's decision: with no next
-        // <Level> the game is won, otherwise Board::NewLevel advances Round+0x124.
-        force_match_remaining();
-        if (level_pos_ + 1 < levels_.size()) {
-            ++level_pos_;
-            result.level_up = true;
-            result.relaid_out = true;
-            const int kept_score = score_;
-            const int kept_matches = matches_;
-            deal(level_pos_, seed_ + static_cast<unsigned>(level_pos_));
-            score_ = kept_score;
-            matches_ = kept_matches;
-        } else {
-            result.board_cleared = true;
-        }
+        // Board::Update's completion pass, then nothing: the board is complete but the round is
+        // not over.  Jar::Update plays Con_BoardCleared once the last coin has landed and shows
+        // the level's burst movie; `end_board` is Jar::StopExplosion and runs when it finishes.
+        force_match_remaining(&result.flew);
+        end_pending_ = true;
     }
+    return result;
+}
+
+// Jar::StopExplosion (0x100083A20):
+//
+//   if ( *(QWORD *)(Level + 0x110) == 0 || Round+0x124 >= *(DWORD *)(Difficulty + 0x20) )
+//       OnEnterState(2);                       // WON
+//   else { professor -> ProInt/ProAdvLevelChange; Board::NewLevel(); }
+ClickResult ConcentrationBoard::end_board() {
+    ClickResult result;
+    if (!end_pending_) return result;
+    end_pending_ = false;
+    if (level_pos_ + 1 < levels_.size()) {
+        // Board::NewLevel (0x10008AAD4): walk Level+0x110, ++Round+0x124, InitLevel + InitUI.
+        ++level_pos_;
+        result.level_up = true;
+        result.relaid_out = true;
+        const int kept_score = score_;
+        const int kept_matches = matches_;
+        deal(level_pos_, seed_ + static_cast<unsigned>(level_pos_));
+        score_ = kept_score;
+        matches_ = kept_matches;
+        return result;
+    }
+    result.board_cleared = true;
+    round_over_ = true;
     return result;
 }
 
@@ -565,7 +587,11 @@ void ConcentrationBoard::reveal_all() {
 
 void ConcentrationBoard::tick(int ticks) {
     if (ticks <= 0) return;
-    if (level().timed() && ticks_left_ > 0) {
+    // Board::Update (0x10008A5C1) decrements Round+0x118 only while
+    // `Round+0x12C < Board+0x15C` -- the number of matched cards is below the board's card count.
+    // A completed board therefore stops the clock, which is what keeps the burst movie from
+    // being interrupted by a loss.
+    if (level().timed() && ticks_left_ > 0 && !won()) {
         ticks_left_ -= ticks;
         if (ticks_left_ < 0) ticks_left_ = 0;
     }
@@ -587,6 +613,12 @@ void ConcentrationBoard::tick(int ticks) {
                 if (faces_[i] == CardFace::Shown) faces_[i] = CardFace::Hidden;
             }
         }
+    }
+    // Board::Update's loss test, which needs no jar: `Level+0x0C > 0 && Round+0x154 != 0 &&
+    // Round+0x118 <= 0` -> OnEnterState(3).  Beginner's Level+0x0C is 30 * -1, so it cannot lose.
+    if (!round_over_ && lost()) {
+        round_over_ = true;
+        end_pending_ = false;
     }
 }
 

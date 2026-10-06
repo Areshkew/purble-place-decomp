@@ -157,7 +157,11 @@ bool movie_load(std::span<const std::uint8_t> data,
 float movie_frame_rate(const Movie& movie, const MoviePart& part) {
     if (part.fps > 0.0f) return part.fps;
     if (movie.fps > 0.0f) return movie.fps;
-    return 12.0f;
+    // PurblePlaceMovie::InitFromXml (0x100087A89): a library with no @FPS logs
+    // "No FPS found for this movie, defaulting to 30 fps" and stores 30.0f (0x41F00000).  The
+    // Concentration burst movies (ShamBurstMovie.xml and the other three) carry only
+    // frameCount, so this is the rate the game plays them at.
+    return 30.0f;
 }
 
 void movie_evaluate(const Movie& movie, int frame, std::vector<MoviePlacement>& out) {

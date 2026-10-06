@@ -554,11 +554,12 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
             }
         }
         if (first < 0 || second < 0) break;
-        const int level_before = board.level_position();
         const pple::ClickResult r1 = board.click(first);
-        // A level change re-deals the board, so the second half of the pair no longer means
-        // anything: stop here and let the next pass read the new layout.
-        if (board.level_position() != level_before) {
+        // A completed board does not end the round on its own: Jar::StopExplosion (0x100083A20)
+        // runs once the jar has flown its coins and played the burst movie, and it is what either
+        // calls Board::NewLevel or declares the win.  There is no jar here, so end it directly.
+        if (board.end_pending()) {
+            board.end_board();
             ++clicks;
             continue;
         }
@@ -568,6 +569,7 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
         // match succeeds without a MatchMade (`++matches_` is not run for it), so count the
         // mismatches from the result rather than from the face.
         if (r2.mismatch) ++mismatches;
+        if (board.end_pending()) board.end_board();
         if (r1.relaid_out || r2.relaid_out) {
             // The Mixer reshuffled the remaining cards: the pair list is stale.
             order.assign(static_cast<std::size_t>(board.cell_count()), 0);
