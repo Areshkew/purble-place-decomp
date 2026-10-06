@@ -21,6 +21,7 @@
 //    board has a single card that can never match.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -257,6 +258,62 @@ struct ConcentrationRanks {
 
 bool concentration_ranks_parse(std::span<const std::uint8_t> ranks_xml, ConcentrationRanks& ranks,
                                std::string& error);
+
+// ConGeneralData (ToXml 0x10007FC40, FromXml 0x10007FE7C) together with TipManager's
+// DisabledTips, which is what ConcentrationGame::SaveGameStats (0x100082C70) hands to
+// XmlStash::SaveXMLFile (0x100079A00) for ConcentrationScoresAndSettings.xml.  The arrays are
+// all indexed by difficulty: 0 Beginner, 1 Intermediate, 2 Advanced.
+//
+// The document itself:
+//
+//   <SettingsData>
+//       <GeneralData>
+//           <Version>10</Version>            AppendInt;  FromXml refuses anything but 10
+//           <Difficulty>0</Difficulty>       AppendUInt
+//           <HighScores>                     3 x AppendUIntArray(5)
+//           <ScoreDates>                     3 x AppendUInt64Array(5)
+//           <GamesPlayed>                    AppendUIntArray(3)
+//           <Timed>true</Timed>              AppendBool
+//           <GamesWon>                       AppendUIntArray(3)
+//           <PercWon>                        AppendUIntArray(3)
+//           <TilesMatched>                   AppendUIntArray(3)
+//           <TilesTurned>                    AppendUIntArray(3)
+//           <TurnAvg>                        AppendUIntArray(3)
+//       </GeneralData>
+//       <TipManager><DisabledTips><TipID>...</TipID>...</DisabledTips></TipManager>
+//   </SettingsData>
+//
+// Four spaces per level, LF line ends, and a terminating NUL unit: the container's length field
+// is `2 * characters + 2`, the BOM plus the text including that NUL.
+struct ConSettings {
+    int version = 10;
+    int difficulty = 0;
+    std::array<std::array<std::uint32_t, 5>, 3> high_scores{};
+    std::array<std::array<std::uint64_t, 5>, 3> score_dates{};
+    std::array<std::uint32_t, 3> games_played{};
+    bool timed = true;
+    std::array<std::uint32_t, 3> games_won{};
+    std::array<std::uint32_t, 3> perc_won{};
+    std::array<std::uint32_t, 3> tiles_matched{};
+    std::array<std::uint32_t, 3> tiles_turned{};
+    std::array<std::uint32_t, 3> turn_avg{};
+    std::vector<std::string> disabled_tips;
+};
+
+// Accepts the container's payload (BOM + UTF-16LE) or plain text.
+bool con_settings_parse(std::span<const std::uint8_t> payload, ConSettings& out, std::string& error);
+
+// The exact bytes the game writes: FF FE, the document as UTF-16LE, and a terminating NUL unit.
+std::vector<std::uint8_t> con_settings_payload(const ConSettings& settings);
+
+// The text alone, for a readable diff.
+std::string con_settings_xml(const ConSettings& settings);
+
+// OnEnterWonGameState's statistics update (0x100082273 .. 0x10008244C): one more game played and
+// won at `difficulty`, the score inserted into that difficulty's high-score table with `date`,
+// the tiles and clicks accumulated, and the two averages recomputed.
+void con_settings_record_win(ConSettings& settings, int difficulty, int score, std::uint64_t date,
+                             std::uint32_t tiles_matched, std::uint32_t tiles_turned);
 
 class ConcentrationBoard {
 public:

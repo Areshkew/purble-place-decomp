@@ -751,6 +751,193 @@ ConcentrationBoard::EndGame ConcentrationBoard::calc_end_game(const Concentratio
     return out;
 }
 
+// ---------------------------------------------------------------------------------------
+// ConcentrationScoresAndSettings.xml: ConGeneralData::ToXml / FromXml and TipManager's list.
+// ---------------------------------------------------------------------------------------
+
+namespace {
+
+void xml_indent(std::string& out, int depth) { out.append(static_cast<std::size_t>(depth) * 4, ' '); }
+
+void xml_uint_array(std::string& out, int depth, const char* name, const std::uint32_t* values,
+                    std::size_t count) {
+    xml_indent(out, depth);
+    out += "<" + std::string(name) + ">\n";
+    for (std::size_t i = 0; i < count; ++i) {
+        xml_indent(out, depth + 1);
+        out += "<UInt>" + std::to_string(values[i]) + "</UInt>\n";
+    }
+    xml_indent(out, depth);
+    out += "</" + std::string(name) + ">\n";
+}
+
+void xml_u64_array(std::string& out, int depth, const char* name, const std::uint64_t* values,
+                   std::size_t count) {
+    xml_indent(out, depth);
+    out += "<" + std::string(name) + ">\n";
+    for (std::size_t i = 0; i < count; ++i) {
+        xml_indent(out, depth + 1);
+        out += "<UInt64>" + std::to_string(values[i]) + "</UInt64>\n";
+    }
+    xml_indent(out, depth);
+    out += "</" + std::string(name) + ">\n";
+}
+
+std::uint32_t node_uint(const XmlNode* node, std::size_t index, std::uint32_t fallback = 0) {
+    if (node == nullptr || index >= node->children.size()) return fallback;
+    return static_cast<std::uint32_t>(std::strtoul(node->children[index].text.c_str(), nullptr, 10));
+}
+
+std::uint64_t node_u64(const XmlNode* node, std::size_t index) {
+    if (node == nullptr || index >= node->children.size()) return 0;
+    return std::strtoull(node->children[index].text.c_str(), nullptr, 10);
+}
+
+}  // namespace
+
+std::string con_settings_xml(const ConSettings& s) {
+    std::string out;
+    out += "<SettingsData>\n";
+    out += "    <GeneralData>\n";
+    xml_indent(out, 2);
+    out += "<Version>" + std::to_string(s.version) + "</Version>\n";
+    xml_indent(out, 2);
+    out += "<Difficulty>" + std::to_string(s.difficulty) + "</Difficulty>\n";
+    // <HighScores>: three <Array> of five <UInt>, at depth 2.
+    xml_indent(out, 2);
+    out += "<HighScores>\n";
+    for (const auto& row : s.high_scores) {
+        xml_indent(out, 3);
+        out += "<Array>\n";
+        for (std::uint32_t v : row) {
+            xml_indent(out, 4);
+            out += "<UInt>" + std::to_string(v) + "</UInt>\n";
+        }
+        xml_indent(out, 3);
+        out += "</Array>\n";
+    }
+    xml_indent(out, 2);
+    out += "</HighScores>\n";
+    xml_indent(out, 2);
+    out += "<ScoreDates>\n";
+    for (const auto& row : s.score_dates) {
+        xml_indent(out, 3);
+        out += "<Array>\n";
+        for (std::uint64_t v : row) {
+            xml_indent(out, 4);
+            out += "<UInt64>" + std::to_string(v) + "</UInt64>\n";
+        }
+        xml_indent(out, 3);
+        out += "</Array>\n";
+    }
+    xml_indent(out, 2);
+    out += "</ScoreDates>\n";
+    xml_uint_array(out, 2, "GamesPlayed", s.games_played.data(), 3);
+    xml_indent(out, 2);
+    out += std::string("<Timed>") + (s.timed ? "true" : "false") + "</Timed>\n";
+    xml_uint_array(out, 2, "GamesWon", s.games_won.data(), 3);
+    xml_uint_array(out, 2, "PercWon", s.perc_won.data(), 3);
+    xml_uint_array(out, 2, "TilesMatched", s.tiles_matched.data(), 3);
+    xml_uint_array(out, 2, "TilesTurned", s.tiles_turned.data(), 3);
+    xml_uint_array(out, 2, "TurnAvg", s.turn_avg.data(), 3);
+    out += "    </GeneralData>\n";
+    out += "    <TipManager>\n";
+    out += "        <DisabledTips>\n";
+    for (const std::string& tip : s.disabled_tips)
+        out += "            <TipID>" + tip + "</TipID>\n";
+    out += "        </DisabledTips>\n";
+    out += "    </TipManager>\n";
+    out += "</SettingsData>\n";
+    return out;
+}
+
+std::vector<std::uint8_t> con_settings_payload(const ConSettings& settings) {
+    const std::string text = con_settings_xml(settings);
+    std::vector<std::uint8_t> out;
+    out.reserve(2 + (text.size() + 1) * 2);
+    out.push_back(0xFF);
+    out.push_back(0xFE);
+    for (char c : text) {
+        out.push_back(static_cast<std::uint8_t>(c));
+        out.push_back(0);
+    }
+    out.push_back(0);  // the terminating NUL unit XmlStash::SaveXMLFile writes
+    out.push_back(0);
+    return out;
+}
+
+bool con_settings_parse(std::span<const std::uint8_t> payload, ConSettings& out, std::string& error) {
+    XmlNode root;
+    if (!xml_parse(payload, root, error)) return false;
+    const XmlNode* general = root.find("GeneralData");
+    if (general == nullptr) {
+        error = "no <GeneralData>";
+        return false;
+    }
+    out.version = static_cast<int>(std::strtol(general->child_text("Version").c_str(), nullptr, 10));
+    out.difficulty =
+        static_cast<int>(std::strtol(general->child_text("Difficulty").c_str(), nullptr, 10));
+    if (const XmlNode* scores = general->child("HighScores")) {
+        for (std::size_t row = 0; row < out.high_scores.size() && row < scores->children.size(); ++row)
+            for (std::size_t i = 0; i < out.high_scores[row].size(); ++i)
+                out.high_scores[row][i] = node_uint(&scores->children[row], i);
+    }
+    if (const XmlNode* dates = general->child("ScoreDates")) {
+        for (std::size_t row = 0; row < out.score_dates.size() && row < dates->children.size(); ++row)
+            for (std::size_t i = 0; i < out.score_dates[row].size(); ++i)
+                out.score_dates[row][i] = node_u64(&dates->children[row], i);
+    }
+    const auto read3 = [&](const char* name, std::array<std::uint32_t, 3>& into) {
+        const XmlNode* node = general->child(name);
+        if (node == nullptr) return;
+        for (std::size_t i = 0; i < into.size(); ++i) into[i] = node_uint(node, i);
+    };
+    read3("GamesPlayed", out.games_played);
+    out.timed = general->child_text("Timed") != "false";
+    read3("GamesWon", out.games_won);
+    read3("PercWon", out.perc_won);
+    read3("TilesMatched", out.tiles_matched);
+    read3("TilesTurned", out.tiles_turned);
+    read3("TurnAvg", out.turn_avg);
+    if (const XmlNode* tips = root.find("TipManager/DisabledTips")) {
+        for (const XmlNode& tip : tips->children) out.disabled_tips.push_back(tip.text);
+    }
+    return true;
+}
+
+// OnEnterWonGameState (0x100082273 .. 0x10008244C).  The difficulty is clamped to 2, the score
+// goes into slot 0 if it beats it and the rest shift down, and the two averages are recomputed.
+void con_settings_record_win(ConSettings& s, int difficulty, int score, std::uint64_t date,
+                             std::uint32_t tiles_matched, std::uint32_t tiles_turned) {
+    const std::size_t d = static_cast<std::size_t>(std::clamp(difficulty, 0, 2));
+    ++s.games_played[d];
+    ++s.games_won[d];
+    if (s.games_played[d] > 999999u) s.games_played[d] = 999999u;
+    if (s.games_won[d] > 999999u) s.games_won[d] = 999999u;
+    if (score > 0 && static_cast<std::uint32_t>(score) > s.high_scores[d][0]) {
+        for (std::size_t i = 4; i > 0; --i) {
+            if (s.high_scores[d][i - 1] <= s.high_scores[d][i]) break;
+            std::swap(s.high_scores[d][i - 1], s.high_scores[d][i]);
+            std::swap(s.score_dates[d][i - 1], s.score_dates[d][i]);
+        }
+        s.high_scores[d][0] = static_cast<std::uint32_t>(score);
+        s.score_dates[d][0] = date;
+    }
+    s.tiles_matched[d] += tiles_matched;
+    s.tiles_turned[d] += tiles_turned;
+    s.perc_won[d] = s.games_played[d] != 0
+                        ? static_cast<std::uint32_t>(static_cast<double>(s.games_won[d]) /
+                                                     static_cast<double>(s.games_played[d]) * 100.0)
+                        : 0;
+    // TurnAvg divides TilesTurned by GamesWon, not by TilesMatched: the code reads +240
+    // (TilesTurned) over +216 (GamesWon) -- the shipped file's 108 turned against 1 win is 108.
+    if (s.games_won[d] != 0) {
+        const double avg = static_cast<double>(s.tiles_turned[d]) /
+                           static_cast<double>(s.games_won[d]);
+        s.turn_avg[d] = static_cast<std::uint32_t>(avg + 0.5);  // `(frac >= 0.5) + (int)v`
+    }
+}
+
 std::vector<CardBackPaths> concentration_cardbacks(std::span<const std::uint8_t> cardbacks_xml) {
     std::vector<CardBackPaths> out;
     XmlNode root;

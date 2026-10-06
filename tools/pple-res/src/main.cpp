@@ -1269,6 +1269,82 @@ int cmd_rgmh_write(const std::string& in_path, const std::string& out_path) {
     return 2;
 }
 
+// ConcentrationScoresAndSettings.xml: reads the container, carves the XML payload out of it,
+// parses it into ConGeneralData's own fields plus TipManager's tip list, re-emits it and compares
+// byte for byte.  Then it does the same for the whole container, so a match proves both layers.
+int cmd_consave(const std::string& in_path, const std::string& out_path) {
+    const std::vector<std::uint8_t> original = slurp(in_path);
+    if (original.empty()) {
+        std::fprintf(stderr, "cannot read %s\n", in_path.c_str());
+        return 1;
+    }
+    pple::RgmhFile file;
+    std::string error;
+    if (!pple::rgmh_read(original, file, error)) {
+        std::fprintf(stderr, "rgmh read failed: %s\n", error.c_str());
+        return 1;
+    }
+    std::printf("%s\n", in_path.c_str());
+    std::printf("  container        : %zu bytes, header %u, thumbnail %zu, xml %zu\n", original.size(),
+                file.header_size, file.thumbnail.size(), file.xml.size());
+
+    pple::ConSettings settings;
+    if (!pple::con_settings_parse(file.xml, settings, error)) {
+        std::fprintf(stderr, "settings parse failed: %s\n", error.c_str());
+        return 1;
+    }
+    std::printf("  settings         : version %d, difficulty %d, timed %s\n", settings.version,
+                settings.difficulty, settings.timed ? "true" : "false");
+    static const char* kNames[3] = {"Beginner", "Intermediate", "Advanced"};
+    for (int i = 0; i < 3; ++i) {
+        std::printf("    %-13s high score %u (date %llu), played %u, won %u, %u%%, tiles %u/%u, "
+                    "avg %u\n",
+                    kNames[i], settings.high_scores[static_cast<std::size_t>(i)][0],
+                    static_cast<unsigned long long>(settings.score_dates[static_cast<std::size_t>(i)][0]),
+                    settings.games_played[static_cast<std::size_t>(i)],
+                    settings.games_won[static_cast<std::size_t>(i)],
+                    settings.perc_won[static_cast<std::size_t>(i)],
+                    settings.tiles_matched[static_cast<std::size_t>(i)],
+                    settings.tiles_turned[static_cast<std::size_t>(i)],
+                    settings.turn_avg[static_cast<std::size_t>(i)]);
+    }
+    std::printf("  disabled tips    : %zu\n", settings.disabled_tips.size());
+
+    const std::vector<std::uint8_t> payload = pple::con_settings_payload(settings);
+    const std::size_t xml_diff = pple::first_difference(file.xml, payload);
+    std::printf("  xml original     : %zu bytes  sha256 %s\n", file.xml.size(),
+                pple::sha256_hex(file.xml).c_str());
+    std::printf("  xml re-emitted   : %zu bytes  sha256 %s\n", payload.size(),
+                pple::sha256_hex(payload).c_str());
+    if (xml_diff == std::string::npos) {
+        std::printf("  xml round trip   : BYTE-IDENTICAL\n");
+    } else {
+        std::printf("  xml round trip   : DIFFERS at offset %zu (0x%zx)\n", xml_diff, xml_diff);
+        for (std::size_t i = xml_diff > 8 ? xml_diff - 8 : 0;
+             i < xml_diff + 8 && i < file.xml.size() && i < payload.size(); ++i)
+            std::printf("    %6zu  %02x -> %02x%s\n", i, file.xml[i], payload[i],
+                        i == xml_diff ? "   <- first" : "");
+    }
+
+    pple::RgmhFile rebuilt_file = file;
+    rebuilt_file.xml = payload;
+    rebuilt_file.xml_length = static_cast<std::uint32_t>(payload.size());
+    const std::vector<std::uint8_t> rebuilt = pple::rgmh_write(rebuilt_file);
+    if (!out_path.empty() && !spill(out_path, rebuilt)) {
+        std::fprintf(stderr, "cannot write %s\n", out_path.c_str());
+        return 1;
+    }
+    const std::size_t diff = pple::first_difference(original, rebuilt);
+    std::printf("  file re-emitted  : %zu bytes  sha256 %s\n", rebuilt.size(),
+                pple::sha256_hex(rebuilt).c_str());
+    if (diff == std::string::npos) {
+        std::printf("  file round trip  : BYTE-IDENTICAL\n");
+        return xml_diff == std::string::npos ? 0 : 2;
+    }
+    std::printf("  file round trip  : DIFFERS at offset %zu (0x%zx)\n", diff, diff);
+    return 2;
+}
+
 void usage() {
     std::fprintf(stderr,
                  "pple-res — Purble Place resource loader\n\n"
@@ -1289,6 +1365,8 @@ void usage() {
                  "  pple-res pngscan <pe>...\n"
                  "  pple-res rgmh    <file>\n"
                  "  pple-res rgmhrt  <in> [out]     read then re-emit, compare byte for byte\n"
+                 "  pple-res consave <in> [out]     ConcentrationScoresAndSettings.xml: parse the\n"
+                 "                                  settings XML and the container, re-emit both\n"
                  "  pple-res sha256  <file>\n");
 }
 
@@ -1491,6 +1569,10 @@ int main(int argc, char** argv) {
     if (cmd == "rgmhrt") {
         if (positional.empty()) { usage(); return 1; }
         return cmd_rgmh_write(positional[0], positional.size() > 1 ? positional[1] : "");
+    }
+    if (cmd == "consave") {
+        if (positional.empty()) { usage(); return 1; }
+        return cmd_consave(positional[0], positional.size() > 1 ? positional[1] : "");
     }
     if (cmd == "sha256") {
         if (positional.empty()) { usage(); return 1; }

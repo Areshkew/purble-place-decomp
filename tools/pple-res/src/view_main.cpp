@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <fstream>
 #include <map>
 #include <set>
@@ -32,6 +33,7 @@
 #include "pple/concentration.hpp"
 #include "pple/movie.hpp"
 #include "pple/mui.hpp"
+#include "pple/rgmh.hpp"
 #include "pple/wma.hpp"
 #include "pple/pe_image.hpp"
 #include "pple/png.hpp"
@@ -254,6 +256,20 @@ std::string mui_resolve(int id, const std::string& fallback, void*) {
         }
         out.note = std::string(kind_name(kind)) + " is not an image";
         return out;
+    }
+    // The whole-file helpers --pairs-save needs.  Both are deliberately dumb.
+    std::vector<std::uint8_t> slurp_file(const std::string& path) {
+        std::ifstream in(path, std::ios::binary);
+        if (!in) return {};
+        return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in),
+                                         std::istreambuf_iterator<char>());
+    }
+    bool write_file(const std::string& path, const std::vector<std::uint8_t>& bytes) {
+        std::ofstream out(path, std::ios::binary);
+        if (!out) return false;
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+        return out.good();
     }
     bool write_ppm(const std::string& path, const Decoded& image) {
         if (!image.ok) return false;
@@ -616,6 +632,7 @@ int main(int argc, char** argv) {
     bool loading_mode = false;
     int loading_ms = 1200;
     Uint64 loading_start = 0;
+    std::string pairs_save_path;
     for (std::size_t i = 0;
     i < args.size();
     ++i) {
@@ -647,6 +664,7 @@ int main(int argc, char** argv) {
         else if (a == "--volume" && i + 1 < args.size()) play_volume = static_cast<float>(std::atof(args[++i].c_str())) / 100.0f;
         else if (a == "--mute") mute = true;
         else if (a == "--pairs-click" && i + 1 < args.size()) pairs_click = args[++i];
+        else if (a == "--pairs-save" && i + 1 < args.size()) pairs_save_path = args[++i];
         else if (a == "--anchor" && i + 1 < args.size()) {
             const std::string v = args[++i];
             const std::size_t comma = v.find(',');
@@ -1850,13 +1868,55 @@ int main(int argc, char** argv) {
             std::printf("  round over: WON at level %d/%d, score %d\n",
                         pairs_board.level_position() + 1, pairs_board.level_count(),
                         pairs_board.score());
+            pple::ConcentrationBoard::EndGame end;
             if (pairs_ranks_ok) {
-                const pple::ConcentrationBoard::EndGame end = pairs_board.calc_end_game(pairs_ranks);
+                end = pairs_board.calc_end_game(pairs_ranks);
                 std::printf("  end game: points %d + time bonus %d (%d%%) + flip bonus %d "
                             "(clicks %d, ratio %.3f) = %d -> rank %d, \"%s\"\n",
                             end.points, end.time_bonus, end.time_percent, end.flip_bonus,
                             pairs_board.clicks(), end.flip_ratio, end.total, end.rank + 1,
                             end.title.c_str());
+            }
+            // ConcentrationGame::SaveGameStats (0x100082C70) writes the statistics through
+            // XmlStash::SaveXMLFile (0x100079A00) into the RGMH container.  It is opt-in here so
+            // a viewer run never touches the player's own file.
+            if (!pairs_save_path.empty()) {
+                pple::ConSettings settings;
+                const std::vector<std::uint8_t> existing = slurp_file(pairs_save_path);
+                pple::RgmhFile container;
+                std::string save_error;
+                if (!existing.empty() && pple::rgmh_read(existing, container, save_error) &&
+                    pple::con_settings_parse(container.xml, settings, save_error)) {
+                    std::printf("  save: loaded %s (%zu settings bytes)\n", pairs_save_path.c_str(),
+                                container.xml.size());
+                } else {
+                    // A fresh file: the reader only checks magic, version and header_size, so a
+                    // zero GUID and no thumbnail are accepted.  The game writes a thumbnail of
+                    // the finished board; this does not.
+                    container = pple::RgmhFile{};
+                    container.project_name = u"Purble Place";
+                    container.file_name = u"ConcentrationScoresAndSettings.xml";
+                    settings.disabled_tips = {"SneakPeak", "SneakFlip", "ProIntroNext", "ProIntro",
+                                              "JokerFlip",  "Jar1",      "EmptySneak",   "BlankCard"};
+                    std::printf("  save: %s does not exist, starting from a default\n",
+                                pairs_save_path.c_str());
+                }
+                const int difficulty = pairs_board.level().difficulty_index;
+                // OnEnterWonGameState: Round+0x158 += Round+0x12C (the CURRENT level's matched
+                // cards) and Round+0x128 (Clicks) is what TilesTurned accumulates.
+                pple::con_settings_record_win(settings, difficulty, end.total,
+                                              static_cast<std::uint64_t>(std::time(nullptr)),
+                                              static_cast<std::uint32_t>(pairs_board.cards_removed()),
+                                              static_cast<std::uint32_t>(pairs_board.clicks()));
+                container.xml = pple::con_settings_payload(settings);
+                container.xml_length = static_cast<std::uint32_t>(container.xml.size());
+                const std::vector<std::uint8_t> out = pple::rgmh_write(container);
+                if (write_file(pairs_save_path, out)) {
+                    std::printf("  save: wrote %s, %zu bytes, %zu settings bytes\n",
+                                pairs_save_path.c_str(), out.size(), container.xml.size());
+                } else {
+                    std::printf("  save: could not write %s\n", pairs_save_path.c_str());
+                }
             }
         } else {
             play_pair_sfx("Con_GameOver");
