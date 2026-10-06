@@ -113,16 +113,83 @@ namespace pple::viewer {
     // /ProfessorContainer and loads all six Professor movies as its children, so the movie's own
     // coordinate space is anchored at the container's position.  The scene's nine movie slots
     // carry no position at all.
+    //
+    // Professor::Update (0x10008C088) is a six-state machine over that movie set, at +0x6C:
+    // 1 hidden, 2 entering, 3 exiting, 4 idle, 5 talking, 6 win, 7 lose.  Hide (0x10008C034)
+    // resets Pro_Enter/Pro_Talking/Pro_Exit/Pro_Idle/Pro_Win/Pro_Lose; MoveIn (0x10008C354)
+    // shows Enter from hidden and otherwise goes straight to DisplayTip (0x10008C290), which
+    // picks Pro_Win / Pro_Lose / Pro_Talking from the animation kind at +0x64 (0 none, 1 lose,
+    // 2 win) and then asks the tip manager for the queued tip at +0x50.
+    enum class ProfPhase { Hidden, Enter, Exit, Idle, Talking, Win, Lose };
     struct ProfessorDraw {
         bool ok = false;
         pple::Movie movie;
         std::string which;
         float anchor_x = 0.0f, anchor_y = 0.0f;
         float time = 0.0f;
+        ProfPhase phase = ProfPhase::Hidden;
+        int anim_kind = 0;
+        std::string tip_name;
+        // Professor+0x48, the Y ShowSimpleTip is given: 150 for the intro, the win and the
+        // loss, 125 for the between-boards tip and 120 for the second intro bubble.
+        float tip_y = 150.0f;
+        // Pro_Idle and Pro_Talking are 61-frame cycles the engine loops while the Professor
+        // waits or talks; Pro_Enter, Pro_Exit, Pro_Win and Pro_Lose play once and rest.
+        bool looping = false;
+    };
+    // ---- the tip panel (Tips\Styles\Green\*.xml) --------------------------------------
+    // A tip is not a window.  Tip::Initialize (0x1000A5834) builds a 9-slice box from the style
+    // XML and Tip::Arrange (0x1000A49A0) sizes it from the title's text width and the body's
+    // wrapped height; the green style's pieces are the 3x30 / 7x30 / 30x13 / 30x14 borders,
+    // the 12x13 .. 17x13 corners, the 134x58 back and the 12x12 close button, all on
+    // Sheets\tipsSheet34.sht.  TIPS.XML's <MinWidth> 175 is the panel's minimum width and
+    // <MaxWidth> defaults to g_uiLayoutX, which is 800 (0x1000F7464).
+    struct TipSlice {
+        SDL_Texture* tex = nullptr;
+        SDL_FRect src{};
+        float w = 0.0f, h = 0.0f;
+    };
+    struct TipStyle {
+        bool ok = false;
+        TipSlice back, left, right, top, bottom, ul, ur, ll, lr, close, info;
+        std::string title_face = "Segoe UI", body_face = "Segoe UI";
+        float title_size = 12.0f, body_size = 8.0f;
+        std::uint32_t title_colour = 0x00014D9C, body_colour = 0x00494A4D;
+    };
+    // One <Tip> of UI\Concentration\TIPS.XML, as TipManager::parseXml (0x1000930B8) reads it.
+    struct TipDef {
+        std::string id, title, message, type;
+        int min_height = -1, min_width = -1, max_width = -1, max_height = -1;
+        bool no_timeout = false, capture_click = true;
+        float duration = 0.0f;
+    };
+    // The live panel.  `draws` are borrowed from sheet_cache, so only the two label textures
+    // would ever need freeing; they are rebuilt on every change instead.
+    struct TipView {
+        bool visible = false;
+        std::string id;
+        std::vector<DrawItem> draws;
+        std::vector<DrawItem> owned;
+        SDL_FRect rect{}, close{};
+        float seconds_left = 0.0f;
+        bool wait_click = false;
+        // TIPS.XML's <CaptureGlobalClick> defaults to true, which is what makes the intro
+        // bubbles go away on the first click anywhere.
+        bool captures = true;
+    };
+    // An in-canvas button.  Both the difficulty chooser and the end-of-round panel replace a
+    // Win32 dialog (DialogHelper::DialogBoxMCE 0x1000B7C08): a web or mobile build has no
+    // separate windows, so the three choices and the results are drawn in the 800x496 scene.
+    struct UiButton {
+        std::string id;
+        SDL_FRect rect{};
+        std::string label;
+        std::string detail;
+        bool hover = false;
     };
     // Which screen is up, and the clickable rectangles on each.  A hot-spot rect is the engine's
     // node rect: (x, y) - registration, sized SourceWidth x SourceHeight.
-    enum class Screen { Other, Menu, Loading, Concentration };
+    enum class Screen { Other, Menu, Loading, Difficulty, Concentration };
     struct Hotspot {
         std::string name;
         SDL_FRect rect{};

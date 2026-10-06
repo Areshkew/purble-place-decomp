@@ -289,16 +289,10 @@ void App::refresh_cards() {
     // (otherwise the whole scene progressively zooms out during the sneak/burst movies).
     scene_w = pairs_scene_width;
     scene_h = pairs_scene_height;
-    // The Professor: idle while the round runs, win or lose once it is over.  The engine's
-    // reaction is a movie swap (OnEnterWonGameState 0x1000821D0 / OnEnterLoseGameState
-    // 0x10008259C), so the same thing happens here.
+    // The Professor: the movie is chosen by the state machine in professor.cpp (Professor's own
+    // Update 0x10008C088), not by the board flags, because a win or a loss is a tip sequence:
+    // Pro_Win / Pro_Lose while the bubble is up, then Pro_Exit, and only then the score panel.
     if (professor.ok) {
-        const char* want = pairs_board.round_won()
-                               ? "ProfessorWinAnimation"
-                               : (pairs_board.round_over() ? "ProfessorLoseAnimation" : nullptr);
-        if (want != nullptr && professor.which != want) {
-            if (load_professor(want)) std::printf("  professor -> %s\n", want);
-        }
         std::vector<pple::MoviePlacement> placements;
         const float fps =
             professor.movie.parts.empty()

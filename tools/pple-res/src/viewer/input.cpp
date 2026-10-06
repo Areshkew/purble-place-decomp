@@ -7,6 +7,28 @@ namespace pple::viewer {
 // same navigation a mouse does.  Coordinates are scene coordinates.  Returns false when the
 // window should close.
 bool App::click_scene(float sx, float sy, bool motion_only) {
+    // The difficulty chooser: three shipped buttons, hover art on motion, the choice starts the
+    // game with the Professor's entrance and his "How To Play" bubbles.
+    if (screen == Screen::Difficulty) {
+        const UiButton* hit = nullptr;
+        for (const UiButton& button : picker_buttons) {
+            const SDL_FRect& r = button.rect;
+            if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
+                hit = &button;
+                break;
+            }
+        }
+        for (UiButton& button : picker_buttons) {
+            const bool hover = hit != nullptr && button.id == hit->id;
+            if (button.hover == hover) continue;
+            button.hover = hover;
+            draw_difficulty();
+        }
+        if (motion_only || hit == nullptr) return true;
+        std::printf("difficulty: %s chosen\n", hit->id.c_str());
+        start_game(hit->id, true);
+        return true;
+    }
     if (screen == Screen::Menu && menu_ready) {
         const Hotspot* hit = nullptr;
         for (const Hotspot& spot : menu_hotspots) {
@@ -23,11 +45,10 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         }
         if (motion_only || hit == nullptr) return true;
         if (hit->name == "ConcentrationButton") {
-            std::printf("menu: ConcentrationButton -> Purble Pairs\n");
-            screen = Screen::Concentration;
-            menu_ready = false;
-            pairs_ready = false;
-            build_pairs();
+            // The shipped build reaches the game through its own "Select Difficulty" dialog;
+            // this opens the in-canvas chooser instead.
+            std::printf("menu: ConcentrationButton -> Purble Pairs difficulty chooser\n");
+            build_difficulty();
         } else if (hit->name == "ExitButton") {
             std::printf("menu: ExitButton clicked - exiting, as the game does\n");
             return false;
@@ -38,6 +59,39 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         return true;
     }
     if (!pairs_ready) return true;
+    // The end-of-round panel stands in for OnWinAnimStop's dialog box, so it is modal: only its
+    // own buttons act and every other click is swallowed.
+    if (result_shown) {
+        for (UiButton& button : result_buttons) {
+            const SDL_FRect& r = button.rect;
+            if (sx < r.x || sx >= r.x + r.w || sy < r.y || sy >= r.y + r.h) continue;
+            if (button.id == "PlayAgain") {
+                std::printf("pairs: New Game -> a new %s round\n", picker_choice.c_str());
+                ++seed_for_pairs;
+                start_game(picker_choice, true);
+            } else if (button.id == "ChangeDifficulty") {
+                std::printf("pairs: Change Difficulty -> the chooser\n");
+                hide_tip();
+                free_direct(result_draws);
+                result_buttons.clear();
+                result_shown = false;
+                rebuild_overlay();
+                build_difficulty();
+            } else {
+                std::printf("pairs: Main Menu -> main menu\n");
+                game_to_menu();
+            }
+            return true;
+        }
+        return true;
+    }
+    // A tip bubble with <CaptureGlobalClick> (the default) takes the click, which is how the
+    // intro's "How To Play" bubbles are dismissed in the shipped game.
+    if (tip.visible && tip.captures) {
+        std::printf("  tip %s: closed\n", tip.id.c_str());
+        professor_tip_closed();
+        return true;
+    }
     // Window -> scene -> card.  The target is the card's own node: the drawn sprite rect at
     // the cell's top-left, which at Beginner is 88x90 over a 74x74 cell, so the visible
     // card's right and bottom edges do work and neighbouring cells overlap by a few pixels.
@@ -50,19 +104,13 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             // The engine saves statistics and game state here (SaveGameStats 0x100082C70 /
             // SaveGameState 0x100082B40) and then sets state 4; this reconstruction does not
             // write save files.
-            pairs_ready = false;
-            screen = Screen::Menu;
-            menu_hover_name.clear();
-            build_menu();
+            game_to_menu();
         } else if (spot.name == "NewGame") {
             std::printf("pairs: NewGame -> new round\n");
-            build_pairs();
+            start_game(picker_choice, true);
         } else if (spot.name == "ExitGame") {
             std::printf("pairs: ExitGame -> main menu\n");
-            pairs_ready = false;
-            screen = Screen::Menu;
-            menu_hover_name.clear();
-            build_menu();
+            game_to_menu();
         }
         return true;
     }

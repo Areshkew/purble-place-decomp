@@ -6,17 +6,31 @@ int App::run_loop() {
     bool running = true;
     // --script-click "x,y;x,y" injects clicks in scene coordinates through the same handler the
     // mouse uses, so menu -> game -> menu and the flip animation can be verified without a mouse.
-    std::vector<std::pair<float, float>> script_clicks;
+    // A "wait:MS" entry waits that long before the next click, which is what the Professor's
+    // intro needs: his entrance plays for about a second before the first bubble appears.
+    struct ScriptedClick {
+        bool wait = false;
+        float x = 0.0f, y = 0.0f;
+        int ms = 0;
+    };
+    std::vector<ScriptedClick> script_clicks;
     if (!script_click_spec.empty()) {
         std::size_t at = 0;
         while (at < script_click_spec.size()) {
             const std::size_t semi = script_click_spec.find(';', at);
             const std::string item = script_click_spec.substr(at, semi - at);
-            const std::size_t comma = item.find(',');
-            if (comma != std::string::npos) {
-                script_clicks.emplace_back(static_cast<float>(std::atof(item.substr(0, comma).c_str())),
-                                           static_cast<float>(std::atof(item.substr(comma + 1).c_str())));
+            ScriptedClick step;
+            if (item.rfind("wait:", 0) == 0) {
+                step.wait = true;
+                step.ms = std::atoi(item.substr(5).c_str());
+            } else {
+                const std::size_t comma = item.find(',');
+                if (comma != std::string::npos) {
+                    step.x = static_cast<float>(std::atof(item.substr(0, comma).c_str()));
+                    step.y = static_cast<float>(std::atof(item.substr(comma + 1).c_str()));
+                }
             }
+            script_clicks.push_back(step);
             at = semi == std::string::npos ? script_click_spec.size() : semi + 1;
         }
         std::printf("script: %zu click(s)\n", script_clicks.size());
@@ -68,17 +82,16 @@ int App::run_loop() {
                     // In the game ESC goes back to the menu, as ReturnToMainMenu does; from the
                     // menu it quits.
                     if (screen == Screen::Concentration) {
-                        pairs_ready = false;
-                        screen = Screen::Menu;
-                        menu_hover_name.clear();
-                        build_menu();
+                        game_to_menu();
+                    } else if (screen == Screen::Difficulty) {
+                        game_to_menu();
                     } else {
                         running = false;
                     }
                 } else
                 if ((key == SDLK_R || key == SDLK_N) && pairs_ready) {
                     ++seed_for_pairs;
-                    build_pairs();
+                    start_game(picker_choice, true);
                 } else
                 if (!movie_xml.empty() && (key == SDLK_RIGHT || key == SDLK_LEFT || key == SDLK_PAGEDOWN || key == SDLK_PAGEUP)) {
                     const int delta = (key == SDLK_RIGHT || key == SDLK_PAGEDOWN) ? 1 : -1;
@@ -126,6 +139,18 @@ int App::run_loop() {
             }
             // Without --menu the loading screen stays up so --shot can capture it.
         }
+        // The difficulty chooser's own loop: the Professor waits in the classroom while the
+        // player decides, so the screen is only redrawn when his 12 fps movie moves on.
+        if (screen == Screen::Difficulty) {
+            const Uint64 now = SDL_GetTicks();
+            picker_time += static_cast<float>(now - picker_last_tick) / 1000.0f;
+            picker_last_tick = now;
+            const int frame = static_cast<int>(picker_time * 12.0f);
+            if (frame != picker_frame) {
+                picker_frame = frame;
+                draw_difficulty();
+            }
+        }
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {
             const Uint64 now = SDL_GetTicks();
@@ -150,7 +175,9 @@ int App::run_loop() {
                 // the match animation.
                 if (advance_flips()) flipped = true;
                 if (advance_card_fx()) flipped = true;
-                professor.time += 1.0f / 30.0f;
+                // Professor::Update (0x10008C088): the movie clock, the entrance -> tip
+                // transition, the tip's own timer and the win/lose exit.
+                professor_advance();
                 if (pairs_sneak_movie_ok && pairs_sneak_frame >= 0.0f) {
                     const float fps = pairs_sneak_movie.parts.empty() ? pairs_sneak_movie.fps
                         : pple::movie_frame_rate(pairs_sneak_movie, pairs_sneak_movie.parts.front());
@@ -237,31 +264,42 @@ int App::run_loop() {
         SDL_RenderClear(renderer);
         // Reserve the top strip for the HUD.
         const int hud_strip = hud_textures.empty() ? 0 : hud_h + 12;
-        if (!scene_draws.empty()) {
+        // The difficulty chooser is a screen of its own; everything else draws the scene and
+        // then whatever overlays it (the tip bubble and the end-of-round panel).
+        const bool picker_screen = screen == Screen::Difficulty;
+        const std::vector<DrawItem>& base_draws = picker_screen ? picker_draws : scene_draws;
+        const float base_w = picker_screen ? picker_w : scene_w;
+        const float base_h = picker_screen ? picker_h : scene_h;
+        if (!base_draws.empty() || !overlay_draws.empty()) {
             const float area_w = static_cast<float>(out_w);
             const float area_h = static_cast<float>(out_h - hud_strip);
-            const float sx = scene_w > 0.0f ? area_w / scene_w : 1.0f;
-            const float sy = scene_h > 0.0f ? area_h / scene_h : 1.0f;
+            const float sx = base_w > 0.0f ? area_w / base_w : 1.0f;
+            const float sy = base_h > 0.0f ? area_h / base_h : 1.0f;
             float s = std::min(sx, sy);
             // The scene is 800x496.  Flooring the ratio pinned a 1400x900 window to scale 1, so
             // the board was drawn at its native size inside a window more than three times its
             // area.  Fill the window by default and keep SPACE for pixel-exact integer scaling.
             if (integer_scale && s > 1.0f) s = std::floor(s);
             if (s <= 0.0f) s = 1.0f;
-            const float ox = (area_w - scene_w * s) * 0.5f;
-            const float oy = static_cast<float>(hud_strip) + (area_h - scene_h * s) * 0.5f;
+            const float ox = (area_w - base_w * s) * 0.5f;
+            const float oy = static_cast<float>(hud_strip) + (area_h - base_h * s) * 0.5f;
             view_scale = s;
             view_ox = ox;
             view_oy = oy;
-            // One scripted click per frame, spaced so a flip or a rebuild can settle.
+            // One scripted entry per frame, spaced so a flip or a rebuild can settle; a "wait:MS"
+            // entry only moves the clock the spacing is measured from.
             if (script_next < script_clicks.size()) {
                 const Uint64 now = SDL_GetTicks();
                 if (script_next == 0 || now - script_last >= 150) {
                     script_last = now;
-                    const std::pair<float, float> c = script_clicks[script_next++];
-                    std::printf("script click %zu: scene %.0f,%.0f\n", script_next - 1,
-                                static_cast<double>(c.first), static_cast<double>(c.second));
-                    running = click_scene(c.first, c.second, false);
+                    const ScriptedClick step = script_clicks[script_next++];
+                    if (step.wait) {
+                        SDL_Delay(static_cast<Uint32>(std::max(0, step.ms) - 150));
+                    } else {
+                        std::printf("script click %zu: scene %.0f,%.0f\n", script_next - 1,
+                                    static_cast<double>(step.x), static_cast<double>(step.y));
+                        running = click_scene(step.x, step.y, false);
+                    }
                 }
             }
             const auto draw_item = [&](const DrawItem& d) {
@@ -315,13 +353,21 @@ int App::run_loop() {
                     draw_item(d);
                 }
             };
-            for (std::size_t i = 0; i < scene_draws.size(); ++i) {
-                if (i == menu_cloud_at) draw_clouds();
-                draw_item(scene_draws[i]);
-            }
-            if (menu_cloud_at >= scene_draws.size()) draw_clouds();
+            const auto draw_all = [&](const std::vector<DrawItem>& list, bool clouds) {
+                for (std::size_t i = 0; i < list.size(); ++i) {
+                    if (clouds && i == menu_cloud_at) draw_clouds();
+                    draw_item(list[i]);
+                }
+                if (clouds && menu_cloud_at >= list.size()) draw_clouds();
+            };
+            // The menu's clouds only belong on the menu screen; the chooser and the board have
+            // no cloud slot.
+            const bool clouds_here = picker_screen ? false : screen == Screen::Menu;
+            draw_all(base_draws, clouds_here);
+            // The tip bubble and the end-of-round panel sit over the live board.
+            for (const DrawItem& d : overlay_draws) draw_item(d);
         }
-        if (scene_draws.empty() && texture != nullptr) {
+        if (base_draws.empty() && overlay_draws.empty() && texture != nullptr) {
             const SDL_FRect fitted =                fit_rect_within(out_w, out_h - hud_strip, static_cast<int>(src_rect.w),                                static_cast<int>(src_rect.h), integer_scale);
             const SDL_FRect dst{
                 fitted.x, fitted.y + hud_strip, fitted.w, fitted.h
@@ -376,6 +422,8 @@ int App::run_loop() {
     }
     for (SDL_Texture* t : hud_textures) SDL_DestroyTexture(t);
     if (texture != nullptr) SDL_DestroyTexture(texture);
+    release_overlay();
+    free_direct(picker_draws);
     for (const auto& [name, t] : sheet_cache) SDL_DestroyTexture(t);
     if (font != nullptr) TTF_CloseFont(font);
     TTF_Quit();

@@ -108,6 +108,8 @@ if(PPLE_BUILD_VIEW)
       src/viewer/resources.cpp
       src/viewer/scene.cpp
       src/viewer/textures.cpp
+      src/viewer/tips.cpp
+      src/viewer/overlays.cpp
     )
     target_link_libraries(pple-view PRIVATE pple_core ${PPLE_AUDIO_TARGET})
     target_include_directories(pple-view PRIVATE "${PPLE_SDL_ROOT}/include")

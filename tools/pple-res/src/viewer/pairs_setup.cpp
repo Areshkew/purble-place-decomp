@@ -104,6 +104,14 @@ void App::build_pairs() {
                     professor.movie.frame_count, professor.movie.parts.size(),
                     static_cast<double>(professor.anchor_x),
                     static_cast<double>(professor.anchor_y));
+    // Jar::StopExplosion (0x100083A20) queues ProIntLevelChange / ProAdvLevelChange and calls
+    // Professor::MoveIn before Board::NewLevel re-deals, so the tip outlives this rebuild and
+    // has to be shown again once the new board's art exists.
+    if (!pending_level_tip.empty()) {
+        const std::string tip_id = pending_level_tip;
+        pending_level_tip.clear();
+        professor_level_tip(tip_id);
+    }
     initialise_pair_audio(bundle, mute);
     if (keep_state) {
         // The board keeps its slot layout, deck, score, level and tick budget.

@@ -55,6 +55,38 @@ private:
     void build_menu();
     void load_current(bool announce);
     bool click_scene(float sx, float sy, bool motion_only);
+    // ---- tips, the Professor's state machine and the in-canvas dialogs (tips.cpp,
+    // professor.cpp, overlays.cpp) -------------------------------------------------------
+    TTF_Font* face_font(const std::string& face, float size);
+    std::string mui_text(int id);
+    void measure_text(const std::string& face, float size, const std::string& text, float wrap,
+                      int& w, int& h);
+    void append_text(std::vector<DrawItem>& out, const std::string& face, float size,
+                     std::uint32_t colour, const std::string& text, float x, float y, float wrap);
+    void load_tips();
+    bool load_tip_style();
+    bool load_tip_slice(TipSlice& slice, const std::string& xml_name, int state);
+    const TipDef* find_tip(const std::string& id) const;
+    void show_tip(const std::string& id, float x, float y);
+    void append_panel(std::vector<DrawItem>& out, float x, float y, float w, float h);
+    void append_button(std::vector<DrawItem>& out, const UiButton& button, float label_size);
+    void hide_tip();
+    void release_overlay();
+    void rebuild_overlay();
+    void free_direct(std::vector<DrawItem>& out);
+    bool load_professor_movie(const std::string& instance);
+    void professor_show(const std::string& instance, ProfPhase phase, bool loop);
+    void professor_display_tip();
+    void professor_tip_closed();
+    void professor_level_tip(const std::string& id);
+    void professor_advance();
+    void professor_round_end(bool won);
+    void professor_intro_begin();
+    void build_result_panel(bool won);
+    void build_difficulty();
+    void draw_difficulty();
+    void start_game(const std::string& difficulty, bool intro);
+    void game_to_menu();
 
     std::vector<std::string> modules;
     std::string want_resource;
@@ -80,6 +112,8 @@ private:
     bool list_only = false, include_all = false;
     bool menu_mode = false;
     bool mce_mode = false;
+    bool difficulty_mode = false;
+    bool tips_enabled = true;
     bool container_offsets = true;
     std::string script_click_spec;
     int pairs_ticks = 0;
@@ -247,6 +281,49 @@ private:
     // Foreground's houses and show through the sky.
     std::size_t menu_cloud_at = 0;
     Uint64 menu_cloud_start = 0;
+    // ---- tips, transitions and the in-canvas dialogs ---------------------------------
+    // UI\Concentration\TIPS.XML, TipManager::parseXml (0x1000930B8), and the green style the
+    // Concentration tips use (TipManager tipInfo+108 selects the style).
+    std::vector<TipDef> tip_defs;
+    bool tips_loaded = false;
+    TipStyle tip_style;
+    TipView tip;
+    std::map<std::string, TTF_Font*> face_fonts;
+    // The Professor's six movies, loaded once and kept across board rebuilds.
+    std::map<std::string, pple::Movie> prof_movie_cache;
+    // Everything drawn over the live game scene: the tip panel and the end-of-round panel.
+    std::vector<DrawItem> overlay_draws;
+    std::vector<DrawItem> result_draws;
+    std::vector<UiButton> result_buttons;
+    // The difficulty chooser is a whole screen of its own, so its draws go in scene_draws.
+    std::vector<UiButton> picker_buttons;
+    std::string picker_choice = "Beginner";
+    // The chooser's own screen: the room background, the waiting Professor and the panel.
+    std::vector<DrawItem> picker_draws;
+    float picker_w = 800.0f, picker_h = 496.0f;
+    float picker_time = 0.0f;
+    int picker_frame = -1;
+    Uint64 picker_last_tick = 0;
+    // Jar::StopExplosion (0x100083A20) queues a between-boards tip and then calls
+    // Board::NewLevel; the rebuild that follows has to show it again.
+    std::string pending_level_tip;
+    // `--intro` forces the Professor's enter animation and the intro tips, `--no-intro`
+    // suppresses them, and an explicit `--pairs "D,L"` start skips them by default.  The board
+    // itself is gated by the deal, not by the tips: Card::HandleEvent (0x10007C4A3) acts only
+    // while Board+0x1E8 == 1, which Board::Update (0x10008A576) sets once no card is left in the
+    // deal's state 6 -- and only then does it call DisplayIntro (0x10008A57D).
+    bool intro_wanted = false;
+    // DisplayIntro (0x10008C3F0) shows the two "How To Play" bubbles while ProIntro is enabled
+    // and falls back to the single ProWelcome bubble for a game already seen.
+    bool intro_seen = false;
+    // The end of the round.  OnEnterWonGameState (0x1000821D0) and OnEnterLoseGameState
+    // (0x10008259C) show the Professor's win/lose movie and a tip, and OnWinAnimStop
+    // (0x100082670) / OnLoseAnimStop (0x10008272C) are where the shipped game opens its
+    // score dialog (DialogBoxMCE template 221, or 236 under Media Center).
+    bool result_shown = false;
+    bool result_won = false;
+    pple::ConcentrationBoard::EndGame last_end;
+    bool last_end_ok = false;
 };
 
 } // namespace pple::viewer

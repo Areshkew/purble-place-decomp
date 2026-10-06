@@ -27,7 +27,9 @@ flags and the core library's public interfaces are unchanged.
 | Cached card/effect draw lists, jar layering, timer/token/Professor draws | [pairs_render.cpp](pairs_render.cpp): `refresh_cards`, `timed_refresh` |
 | Flips, match sparks, flying jar coins, burst start/cache | [pairs_effects.cpp](pairs_effects.cpp): `advance_flips`, `advance_card_fx`, `spawn_arcs` |
 | Board completion, score/rank, settings save | [pairs_round.cpp](pairs_round.cpp): `finish_board_end`, `report_round_end` |
-| Professor movie selection/loading | [professor.cpp](professor.cpp): `load_professor` |
+| Professor state machine, tips, transitions | [professor.cpp](professor.cpp): `professor_show`, `professor_display_tip`, `professor_tip_closed`, `professor_advance`, `professor_round_end`, `professor_intro_begin`, `professor_level_tip` |
+| Tip panel: TIPS.XML, the green 9-slice, text and fonts | [tips.cpp](tips.cpp): `load_tips`, `load_tip_style`, `show_tip`, `append_panel`, `append_text`, `face_font`, `rebuild_overlay` |
+| In-canvas difficulty chooser and end-of-round panel | [overlays.cpp](overlays.cpp): `build_difficulty`, `draw_difficulty`, `append_button`, `build_result_panel`, `start_game`, `game_to_menu` |
 | State and small rendering records | [app.hpp](app.hpp), [types.hpp](types.hpp) |
 | Game rules (no SDL) | [concentration.cpp](../concentration.cpp), [concentration.hpp](../../include/pple/concentration.hpp) |
 
@@ -47,6 +49,23 @@ resource/XML loads or full `build_pairs` calls to the per-tick card refresh.
 `build_pairs` calls level-art, card-assets and Pairs-HUD setup in the original order.
 The frame loop still dispatches the same 30 Hz updates and appends jar layers in
 the same order. Audio cache/localiser data retain their original process lifetime.
+
+Three layers draw over the frame, in this order, and each has one owner:
+
+* `scene_draws` — the layout and the card layer, rebuilt by `refresh_cards`/`build_pairs`;
+* `picker_draws` — the difficulty chooser's own screen, owned by [overlays.cpp](overlays.cpp)
+  and drawn instead of the scene while `screen == Screen::Difficulty`;
+* `overlay_draws` — the tip bubble and the end-of-round panel over the live board,
+  reassembled by `rebuild_overlay` from `tip.draws`, `tip.owned` and `result_draws`.
+
+A draw item's texture is either borrowed from `sheet_cache` or created for a label. Only the
+second kind may be destroyed on a rebuild, which is what `free_direct` checks; the tip's label
+textures live in `tip.owned` and the panels' in `result_draws`, so `release_overlay` and
+`free_direct` are the only places that free them.
+
+The Professor's six movies are parsed once into `prof_movie_cache` and the live one is copied
+into `professor.movie`; `professor_advance` runs from the 30 Hz tick in [loop.cpp](loop.cpp) and
+is the only place the state machine moves. Do not add movie or sheet loads to it.
 
 ## Verification and future changes
 

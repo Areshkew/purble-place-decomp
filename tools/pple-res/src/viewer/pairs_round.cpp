@@ -13,6 +13,11 @@ void App::finish_board_end() {
     pairs_jar_phase = JarPhase::Idle;
     pairs_burst_frame = 0.0f;
     if (r.level_up) {
+        // Jar::StopExplosion (0x100083A20) picks the between-boards tip from the difficulty
+        // (Round+0x0C: 1 is Intermediate, 2 is Advanced), sets Professor+0x48 = 125 and calls
+        // MoveIn, then Board::NewLevel re-deals the next <Level> behind the bubble.
+        pending_level_tip = pairs_board.level().difficulty_index == 1 ? "ProIntLevelChange"
+                                                                     : "ProAdvLevelChange";
         std::printf("    board relaid out -> level %d/%d\n", pairs_board.level_position() + 1,
                     pairs_board.level_count());
         pairs_rebuild_pending = true;
@@ -39,6 +44,8 @@ void App::report_round_end() {
         pple::ConcentrationBoard::EndGame end;
         if (pairs_ranks_ok) {
             end = pairs_board.calc_end_game(pairs_ranks);
+            last_end = end;
+            last_end_ok = true;
             std::printf("  end game: points %d + time bonus %d (%d%%) + flip bonus %d "
                         "(clicks %d, ratio %.3f) = %d -> rank %d, \"%s\"\n",
                         end.points, end.time_bonus, end.time_percent, end.flip_bonus,
@@ -86,9 +93,15 @@ void App::report_round_end() {
                 std::printf("  save: could not write %s\n", pairs_save_path.c_str());
             }
         }
+        // OnEnterWonGameState (0x1000824E0): the Professor's win movie and a random ProWin tip,
+        // then MoveIn.  OnWinAnimStop (0x100082670) opens the score dialog when the sequence is
+        // over, which is where build_result_panel takes over.
+        professor_round_end(true);
     } else {
         play_pair_sfx("Con_GameOver");
         std::printf("  round over: LOST, score %d\n", pairs_board.score());
+        // OnEnterLoseGameState (0x1000825FF): Con_GameOver, a random ProLose tip, MoveIn.
+        professor_round_end(false);
     }
 }
 

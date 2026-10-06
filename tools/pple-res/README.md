@@ -20,21 +20,31 @@ $d = "C:\re\samples\purbleplace"
 $m = "$d\en-US\PurblePlace.exe.mui"
 $game = @("$d\PurblePlace.dll", "$d\PurblePlace2.dll", "$d\CardGames.dll")
 
-# The real main menu — click the bell house to play Purble Pairs.
+# The real main menu — click the bell house, choose a difficulty, and the Professor
+# walks in and shows his two "How To Play" bubbles before the board is yours.
 .\build\pple-res\pple-view.exe @game --menu --mui $m
 
-# Straight into the game, no menu.
+# Straight to the in-canvas Select Difficulty screen, with the Professor waiting.
+.\build\pple-res\pple-view.exe @game --difficulty --mui $m
+
+# Straight into the game, no menu and no intro (the analysis hook).
 .\build\pple-res\pple-view.exe @game --scene "UI\CONCENTRATION\CONCENTRATIONGAME.XML" --pairs "Beginner,0" --mui $m
+
+# The same board with the Professor's entrance and his intro bubbles.
+.\build\pple-res\pple-view.exe @game --scene "UI\CONCENTRATION\CONCENTRATIONGAME.XML" --pairs "Beginner,0" --intro --mui $m
 
 # Intermediate is the first timed difficulty, so it is the one that shows the time bar.
 .\build\pple-res\pple-view.exe @game --scene "UI\CONCENTRATION\CONCENTRATIONGAME.XML" --pairs "Intermediate,0" --mui $m
 ```
 
-Controls: **left click** a card to flip it, **N** or **R** for a new round, **ESC** to go back to
-the menu (and to quit from the menu), **SPACE** to toggle whole-pixel scaling, **S** to write the
-current image as a PPM. `--mute` silences the sound effects. `--mui` is optional; without it the
-labels fall back to the English text embedded in the XML, which is why the title then renders in
-Comic Sans MS rather than Segoe UI.
+Controls: **left click** a card to flip it, or a choice button to pick a difficulty and start the
+next round; **click anywhere** to advance or dismiss the Professor's tip; **N** or **R** for a new
+round, **ESC** to go back to the menu (and to quit from the menu), **SPACE** to toggle whole-pixel
+scaling, **S** to write the current image as a PPM. `--mute` silences the sound effects. `--mui`
+is optional; without it the labels fall back to the English text embedded in the XML, which is why
+the title then renders in Comic Sans MS rather than Segoe UI. The difficulty chooser and the
+end-of-round panel keep working without it: they carry the shipped `.mui` wording as their
+fallback.
 
 Headless equivalents that need no window (useful for checking a change):
 
@@ -142,13 +152,14 @@ and example values, and — with `--refs` — how every resource reference resol
 ## pple-view
 
 ```
-pple-view <pe>... [--menu] [--resource NAME] [--sprite XML] [--scene XML] [--movie XML]
+pple-view <pe>... [--menu] [--difficulty] [--resource NAME] [--sprite XML] [--scene XML] [--movie XML]
                   [--movie-name NAME] [--anchor X,Y] [--frame N] [--state N]
                   [--pairs [D,L,S]] [--pairs-reveal] [--pairs-click I,J] [--pairs-ticks N]
                   [--pairs-solve] [--pairs-save PATH] [--mce] [--no-container-offsets] [--mui PATH]
+                  [--intro] [--no-intro] [--no-tips]
                   [--loading [MS]]
                   [--play NAME] [--volume N] [--mute]
-                  [--script-click "x,y;x,y"] [--shot-delay MS] [--bench N] [--bench-build N]
+                  [--script-click "x,y;x,y;wait:MS"] [--shot-delay MS] [--bench N] [--bench-build N]
                   [--list] [--shot out.ppm] [--save out.ppm] [--width N] [--height N]
                   [--font PATH] [--all]
 ```
@@ -156,12 +167,39 @@ pple-view <pe>... [--menu] [--resource NAME] [--sprite XML] [--scene XML] [--mov
 `--menu` is the real main menu and the entry point: `PurblePlaceManager.xml` (which lives in
 `PurblePlace.dll`) for the background, the `Foreground` sprite (which paints the four icons), the
 title labels and the four `<NodeButton>` hot-spots, with each button's `<Animation>` 1 as the
-hover art.  Clicking the Purble Pairs hot-spot enters the game and the in-game
-`ReturnToMainMenu` button comes back; `ESC` goes back too, and `N`/`R` start a new round.
-`--mce` additionally draws the Media Center build's `New Game` / `Exit Game` header buttons —
-the shipped executable *deletes* those five nodes when `g_bMediaCenter == 0`
-(`ConcentrationGame::LoadGameUI` `0x10008122B`), so they are absent by default, as they are in
-this build.  `--no-container-offsets` turns off the engine's HUD re-parenting described below.
+hover art. Clicking the Purble Pairs hot-spot opens the in-canvas **Select Difficulty** screen
+(see below) and its three buttons start the game; the in-game `ReturnToMainMenu` button comes
+back; `ESC` goes back too, and `N`/`R` start a new round at the same difficulty.
+`--difficulty` starts on that chooser directly. `--mce` additionally draws the Media Center
+build's `New Game` / `Exit Game` header buttons — the shipped executable *deletes* those five
+nodes when `g_bMediaCenter == 0` (`ConcentrationGame::LoadGameUI` `0x10008122B`), so they are
+absent by default, as they are in this build.  `--no-container-offsets` turns off the engine's
+HUD re-parenting described below.
+
+### The Professor, his tips, and the two dialogs drawn inside the game
+
+The shipped screen is not just a board. The Professor animates through a six-state machine and
+speaks through `TIPS.XML` bubbles, and the two things it opens as **separate Win32 windows** —
+the difficulty chooser and the end-of-round score dialog — are drawn inside the 800x496 scene
+here, because a web or mobile build has no second window:
+
+| Piece | Where it comes from | What the viewer does |
+|---|---|---|
+| Professor state machine | `Professor::Update` `0x10008C088`: state 1 hidden, 2 entering, 3 exiting, 4 idle, 5 talking, 6 win, 7 lose; `MoveIn` `0x10008C354`, `MoveOut` `0x10008C3B0`, `DisplayTip` `0x10008C290`, `DisplayIntro` `0x10008C3F0` | all six movies are loaded once and the same states are replayed, on the 30 Hz tick |
+| Tips | `UI\Concentration\TIPS.XML` (28 tips) parsed as `TipManager::parseXml` `0x1000930B8`, drawn from `Tips\Styles\Green\TipStyle.xml` as `Tip::Initialize` `0x1000A5834` and `Tip::Arrange` `0x1000A49A0` | a 9-slice bubble at `615,150` (intro/win/lose), `615,125` (between boards) or `615,120` (the second intro bubble), sized from the title and the wrapped body, with the shipped `Segoe UI` 12/8 pt colours |
+| Start of a game | `DisplayIntro` shows `ProIntro`, then `ProIntroNext`, then `Pro_Idle`; a later game gets the single `ProWelcome` bubble instead | `--menu`/`--difficulty` starts play `Pro_Enter` (11 frames at 12 fps) → `ProIntro` → `ProIntroNext` → idle; an explicit `--pairs` start skips it, and `--intro`/`--no-intro` choose |
+| Between boards | `Jar::StopExplosion` `0x100083A20` sets `ProIntLevelChange` (Intermediate) or `ProAdvLevelChange` (Advanced) at `+0x48 = 125` and calls `MoveIn` before `Board::NewLevel` | the same tip, re-shown after the level's art is rebuilt |
+| End of a round | `OnEnterWonGameState` `0x1000821D0` (a random `ProWin1..3`), `OnEnterLoseGameState` `0x10008259C` (a random `ProLose1..2`), then `OnWinAnimStop` `0x100082670` / `OnLoseAnimStop` `0x10008272C`, which is where the shipped build opens `DialogBoxMCE` template 221 | `Pro_Win`/`Pro_Lose` + the tip, then `Pro_Exit`, then an in-canvas panel with `Game Points: N` (MUI 59071), `Final Score: N` (57409), the `Rank:` title from `RANKS.XML` and three buttons — `New Game` (42695), `Change Difficulty`, `Main Menu` (56503) |
+| Difficulty chooser | the dialog whose strings are MUI 213 `Select Difficulty`, 214 the question, 215..217 the three options with their grid descriptions and 219 the Options note | the classroom background, the waiting Professor and a green panel with those three buttons; hovering uses the style's title colour and a bold pass, because the `NewGameButton` art this build ships is transparent (`NewGame`/`ExitGame` measure 0% art — the Media Center host paints them) |
+
+Two engine details the bubbles follow: a tip with `<NoTimeout>` waits for a click and the
+`<CaptureGlobalClick>` default is what makes the first click anywhere advance it, while a tip
+with a `<Duration>` expires on its own and does not swallow clicks. `--no-tips` draws no bubbles;
+the Professor still animates and the win/lose panel still appears.
+
+`--script-click` entries may be `wait:MS`, which is how the intro chain is checked without a
+mouse: `--menu --script-click "100,180;400,175;wait:1500;700,200;wait:600;700,210"` picks
+Beginner, waits for `Pro_Enter`, then clicks the two bubbles.
 
 `--sprite` shows one frame of a sprite node definition; `--state N` picks which `<Animation>` of
 a button node, because a button carries one per visual state (0 is what an untouched button
@@ -274,10 +312,13 @@ renders one frame into a hidden window and reads the back buffer; the read must 
   `localized_default` consults before falling back to the English text in the data.
 * `sha256.cpp` — digest helper.
 * `view_main.cpp` — 8-line viewer entry point. The former 4,026-line implementation is
-  split into 19 responsibility-focused C++ translation units under `src/viewer`;
+  split into 21 responsibility-focused C++ translation units under `src/viewer`;
   the largest is 388 lines. Start with the [viewer module map](src/viewer/README.md),
   then read only the module for the feature being changed. `App` owns session state;
-  the board rules remain in the SDL-free core library.
+  the board rules remain in the SDL-free core library. `tips.cpp` owns the `TIPS.XML`
+  bubbles and their style, `professor.cpp` the Professor's state machine, and
+  `overlays.cpp` the two screens that replace a shipped dialog (the difficulty chooser
+  and the end-of-round panel).
 
 ## Verification
 
@@ -314,7 +355,7 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-view --pairs` jar | The jar's match count is real and comes from the board. `Jar::DoFiller` (`0x100083B10`) is `want = points / Board+0x28 * Round+0x12C` over that level's `Shamrock/Heart/Smiley/GumDrop_Points.xml` (28 points each), one coin per point built from the level's `/imagepath` with **scale forced to 38** — which is what turns the 111x109 `/imagepath` sprite into a 42x41 coin that 28 of can fit in the 112x112 jar. The run prints `jar: UI\Concentration\GumDrop_Points.xml, 28 coin slot(s), coin UI\Concentration\Gumdrop.xml at 38%`, and `s5-jar-strip.png` shows the jar empty, half full of shamrocks, carrying its hearts into Intermediate level 2, and full of gumdrops at the end of an Advanced round |
 | `pple-view --menu` | runs `UI\PurblePlace\PurblePlaceManager.xml` from `PurblePlace.dll`: 8 items drawn, **4 hot-spots** at `509,145 292x250` (Build-a-Purble), `210,153 248x256` (Comfy Cakes), `2,82 212x213` (Purble Pairs), `2,373 93x100` (Exit). `menu-hotspots2.png` overlays the same rectangles on `PurblePlaceForeground.png` and every one lands on its painted icon |
 | `pple-view --menu --script-click "330,280"` | enters the Comfy Cakes hot-spot: the menu rebuilds with that button on `<Animation>` 1 and the house gains its bright hover glow in the right place, the HUD names `ComfyCakesButton`, and the click reports the game as unimplemented |
-| `pple-view --menu --script-click` | `100,180;200,60;760,470` logs `menu: ConcentrationButton -> Purble Pairs`, `click 0 -> revealed`, `pairs: ReturnToMainMenu -> main menu` — menu → game → flip → menu, in one run; the window stays up |
+| `pple-view --menu --script-click` | `100,180;400,175;760,470` logs `menu: ConcentrationButton -> Purble Pairs difficulty chooser`, `difficulty: Beginner chosen`, `pairs: ReturnToMainMenu -> main menu` — menu → chooser → board → menu, in one run; the window stays up. The pre-session-10 sequence (`100,180;200,60;760,470`) entered the game directly, because there was no chooser |
 | `pple-view --pairs-solve` | a whole round through the viewer's own click handler on all three difficulties: Beginner **12 pairs + the forced Wild Card, score 410**, Intermediate **2 boards / 36 pairs, score 1180**, Advanced **4 boards / 128 pairs, score 4040**, all `WON`, each then swapping to `ProfessorWinAnimation`. The solver matches exact ids first and spends the Wild Cards last, because a single-Wild match is the engine's flat `+10` branch and consumes the partner. A level change prints `board relaid out -> level N/M` |
 | `pple-view --pairs` end of round | `ConRoundData::CalcEndGame` (`0x100080718`), run by `OnEnterWonGameState` right after `Con_Win`: `points + time bonus + flip bonus = total -> rank N, "title"`. Beginner **410 + 0 + 2300 = 2710**, Intermediate **1180 + 3000 + 3000 = 7180**, Advanced **4040 + 5000 + 5000 = 14040**, all rank 5, `Rank: Purble Master`. `RANKS.XML` is in `PurblePlace2.dll` |
 | `pple-view --pairs` the jar's flying coins | `Board::DoFlyIntoJar` (`0x10008AF54`) spawns one `ArcBehavior` per matched card; `ArcBehavior::Update` (`0x100084128`) walks a quadratic Bezier over `/ArcAnimation/Frames` (25) from the card to `(LidOffSet + CurJar.w/2, CurJar.h/2)`. The apex question is settled: the control point is a constant 375 px above the container, **off the top of the scene**, but a quadratic Bezier only reaches about half way to its control point, so the drawn curve stays in frame. `s6-flight.png` |
@@ -324,6 +365,10 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-view --pairs` mismatch reveal | `Card::DoMatcher`'s mismatch branch is `Card+0x3C = Board+0x1C4` and `Board::XMLConstants` (`0x100089FDC`) stores `/RevealDuration` **raw**, so the shipped 8 is 8 ticks, not 8 seconds. It starts when `Card::OnReveal` (`0x10007FA6B`) runs `DoMatcher`, i.e. after the flip, and `Card::DoCardClick` (`0x10007CD65`) has no board-wide lockout. `s6-miss-strip.png`: face up at 300 and 500 ms, flipping back at 700, backs at 900 |
 | `pple-view --menu --loading` | `Engine_SetBackMode`'s `UI\PurblePlace\Loading.xml` on `Loading.jpg` with the two `LOADING...` labels, then the menu. `s6-loading.png` |
 | `pple-view --menu` clouds | `PurblePlaceManager::Init` (`0x10007124B`) builds `UI\PurblePlace\CloudsMovie.xml` into a `Base` created as a child of the Background sprite and puts it at `-390,-300`: **1016 frames at 10 fps**, loop off (`0x10007131E`), so it drifts once and rests. Drawn between the Background and the Foreground, which is where that child sits: `s6-clouds-strip.png` differs only in the sky band between 0.2, 12 and 24 s |
+| `pple-view --difficulty` | the in-canvas Select Difficulty screen: `difficulty: Select Difficulty, 3 option(s)`; the classroom background, the waiting Professor and a green `Tips\Styles\Green` panel at `180,40 440x300` with MUI 213/214/219 and three `251x51` option buttons at `274,150+62i` carrying MUI 215/216/217 split into name and grid description. `s10-difficulty.png` |
+| `pple-view --menu --script-click` Professor intro | `100,180;400,175;wait:1500;700,200;wait:600;700,210` logs `tip ProIntro: "How To Play" at 615,150 175x123`, `tip ProIntro: closed`, `tip ProIntroNext: "How To Play" at 615,120 175x149`, `tip ProIntroNext: closed` — `Pro_Enter` (11 frames at 12 fps) → `DisplayIntro`'s two bubbles → `Pro_Idle`, which is `Professor::Update`'s case 5. `s10-next-bubble.png`, `s10-intro-done.png` |
+| `pple-view --pairs` win and lose panels | `--pairs-solve` and `--pairs "Intermediate,0" --pairs-ticks 6300` now end in the in-canvas panel that replaces `DialogBoxMCE` 221: `tip ProWin3: "You Won!"` then `result panel: WON, score 410, 2710 -> Rank: Purble Master`, or `tip ProLose2: "Lost Game"` then `result panel: LOST`, with `Game Points: N`, `Final Score: N`, the `RANKS.XML` title and `New Game` / `Change Difficulty` / `Main Menu`. `s10-win-panel.png`, `s10-lose-panel.png` |
+| `pple-view --pairs` between-boards tip | `--pairs "Intermediate,0" --pairs-solve` logs `tip ProIntLevelChange: "Board Finished" at 615,125`; Advanced logs `tip ProAdvLevelChange`. `Jar::StopExplosion` (`0x100083A20`) picks the name from `Round+0x0C` (1 Intermediate, 2 Advanced) and sets `Professor+0x48 = 125` before `Board::NewLevel`. A scripted solve runs every level in one `build_pairs` call, so only the last level change's tip survives to the deferred rebuild |
 | `pple-res consave` | On the file the game itself wrote (`ConcentrationScoresAndSettings.xml`, 65,707 bytes, 5,230 of them XML): **both the XML payload and the whole container re-emit BYTE-IDENTICAL**. `ConGeneralData::ToXml` `0x10007FC40`, `FromXml` `0x10007FE7C` |
 | `pple-view --pairs-save` | Plays a Beginner round, updates the statistics and writes the file back through `pple::rgmh_write`; re-running loads the existing file and increments it (`played 2, won 2, tiles 50/50, avg 25`), and `pple-res consave` on the result is byte-identical both ways |
 | `pple-view --pairs "Intermediate,0" --pairs-ticks N` | 3000 ticks → 110 s left, bar half drained; 5500 → 27 s left and the `RedTimerBar` resource branch is selected (`left < 900`); the current capture looks gold/yellow, so this is not a verified red-pixel change; 6300 → `LOST`, `professor -> ProfessorLoseAnimation`, and the bar is empty. 226 segments, `TimeBarGreen`'s own `<FrameCount>`. The loss test is `Level+0x0C > 0 && Round+0x154 != 0 && Round+0x118 <= 0`, so Beginner — whose `Level+0x0C` is `30 * -1` — cannot lose. `Board::Update` (`0x10008A5C1`) stops the clock once the board is complete |
@@ -442,11 +487,19 @@ features or existing known-gap fixes were included in this structural milestone.
   * **the two particle emitters** `Emitter_gold.xml` and `Emitter_white.xml`, which
     `ArcBehavior::Init` (`0x100083E48`) builds with `ParticleUpdate` (`0x100084678`) and
     `ParticlePaperCreation` (`0x100084424`) as callbacks;
-  * **the Professor's transitions**: `Professor::InitUI` (`0x10008BD94`) loads `Pro_Enter.xml`,
-    `Pro_Exit.xml` and `Pro_Talking.xml` and nothing uses them; `Jar::StopExplosion`
-    (`0x100083A20`) shows a `ProIntLevelChange` / `ProAdvLevelChange` tip between boards and
-    `OnEnterWonGameState` picks `ProWin1`/`ProWin2`/`ProWin3` at random on the win, while the
-    reconstruction prints the level change and keeps the idle movie;
+  * **the card deal-in**: `Board::Update` (`0x10008A4F0`) keeps the board inert until every card
+    has left `Card+0x1384`'s state 6 and then sets `Board+0x1E8 = 1`, which `Card::HandleEvent`
+    (`0x10007C4A3`) tests before it acts; the animation itself is `Card_shadow.xml` (`Card+0xC0`),
+    which is not drawn. The reconstruction sets the board playable at once, so a card can be
+    clicked while the Professor is still walking in, where the shipped build waits out the deal;
+  * **the tip's style selection**: `<Type>` picks one of the three style documents
+    (`TipManager::parseXml` `0x1000934C3`: `Intro` → 0, `Error` → 2, anything else → 1) and the
+    reconstruction always draws the green set, so the one `<Type>Error</Type>` tip (`BlankCard`)
+    is green rather than red. The three style documents' own names are assigned at runtime by
+    the manager, so the static image does not say which index is which set;
+  * **`<TipManager><DisabledTips>`**: `pple::ConSettings` parses and re-emits the list, but the
+    viewer does not consult it — every tip is enabled, and there is no Options screen to turn one
+    off. The shipped build also gates tips on `g_pPurblePlaceManager+3*8+12`;
   * the Mixer's once-per-level guard `Board+0x1DC` is approximated by `Card::DoMixerCheck`'s
     `> 3` card gate alone;
   * `<NumCardTypes>`, which is read from the XML into `Level+8` and has no reader I could find.

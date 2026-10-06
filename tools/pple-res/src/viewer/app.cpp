@@ -4,7 +4,12 @@
 namespace pple::viewer {
 
     void usage() {
-        std::fprintf(stderr,                 "pple-view — SDL3 viewer for the Purble Place resource DLLs\n\n"                 "  pple-view <pe>... [options]\n\n"                 "  --resource NAME   start on this resource\n"                 "  --sprite XML      show one frame of a <Node Type=\"Sprite\"> definition\n"                 "  --scene XML       render a UI layout: every instance with its sheet frame\n"                 "  --movie XML       render a <Movie> skeletal animation at one frame\n"                 "  --movie-name NAME in --scene mode, draw this <Movie> animation slot at --anchor\n"                 "  --pairs [D,L,S]   play Purble Pairs: D = Beginner|Intermediate|Advanced, L = level, S = seed\n"                 "  --menu            start on the real main menu (UI\\PurblePlace\\PurblePlaceManager.xml); its\n"                 "                    Purble Pairs hot-spot enters the game\n"                 "  --mce             draw the Media Center build's New Game / Exit Game header buttons.\n"                 "                    The shipped executable deletes those five nodes when\n"                 "                    g_bMediaCenter == 0 (0x10008122B), so by default they are absent, as\n"                 "                    they are in this build\n"                 "  --no-container-offsets  do not apply the engine's HUD re-parenting (notes 17.7)\n"                 "  --anchor X,Y      origin for --movie, or for --movie-name in --scene mode\n"
+        std::fprintf(stderr,                 "pple-view — SDL3 viewer for the Purble Place resource DLLs\n\n"                 "  pple-view <pe>... [options]\n\n"                 "  --resource NAME   start on this resource\n"                 "  --sprite XML      show one frame of a <Node Type=\"Sprite\"> definition\n"                 "  --scene XML       render a UI layout: every instance with its sheet frame\n"                 "  --movie XML       render a <Movie> skeletal animation at one frame\n"                 "  --movie-name NAME in --scene mode, draw this <Movie> animation slot at --anchor\n"                 "  --pairs [D,L,S]   play Purble Pairs: D = Beginner|Intermediate|Advanced, L = level, S = seed\n"                 "  --menu            start on the real main menu (UI\\PurblePlace\\PurblePlaceManager.xml); its\n"                 "                    Purble Pairs hot-spot enters the game\n"                 "  --mce             draw the Media Center build's New Game / Exit Game header buttons.\n"                 "                    The shipped executable deletes those five nodes when\n"                 "                    g_bMediaCenter == 0 (0x10008122B), so by default they are absent, as\n"                 "                    they are in this build\n"                 "  --no-container-offsets  do not apply the engine's HUD re-parenting (notes 17.7)\n"
+                 "  --difficulty      start on the in-canvas Select Difficulty screen\n"
+                 "  --intro           with --pairs, also run the Professor's entrance and intro tips\n"
+                 "  --no-intro        never run them (an explicit --pairs start skips them anyway)\n"
+                 "  --no-tips         do not draw the Professor's TIPS.XML speech bubbles\n"
+                 "  --anchor X,Y      origin for --movie, or for --movie-name in --scene mode\n"
                  "  --play NAME       decode and play an AUDIO.XML event key or a resource name\n"
                  "  --volume N        playback volume, 0..100 (default 100)\n"
                  "  --mute            silence the Purble Pairs sound effects\n"
@@ -41,6 +46,10 @@ int App::run(int argc, char** argv) {
             if (i + 1 < args.size() && args[i + 1][0] != '-') loading_ms = std::atoi(args[++i].c_str());
         }
         else if (a == "--mce") mce_mode = true;
+        else if (a == "--difficulty") difficulty_mode = true;
+        else if (a == "--intro") intro_wanted = true;
+        else if (a == "--no-intro") intro_wanted = false;
+        else if (a == "--no-tips") tips_enabled = false;
         else if (a == "--no-container-offsets") container_offsets = false;
         else if (a == "--script-click" && i + 1 < args.size()) script_click_spec = args[++i];
         else if (a == "--shot-delay" && i + 1 < args.size()) shot_delay_ms = std::atoi(args[++i].c_str());
@@ -224,6 +233,13 @@ int App::run(int argc, char** argv) {
     if (!pairs_spec.empty()) {
         screen = Screen::Concentration;
         load_current(true);
+        // An explicit --pairs start is the analysis hook: it goes straight to the board.  The
+        // menu path runs the Professor's entrance and his intro bubbles, and --intro asks for
+        // them here too.
+        if (intro_wanted) professor_intro_begin();
+    } else if (difficulty_mode) {
+        // The in-canvas "Select Difficulty" screen on its own, for a capture or a manual run.
+        build_difficulty();
     } else if (menu_mode) {
         if (loading_mode) {
             screen = Screen::Loading;
