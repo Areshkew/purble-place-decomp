@@ -357,6 +357,19 @@ burst. The animated burst is verified through normal `--script-click` (`s7-burst
 and the GumDrop resource separately through `--movie --frame 30`: 88 frames/30 fps/322 drawn,
 0 unresolved (`s7-gum-burst.log`).
 
+## Initial sneak-token artwork correction
+
+The playable scene hides `SneakPeekTokenAnimate` (an unused XML template) and
+`SneakSparks` (initially hidden by the original engine). They previously drew an
+extra eye token and sparkle above the first socket. The three socket positions and
+starting counts are unchanged: Beginner 2, Intermediate 1, Advanced 0. Thus the
+empty third Beginner socket is intentional, not a missing token.
+
+Verified with `s8-token-*` captures in `C:\re\traces\cpp`: initial 2/1/0 tokens,
+one token after a Beginner click and 2300 ms, and no extra eye or sparkle.
+All three `--sneak-check` fixtures pass; five rebuilds retain 6 Beginner static
+sprites (previously 8). Generic scene-only rendering is unchanged. See notes 20.5.
+
 ## Known gaps
 
 * The exact on-disk geometry of a split sheet's **fourth** `x2` page (SHEET18's is 355x23 where

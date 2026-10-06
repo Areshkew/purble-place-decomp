@@ -2005,6 +2005,10 @@ int main(int argc, char** argv) {
         hidden_instances.insert("TimeBarGreen");
         hidden_instances.insert("TimeBarRed");
         hidden_instances.insert("SneakPeekToken");  // dynamic visibility follows Round.Tokens
+        // InitUI (0x1000849C0) never instantiates the XML's TokenAnimate template;
+        // its SneakSparks sprites are explicitly hidden at 0x100084CE5.
+        hidden_instances.insert("SneakPeekTokenAnimate");
+        hidden_instances.insert("SneakSparks");
         if (!chosen->timed()) hidden_instances.insert("TimeBarBkg");
         scene_background_xml = "UI\\Concentration\\hearts.xml";
         build_scene();
