@@ -1546,6 +1546,20 @@ int main(int argc, char** argv) {
     std::string pairs_sheet_note;
     std::string pairs_back_xml = "UI\\Concentration\\blankcardbutton.xml";
     std::string pairs_outline = "UI\\Concentration\\highlite_outline.xml";
+    // Card::InitUI's other nodes: Card+0xB0 is the level's "BlankCard" (blankcardbutton.xml),
+    // which Card::OnHide shows in place of a matched card's art, and Card+0x110 holds four
+    // SparkleSprite_y sparks parented to the Board's <PlayArea> node (Board+0x78), so their
+    // coordinates are PlayArea-relative like the cards'.
+    std::string pairs_blank_xml = "UI\\Concentration\\blankcardbutton.xml";
+    std::string pairs_spark_xml = "UI\\Concentration\\SparkleSprite_y.xml";
+    SDL_Texture* pairs_blank_tex = nullptr;
+    SDL_FRect pairs_blank_src{};
+    float pairs_blank_w = 0.0f, pairs_blank_h = 0.0f, pairs_blank_reg_x = 0.0f,
+          pairs_blank_reg_y = 0.0f;
+    SDL_Texture* pairs_spark_tex = nullptr;
+    SDL_FRect pairs_spark_src{};
+    float pairs_spark_w = 0.0f, pairs_spark_h = 0.0f, pairs_spark_reg_x = 0.0f,
+          pairs_spark_reg_y = 0.0f;
     // The card draw list is built once, from a table of resolved sprites, and only the face /
     // highlight choice is rebuilt afterwards.  Before this, every tick of the reveal timer
     // re-parsed ~25 card node definitions and reloaded the sheets, up to 30 times a second.
@@ -1575,6 +1589,27 @@ int main(int argc, char** argv) {
     };
     std::vector<CardFlip> card_flip;
     std::vector<pple::CardFace> card_face_shown;  // what the board said last time we drew
+    // The match animation, which the engine splits over four functions:
+    //
+    //   Card::DoForceMatch (0x10007D114)  arms `Card+0x3C = 10` and calls Card::InitExplosion,
+    //                                     which shows the four sparks and fills their two point
+    //                                     arrays from the card's rect and its rect +- 30
+    //   Card::AnimateExplosion (0x10007E6D0)  runs them for 30 ticks, then hides them
+    //   Card::Update's tail               when the countdown runs out, Card::FlipBack
+    //   Card::OnHide (0x10007F538)        the flip-back's end: the art is hidden, the level's
+    //                                     "BlankCard" is shown in its place, and
+    //                                     Board::DoFlyIntoJar sends the coin
+    struct CardFx {
+        int countdown = -1;    // Card+0x3C; -1 when no match is pending
+        int spark_tick = -1;   // Card+0x118; -1 when there is no explosion
+        int flip = 0;          // the flip-back's own tick, 0 when it has not started
+        bool doomed = false;   // Card+0x4C
+        bool blank = false;    // state 2: the art is gone and the BlankCard shows
+    };
+    std::vector<CardFx> card_fx;
+    // Board::DoFlyIntoJar is called from Card::OnHide, i.e. when the flip-back ends, not when the
+    // match is made, so the coin is spawned a few ticks after the pair turns over.
+    std::vector<int> card_fx_pending_fly;
     // The time bar is engine-made, not scene-made: <TimeBarGreen>/<TimeBarRed> are 226 1-pixel
     // segments stacked by CreateTimeSlice (0x10008C640), and /TimeBarBkg is a plain draw.
     struct TimeBarDraw {
@@ -1765,6 +1800,31 @@ int main(int argc, char** argv) {
                             static_cast<double>(pairs_board.cards_removed());
         pairs_jar_fill = std::max(pairs_jar_fill, static_cast<int>(want));
     };
+    // Card::DoForceMatch (0x10007D114) once per matched card: arm the countdown, start the
+    // explosion, and mark the card doomed.  `immediate` is for the scripted hooks, which have no
+    // frames to animate in, so Card::OnHide's end state is taken straight away.
+    const auto arm_match_fx = [&](const std::vector<int>& cells, bool immediate) {
+        for (int cell : cells) {
+            if (cell < 0 || cell >= static_cast<int>(card_fx.size())) continue;
+            CardFx& fx = card_fx[static_cast<std::size_t>(cell)];
+            fx.doomed = true;
+            fx.countdown = 10;    // Card::DoForceMatch's `*((_DWORD *)this + 15) = 10`
+            fx.spark_tick = 0;    // Card::InitExplosion
+            fx.flip = 0;
+            if (immediate) {
+                fx.countdown = -1;
+                fx.spark_tick = -1;
+                fx.blank = true;
+                card_fx_pending_fly.push_back(cell);
+            }
+        }
+        if (!immediate) return;
+        for (int cell : card_fx_pending_fly) {
+            const std::vector<int> one{cell};
+            spawn_arcs(one);
+        }
+        card_fx_pending_fly.clear();
+    };
     const auto build_pairs = [&]() {
         const Uint64 build_t0 = SDL_GetPerformanceCounter();
         std::string scene_how;
@@ -1952,7 +2012,9 @@ int main(int argc, char** argv) {
                                             static_cast<double>(pairs_board.seconds_remaining()));
                             // Jar::StopExplosion runs at the end of the jar's burst, which this
                             // headless path has no frames for: end the board here so the solve
-                            // walks every <Level> the way the engine does.
+                            // walks every <Level> the way the engine does.  The card animation is
+                            // taken straight to Card::OnHide's end state for the same reason.
+                            arm_match_fx(r.flew, true);
                             finish_board_end();
                             progress = true;
                             break;
@@ -2014,8 +2076,10 @@ int main(int argc, char** argv) {
                             pairs_board.round_pairs_total(),
                             pairs_board.lockout_ticks() > 0 ? ", reveal timer armed" : "");
                 play_click_sfx(r);
-                // The scripted path has no frames to animate in, so the jar's flight and burst
-                // are skipped and Jar::StopExplosion is called straight away.
+                // The scripted path has no frames to animate in, so the card animation is taken
+                // to its end state and the jar's flight and burst are skipped: Jar::StopExplosion
+                // is called straight away.
+                arm_match_fx(r.flew, true);
                 if (pairs_board.end_pending()) {
                     jar_begin_burst();
                     finish_board_end();
@@ -2184,14 +2248,19 @@ int main(int argc, char** argv) {
         pairs_jar_fill = 0;
         pairs_jar_phase = JarPhase::Idle;
         pairs_burst_frame = 0.0f;
+        card_fx.assign(pairs_board.cell_count(), CardFx{});
+        card_fx_pending_fly.clear();
         card_flip.assign(pairs_board.cell_count(), CardFlip{});
         card_face_shown.assign(pairs_board.cell_count(), pple::CardFace::Hidden);
         const auto build_card_sprite = [&](const std::string& xml, SDL_Texture** tex_out,
                                            SDL_FRect& src_out, float& fw_out, float& fh_out,
-                                           int* frames_out = nullptr) {
+                                           int* frames_out = nullptr, float* reg_x_out = nullptr,
+                                           float* reg_y_out = nullptr) {
             const Sprite sprite = resolve_sprite(bundle, xml, 0);
             if (!sprite.ok) return false;
             if (frames_out != nullptr) *frames_out = sprite.frames;
+            if (reg_x_out != nullptr) *reg_x_out = sprite.reg_x;
+            if (reg_y_out != nullptr) *reg_y_out = sprite.reg_y;
             std::string how;
             const auto* sheet_slot = bundle.resolve(sprite.requested, how);
             if (sheet_slot == nullptr) return false;
@@ -2217,6 +2286,11 @@ int main(int argc, char** argv) {
         SDL_FRect outline_src{};
         float outline_w = 0.0f, outline_h = 0.0f;
         build_card_sprite(pairs_outline, &outline_tex, outline_src, outline_w, outline_h);
+        // Card+0xB0 (the BlankCard a matched cell shows) and Card+0x110's sparks.
+        build_card_sprite(pairs_blank_xml, &pairs_blank_tex, pairs_blank_src, pairs_blank_w,
+                          pairs_blank_h, nullptr, &pairs_blank_reg_x, &pairs_blank_reg_y);
+        build_card_sprite(pairs_spark_xml, &pairs_spark_tex, pairs_spark_src, pairs_spark_w,
+                          pairs_spark_h, nullptr, &pairs_spark_reg_x, &pairs_spark_reg_y);
         for (const pple::ConcentrationSlot& slot : pairs_board.slots()) {
             const pple::CardDef* def = pairs_pools.find(slot.card_id);
             CardCache entry;
@@ -2483,6 +2557,26 @@ int main(int argc, char** argv) {
             }
             if (entry.index < 0 || entry.index >= pairs_board.cell_count()) continue;
             const pple::CardFace face = pairs_board.face(entry.index);
+            const CardFx& fx = card_fx[static_cast<std::size_t>(entry.index)];
+            // Card::OnHide (0x10007F538): a matched card's art is hidden and the level's
+            // "BlankCard" (Card+0xB0, blankcardbutton.xml) is shown in its place.
+            if (fx.blank && pairs_blank_tex != nullptr) {
+                const float cs =
+                    static_cast<float>(pairs_board.slots()[static_cast<std::size_t>(entry.index)]
+                                           .scale_percent) /
+                    100.0f;
+                DrawItem d;
+                d.texture = pairs_blank_tex;
+                d.src = pairs_blank_src;
+                d.dst = SDL_FRect{entry.base_x - pairs_blank_reg_x * cs,
+                                  entry.base_y - pairs_blank_reg_y * cs, pairs_blank_w * cs,
+                                  pairs_blank_h * cs};
+                d.alpha = 255;
+                scene_draws.push_back(d);
+                extent_w = std::max(extent_w, d.dst.x + d.dst.w);
+                extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+                continue;
+            }
             const CardFlip& f = card_flip[entry.index];
             // Which side is on screen: mid-flip it is the side being collapsed, otherwise the
             // board's own face state decides.
@@ -2492,21 +2586,79 @@ int main(int argc, char** argv) {
             SDL_Texture* tex = show_face ? entry.tex_face : entry.tex_back;
             const SDL_FRect& src = show_face ? entry.src_face : entry.src_back;
             if (tex == nullptr) continue;
+            // A matched card's flip-back (Card::FlipBack 0x10007D060 -> Card::UpdateFlipBackward
+            // 0x10007EFEC) narrows the face the same way a forward flip does, but there is no
+            // other side to expand: Card::OnHide ends it.  `fx.flip` carries that scale.
+            int scale_x = f.scale_x, scale_y = f.scale_y;
+            if (fx.flip > 0) {
+                scale_x = std::max(15, 100 - 17 * fx.flip);
+                scale_y = 100 + 2 * fx.flip;
+            }
             // The engine recentres the narrowing card on the *cell*, not on the sprite:
             // SetPosition(node, fabs(100 - xscale)/100 * card.w * 0.5, ... * card.h * -1.0).
-            const float off_x = (100.0f - static_cast<float>(f.scale_x)) / 100.0f * entry.cell_w * 0.5f;
-            const float off_y = fabs(100.0f - static_cast<float>(f.scale_y)) / 100.0f *
+            const float off_x = (100.0f - static_cast<float>(scale_x)) / 100.0f * entry.cell_w * 0.5f;
+            const float off_y = fabs(100.0f - static_cast<float>(scale_y)) / 100.0f *
                                 entry.cell_h * -1.0f;
             DrawItem d;
             d.texture = tex;
             d.src = src;
             d.dst = SDL_FRect{entry.base_x + off_x, entry.base_y + off_y,
-                              entry.w * static_cast<float>(f.scale_x) / 100.0f,
-                              entry.h * static_cast<float>(f.scale_y) / 100.0f};
+                              entry.w * static_cast<float>(scale_x) / 100.0f,
+                              entry.h * static_cast<float>(scale_y) / 100.0f};
             d.alpha = 255;
             scene_draws.push_back(d);
             extent_w = std::max(extent_w, d.dst.x + d.dst.w);
             extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+        }
+        // The explosion sparks.  Card::InitExplosion (0x10007E518) gives each of the four
+        // Card+0x110 sparks a source at one corner of the card's cell and a destination 30 px
+        // outside it, and Card::AnimateExplosion (0x10007E6D0) walks them for 30 ticks:
+        //   position = src + (dst - src) * (3t^2(1-t) + t^4)
+        //   scale    = 300t(1-t)^2 + 100(1-t)^3 + 600t^2(1-t) + 300t^4   percent
+        // and from tick 15 it takes 10 off the sprite's own counter each tick, which is the fade.
+        if (pairs_spark_tex != nullptr) {
+            for (std::size_t i = 0; i < card_fx.size() && i < card_cache.size(); ++i) {
+                const CardFx& fx = card_fx[i];
+                if (fx.spark_tick < 0 || fx.spark_tick >= 30) continue;
+                const CardCache& entry = card_cache[i];
+                if (entry.index < 0) continue;
+                const double t = static_cast<double>(fx.spark_tick) / 30.0;
+                const double u = 1.0 - t;
+                const double ease = 3.0 * t * t * u + t * t * t * t;
+                const double scale =
+                    (300.0 * t * u * u + 100.0 * u * u * u + 600.0 * t * t * u + 300.0 * t * t * t * t) /
+                    100.0;
+                const float alpha =
+                    static_cast<float>(std::clamp(100.0 - std::max(0, fx.spark_tick - 15) * 10.0, 0.0,
+                                                  100.0)) /
+                    100.0f;
+                // The corners, in PlayArea space: the sparks are children of Board+0x78
+                // (<PlayArea>), which is where the cards are too.
+                const float cw = entry.cell_w, ch = entry.cell_h;
+                const float src_x[4] = {entry.base_x, entry.base_x + cw, entry.base_x + cw,
+                                        entry.base_x};
+                const float src_y[4] = {entry.base_y, entry.base_y, entry.base_y + ch,
+                                        entry.base_y + ch};
+                const float dst_x[4] = {entry.base_x - 30.0f, entry.base_x + cw + 30.0f,
+                                        entry.base_x + cw + 30.0f, entry.base_x - 30.0f};
+                const float dst_y[4] = {entry.base_y - 30.0f, entry.base_y - 30.0f,
+                                        entry.base_y + ch + 30.0f, entry.base_y + ch + 30.0f};
+                for (int s = 0; s < 4; ++s) {
+                    const float px = static_cast<float>(src_x[s] + (dst_x[s] - src_x[s]) * ease);
+                    const float py = static_cast<float>(src_y[s] + (dst_y[s] - src_y[s]) * ease);
+                    DrawItem d;
+                    d.texture = pairs_spark_tex;
+                    d.src = pairs_spark_src;
+                    d.dst = SDL_FRect{px - pairs_spark_reg_x * static_cast<float>(scale),
+                                      py - pairs_spark_reg_y * static_cast<float>(scale),
+                                      pairs_spark_w * static_cast<float>(scale),
+                                      pairs_spark_h * static_cast<float>(scale)};
+                    d.alpha = static_cast<int>(alpha * 255.0f);
+                    scene_draws.push_back(d);
+                    extent_w = std::max(extent_w, d.dst.x + d.dst.w);
+                    extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+                }
+            }
         }
         // The progress meter: indicator i shows its filled frame while
         // `i < Round+0x124`, which is ConRoundData's Level index -- the number of levels of this
@@ -2725,6 +2877,40 @@ int main(int argc, char** argv) {
                 }
                 changed = true;
             }
+        }
+        return changed;
+    };
+    // The match animation's own clock, one step per 30 Hz tick: Card::AnimateExplosion's 30-tick
+    // explosion, Card::Update's countdown, and the flip-back that Card::OnHide ends.
+    const auto advance_card_fx = [&]() {
+        bool changed = false;
+        for (std::size_t i = 0; i < card_fx.size(); ++i) {
+            CardFx& fx = card_fx[i];
+            if (fx.spark_tick >= 0) {
+                ++fx.spark_tick;
+                if (fx.spark_tick >= 30) fx.spark_tick = -1;
+                changed = true;
+            }
+            if (fx.countdown > 0) {
+                --fx.countdown;
+                changed = true;
+                if (fx.countdown == 0) fx.flip = 1;  // Card::FlipBack
+            }
+            if (fx.flip > 0 && !fx.blank) {
+                ++fx.flip;
+                changed = true;
+                if (std::max(15, 100 - 17 * fx.flip) <= 15) {
+                    // Card::OnHide (0x10007F538): the art goes, the BlankCard takes its place,
+                    // and Board::DoFlyIntoJar sends the coin.
+                    fx.blank = true;
+                    card_fx_pending_fly.push_back(static_cast<int>(i));
+                }
+            }
+        }
+        if (!card_fx_pending_fly.empty()) {
+            const std::vector<int> flying = card_fx_pending_fly;
+            card_fx_pending_fly.clear();
+            spawn_arcs(flying);
         }
         return changed;
     };
@@ -3086,10 +3272,10 @@ int main(int argc, char** argv) {
         const pple::ClickResult clicked = pairs_board.click(hit);
         if (!clicked.accepted) return true;
         play_click_sfx(clicked);
-        // Board::DoFlyIntoJar, one coin per card that turned over.  A completed board does not
-        // end the round here: the jar's own state machine runs the flight and the burst and then
-        // calls Jar::StopExplosion (finish_board_end).
-        spawn_arcs(clicked.flew);
+        // Card::DoForceMatch per matched card.  A completed board does not end the round here:
+        // the jar's own state machine runs the flight and the burst and then calls
+        // Jar::StopExplosion (finish_board_end).
+        arm_match_fx(clicked.flew, false);
         if (clicked.relaid_out) {
             // The Mixer reshuffled the cards: Board::DoMixer re-places them, so the art has to be
             // rebuilt.  Deferred to the main loop so the board is never re-dealt from a click.
@@ -3241,8 +3427,10 @@ int main(int argc, char** argv) {
                     ticked = true;
                     sync_flips();
                 }
-                // The flip runs on the same 30 Hz step as the engine's Card::Update.
+                // The flip runs on the same 30 Hz step as the engine's Card::Update, and so does
+                // the match animation.
                 if (advance_flips()) flipped = true;
+                if (advance_card_fx()) flipped = true;
                 professor.time += 1.0f / 30.0f;
                 // The jar (Jar::Update 0x10008373C).  The coins fly for /ArcAnimation/Frames
                 // ticks; when the array empties and the board is complete the burst starts; when
