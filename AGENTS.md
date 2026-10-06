@@ -17,6 +17,7 @@
 3. `tools\pple-res\README.md`: how to run, measured verification results and honest known gaps.
 4. Run `pwd`, `git status --short` and `git log -5 --oneline`. Do not infer the current directory from the DSH installation path.
 5. Read relevant source before editing it. Use DSH `read`, `glob` and `grep` for text inspection, discovery and content searches.
+6. For viewer changes, start with `tools\pple-res\src\viewer\README.md` (module map), then read only the owning module. `view_main.cpp` is now an 8-line entry point; do not reconstruct the old monolithic viewer or re-read the full historical notes for a local change.
 
 ## Locations and tools
 
@@ -85,7 +86,7 @@ Use the absolute `$PWD` invocation if PowerShell does not recognize a bare relat
 Run relevant checks before and after each milestone. For the full current matrix, inspect and run:
 
 - `C:\re\traces\cpp\s7-verify.ps1`: 29 command runs, including assets, audio, rules, menu/navigation/loading, solves/loss, scene/MCE, match/mismatch, benchmarks and trace-directory save roundtrip.
-- `C:\re\traces\cpp\s7-assert-verify.py`: 62 measured-output assertions. These external scripts are not tracked in this repository; read them before relying on them.
+- `C:\re\traces\cpp\s7-assert-verify.py`: 62 measured-output assertions. These external scripts are not tracked in this repository; read them before relying on them. Its fixed 34-card-refresh benchmark assertion is wall-clock-dependent (the unchanged session-9 baseline measured 33); use the session-9 comparison wrapper and require a positive refresh count plus one full build instead. See section 20.6.
 - `pple-res pairs <PurblePlace2.dll> --difficulty D --sneak-check`: one-token fixture, including Advanced, checks duration, cost, repeated use, expiry and zero-clamp/loss. It does not imply Advanced starts with a token.
 - Deterministic level-change and normal-click burst commands/captures are recorded in section 20 and the `s7-*.log` trace files.
 
@@ -102,14 +103,14 @@ Expected baseline:
 | Viewer solve score / rank total | 410 / 2710; 1180 / 7180; 4040 / 14040; rank 5 |
 | Settings `consave` | XML and file both BYTE-IDENTICAL |
 | Scene-only / MCE | 14 sprites, 0 labels / 16 sprites, 3 labels |
-| Beginner playable scene | 8 static sprites; token draws are separate and count-aware |
+| Beginner playable scene | 6 static sprites (supersedes 8 after hiding the unused sneak animation template and initial sparks); token draws are separate and count-aware |
 | Warm performance, session 6 | full build 17.899 ms/call; card refresh 0.0835 ms/call, first 9.2018 ms |
 
 Do not reintroduce a per-tick full scene rebuild. Keep the test hooks (`--script-click`, `--pairs-solve`, `--pairs-ticks`, `--bench*`, `--shot-delay`) usable. At 5500 ticks the code selects the resource named RedTimerBar; current captured pixels look gold/yellow, so do not claim a verified red-pixel change. At 6300 ticks Intermediate loses and the bar is empty.
 
 ## Next work and record maintenance
 
-Remaining gaps: Professor tips/transitions and persisted tip settings integration; remaining card/board effects; two particle emitters; resumable SaveGameState and thumbnail generation; `--native`/high-DPI split-sheet geometry; small unknowns and an eventual behavior-preserving viewer module split. See the README and section 20 before choosing a milestone.
+Remaining gaps: Professor tips/transitions and persisted tip settings integration; remaining card/board effects; two particle emitters; resumable SaveGameState and thumbnail generation; `--native`/high-DPI split-sheet geometry; small unknowns. The behavior-preserving viewer module split is complete; module ownership and navigation are documented in `tools\pple-res\src\viewer\README.md`. See the README and section 20 before choosing a milestone.
 
 For each new result, update `D:\Development\re\notes\purbleplace.md` and the project README. Correct superseded claims explicitly rather than silently leaving contradictions. Add captures under `C:\re\traces\cpp`, and report measured numbers, not assumed old values. Notes live outside this project's Git repository and must be updated separately.
 

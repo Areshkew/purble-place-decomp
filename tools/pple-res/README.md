@@ -273,6 +273,11 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 * `mui.cpp` — `.mui` `RT_STRING` tables, the UTF-16/UTF-8 helpers, and the localiser hook that
   `localized_default` consults before falling back to the English text in the data.
 * `sha256.cpp` — digest helper.
+* `view_main.cpp` — 8-line viewer entry point. The former 4,026-line implementation is
+  split into 19 responsibility-focused C++ translation units under `src/viewer`;
+  the largest is 388 lines. Start with the [viewer module map](src/viewer/README.md),
+  then read only the module for the feature being changed. `App` owns session state;
+  the board rules remain in the SDL-free core library.
 
 ## Verification
 
@@ -284,7 +289,7 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-xml` | **840 XML resources parsed, 0 failures**; 3425 distinct element paths |
 | Re-extracted assets vs independent Python extraction | byte-identical |
 | `pple-view --shot` | PNG, CAB→BMP and JPEG paths all render; sprite frames verified |
-| `pple-view --scene` | `CONCENTRATIONGAME.XML` on its own renders **14 sprites and no labels**, because `ConcentrationGame::LoadGameUI` deletes the five Media-Center nodes; with `--mce` it is **16 sprites + 3 labels**, and `NewGame`/`ExitGame` measure 0% art (correctly transparent — see the note above). Adding `--pairs` hides the three time-bar nodes, two of them templates (`/TimeBarGreen` and `/TimeBarRed` are deleted by `TimeBar::InitUI` `0x10008517C`) and the background on an untimed difficulty, so a Beginner board now reports **8 static sprites**, with token sprites drawn separately according to the count |
+| `pple-view --scene` | `CONCENTRATIONGAME.XML` on its own renders **14 sprites and no labels**, because `ConcentrationGame::LoadGameUI` deletes the five Media-Center nodes; with `--mce` it is **16 sprites + 3 labels**, and `NewGame`/`ExitGame` measure 0% art (correctly transparent — see the note above). Adding `--pairs` hides the three time-bar nodes, two of them templates (`/TimeBarGreen` and `/TimeBarRed` are deleted by `TimeBar::InitUI` `0x10008517C`) and the background on an untimed difficulty, so a Beginner board now reports **6 static sprites** after also hiding the unused sneak animation template and initial sparks (superseding the earlier 8-sprite count), with token sprites drawn separately according to the count |
 | `pple-res split` | 11 split sheets, each with exactly four `x2` page resources (44 in `PurblePlace.dll`) |
 | `pple-view --sprite --state` | `BUILDAPURBLEBUTTON.XML` state 0 transparent, state 1 light art, state 2 dark art, matching the running game's own menu screenshot |
 | `pple-res rgmhrt` | All four `RGMH` files on disk (3 settings + 1 savegame, 83,826–87,542 bytes) re-emitted **byte-identical**; `windowprefs.xml` correctly rejected as not `RGMH` |
@@ -369,6 +374,33 @@ Verified with `s8-token-*` captures in `C:\re\traces\cpp`: initial 2/1/0 tokens,
 one token after a Beginner click and 2300 ms, and no extra eye or sparkle.
 All three `--sneak-check` fixtures pass; five rebuilds retain 6 Beginner static
 sprites (previously 8). Generic scene-only rendering is unchanged. See notes 20.5.
+
+## Behavior-preserving viewer split
+
+The viewer module split preserves all 32 moved lambda bodies token-for-token
+(after expanding the setup helpers). Command-line flags, draw order, game rules,
+cache ownership and the 30 Hz update path are unchanged. All source files in the
+viewer directory are compiled normally; this is not a textual `.inc` split.
+
+Session 9 evidence under `C:\re\traces\cpp`:
+
+- Full 29-command matrix before/after: exit 0; 62 output assertions pass. The old
+  fixed benchmark expectation of 34 card refreshes fails on the unchanged baseline
+  (33 measured), so the comparison now checks the metric and a positive refresh
+  count; the one-full-build invariant still passes.
+- All 29 normalised command logs agree, excluding performance timings and the
+  generated save's wall-clock date/hash. Each save still round-trips byte-identically.
+- 12 of 15 full-matrix capture pairs are pixel-identical; three timed match/mismatch
+  captures differ with real-time animation. No fixed frame-equality claim for those.
+- Seven additional mode comparisons agree in both output and pixels: initial
+  Beginner/Intermediate/Advanced jar/token panels, one spent token, still sprite,
+  still movie and image browser. Four panel crops and three complete captures.
+- Warm full-build average: baseline 18.686 ms/call, refactor 18.007 ms/call (21 calls
+  each). Primed card-layer cost 0.0826 vs 0.0886 ms/call; these are samples, not a
+  performance improvement claim. Final standard build is also verified.
+
+See the [module map](src/viewer/README.md) and notes section 20.6. No gameplay
+features or existing known-gap fixes were included in this structural milestone.
 
 ## Known gaps
 

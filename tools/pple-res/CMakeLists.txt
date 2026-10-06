@@ -87,7 +87,28 @@ option(PPLE_BUILD_VIEW "Build the SDL3 resource viewer" ON)
 
 if(PPLE_BUILD_VIEW)
   if(EXISTS "${PPLE_SDL_ROOT}/include/SDL3/SDL.h")
-    add_executable(pple-view src/view_main.cpp)
+    add_executable(pple-view
+      src/view_main.cpp
+      src/viewer/app.cpp
+      src/viewer/audio.cpp
+      src/viewer/browser.cpp
+      src/viewer/card_assets.cpp
+      src/viewer/hud.cpp
+      src/viewer/input.cpp
+      src/viewer/level_art.cpp
+      src/viewer/loop.cpp
+      src/viewer/menu.cpp
+      src/viewer/movie.cpp
+      src/viewer/pair_hud.cpp
+      src/viewer/pairs_effects.cpp
+      src/viewer/pairs_render.cpp
+      src/viewer/pairs_round.cpp
+      src/viewer/pairs_setup.cpp
+      src/viewer/professor.cpp
+      src/viewer/resources.cpp
+      src/viewer/scene.cpp
+      src/viewer/textures.cpp
+    )
     target_link_libraries(pple-view PRIVATE pple_core ${PPLE_AUDIO_TARGET})
     target_include_directories(pple-view PRIVATE "${PPLE_SDL_ROOT}/include")
     target_link_directories(pple-view PRIVATE "${PPLE_SDL_ROOT}/lib")
