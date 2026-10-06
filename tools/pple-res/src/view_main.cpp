@@ -1196,6 +1196,7 @@ int main(int argc, char** argv) {
     // The index in scene_draws of the /JarFg sprite, so the jar's tray coins can be inserted
     // between /JarBkg and it.  Set by build_scene.
     int pairs_jar_front_at = -1;
+    int pairs_jar_base_at = -1;
     // Builds the scene draw list: every described instance resolved to a sheet frame,
     // plus labels rendered through TTF.
     const auto build_scene = [&]() {
@@ -1430,6 +1431,7 @@ int main(int argc, char** argv) {
             // Jar::InitUI (0x100083218) builds them in.
             {
                 const std::string& key = item.name.empty() ? item.instance : item.name;
+                if (key == "JarBase") pairs_jar_base_at = static_cast<int>(scene_draws.size()) - 1;
                 if (key == "JarFg") pairs_jar_front_at = static_cast<int>(scene_draws.size()) - 1;
             }
             scene_w = std::max(scene_w, d.dst.x + d.dst.w);
@@ -1606,6 +1608,7 @@ int main(int argc, char** argv) {
     std::vector<CardCache> card_cache;
     // How many draws belong to the scene; everything past this is the card layer.
     std::size_t pairs_scene_draws = 0;
+    std::vector<DrawItem> pairs_scene_layer;
     // Card flip, from Card::UpdateFlipForward (0x10007EA20) and UpdateFlipBackward (0x10007EFEC):
     // the visible side narrows by 17 percent per tick to a 15 percent floor, then the other side
     // widens by 17; the shadow tracks at 5 and the vertical scale drifts by 2 either way.  The
@@ -2482,6 +2485,7 @@ int main(int argc, char** argv) {
             }
         }
         pairs_scene_draws = scene_draws.size();
+        pairs_scene_layer = scene_draws;
         // The progress meter.  Board::Init (0x1000888C4) copies the first four
         // UI\Concentration\CardBacks.xml <Back> entries' /progpath into CardBack+0x508, and
         // ProgressMeter::InitUI (0x100084720) makes one indicator per <Level> of the difficulty
@@ -2651,7 +2655,7 @@ int main(int argc, char** argv) {
     };
     refresh_cards = [&]() {
         if (!pairs_ready) return;
-        scene_draws.resize(std::min(scene_draws.size(), pairs_scene_draws));
+        scene_draws.assign(pairs_scene_layer.begin(), pairs_scene_layer.end());
         float extent_w = scene_w, extent_h = scene_h;
         for (std::size_t i = 0; i < card_cache.size(); ++i) {
             CardCache& entry = card_cache[i];
@@ -2785,6 +2789,16 @@ int main(int argc, char** argv) {
                 }
             }
         }
+        // PlayArea precedes JarContainer. Move the cached card/spark layer before JarBase,
+        // leaving the whole jar in front of the cards (Jar::InitUI, 0x100083218).
+        // Rotate in place: no scene rebuild or per-tick texture/resource loading.
+        const std::size_t card_draw_count = scene_draws.size() - pairs_scene_draws;
+        if (pairs_jar_base_at >= 0 &&
+            static_cast<std::size_t>(pairs_jar_base_at) < pairs_scene_draws) {
+            std::rotate(scene_draws.begin() + pairs_jar_base_at,
+                        scene_draws.begin() + static_cast<std::ptrdiff_t>(pairs_scene_draws),
+                        scene_draws.end());
+        }
         // The progress meter: indicator i shows its filled frame while
         // `i < Round+0x124`, which is ConRoundData's Level index -- the number of levels of this
         // difficulty already cleared.
@@ -2809,6 +2823,13 @@ int main(int argc, char** argv) {
         // They are children of the "ArcContainer" Base, which Jar::InitUI creates *before* the
         // Base that holds the tray coins, so they draw behind the tray and in front of /JarBkg.
         std::vector<DrawItem> jar_layer;
+        // JarMovieContainer is created before ArcContainer and the tray Base.
+        const BurstMovie* burst =
+            pairs_jar_phase == JarPhase::Burst ? load_burst(pairs_burst_name) : nullptr;
+        if (burst != nullptr) {
+            append_movie(burst->movie, static_cast<int>(pairs_burst_frame), pairs_burst_anchor_x,
+                         pairs_burst_anchor_y, jar_layer, extent_w, extent_h);
+        }
         for (const ArcCoin& a : pairs_arcs) {
             if (a.tex == nullptr) continue;
             double t = static_cast<double>(a.tick) / static_cast<double>(pairs_arc_frames);
@@ -2838,8 +2859,6 @@ int main(int argc, char** argv) {
         // level's fraction and Jar+0xC8 restarts at each level.  `pairs_jar_fill` is grown when a
         // coin lands, which is when the engine calls DoFiller (ArcBehavior::Update's tail), not
         // when the match is made.  The coins go between /JarBkg and /JarFg.
-        const BurstMovie* burst =
-            pairs_jar_phase == JarPhase::Burst ? load_burst(pairs_burst_name) : nullptr;
         if (burst != nullptr) {
             // Jar::Update's wipe: as the burst runs the tray's top coins are hidden, from
             // `v17 = n - 1 - frame * ((n + 2) / frameCount)` upwards, and nothing ever shows them
@@ -2865,15 +2884,10 @@ int main(int argc, char** argv) {
             d.rotation = c.rotation;
             jar_layer.push_back(d);
         }
-        // The jar's burst movie, in the same layer: Jar+0x30 is the current level's /moviepath
-        // and Jar::Update shows it once the last coin has landed.
-        if (burst != nullptr) {
-            append_movie(burst->movie, static_cast<int>(pairs_burst_frame), pairs_burst_anchor_x,
-                         pairs_burst_anchor_y, jar_layer, extent_w, extent_h);
-        }
         if (!jar_layer.empty() && pairs_jar_front_at >= 0) {
             const std::size_t at = static_cast<std::size_t>(std::min<int>(
-                pairs_jar_front_at, static_cast<int>(scene_draws.size())));
+                pairs_jar_front_at + static_cast<int>(card_draw_count),
+                static_cast<int>(scene_draws.size())));
             scene_draws.insert(scene_draws.begin() + static_cast<std::ptrdiff_t>(at),
                                jar_layer.begin(), jar_layer.end());
         }
