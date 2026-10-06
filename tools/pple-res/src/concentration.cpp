@@ -4,10 +4,16 @@
 #include <cstdlib>
 #include <random>
 
+#include "pple/scene.hpp"
 #include "pple/xml.hpp"
 
 namespace pple {
 namespace {
+
+// Card::UpdateFlipForward (0x10007EA20): the visible side narrows by 17 percent a tick to a 15
+// percent floor and the other side widens by 17 back to 100, so a flip is 5 + 5 ticks.  It is the
+// delay before Card::OnReveal runs Card::DoMatcher on a mismatched pair.
+constexpr int kFlipForwardTicks = 10;
 
 std::string lower(std::string s) {
     for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -302,6 +308,7 @@ bool ConcentrationBoard::reset(const std::vector<ConcentrationLevel>& levels, st
     score_ = 0;
     matches_ = 0;
     cards_removed_total_ = 0;
+    clicks_ = 0;
     end_pending_ = false;
     round_over_ = false;
     deal(level_pos_, seed);
@@ -408,6 +415,7 @@ void ConcentrationBoard::force_match_remaining(std::vector<int>* flew) {
         faces_[i] = CardFace::Matched;
         ++matches_;
         ++cards_removed_total_;
+        ++clicks_;  // Board::Update calls Card::FlipForward here too
         if (flew != nullptr) flew->push_back(static_cast<int>(i));
         const CardDef* def = card(static_cast<int>(i));
         score_ += match_score(def != nullptr ? def->type : 0, 0);
@@ -425,6 +433,7 @@ bool ConcentrationBoard::use_token() {
         if (faces_[i] == CardFace::Matched) continue;
         faces_[i] = CardFace::Shown;
         sneak_shown_[i] = true;
+        ++clicks_;  // Board::SneakPeaker FlipForwards every card it turns, and Clicks counts
     }
     first_reveal_ = -1;
     return true;
@@ -432,12 +441,17 @@ bool ConcentrationBoard::use_token() {
 
 ClickResult ConcentrationBoard::click(int index) {
     ClickResult result;
-    if (finished() || lockout_ > 0 || sneak_ticks_ > 0) return result;
+    // Card::DoCardClick (0x10007CD65) gates on the intro being over, the game not being in state
+    // 3 or 2, a sneak peek not running and the card itself being available -- it does NOT wait for
+    // a mismatched pair to turn back.  So `lockout_` is only the mismatched pair's own countdown,
+    // and the board accepts the next click straight away.
+    if (finished() || sneak_ticks_ > 0) return result;
     if (index < 0 || index >= static_cast<int>(faces_.size())) return result;
     if (faces_[index] != CardFace::Hidden) return result;
 
     faces_[index] = CardFace::Shown;
     result.accepted = true;
+    ++clicks_;  // Card::FlipForward's `inc [Round+0x128]`
     if (first_reveal_ < 0) {
         first_reveal_ = index;
         return result;
@@ -453,9 +467,15 @@ ClickResult ConcentrationBoard::click(int index) {
     const bool wild_b = wild >= 0 && id_b == wild;
     result.second = true;
 
-    // Card::DoMatcher's first test: the ids differ and neither is the Wild Card.
+    // Card::DoMatcher's first test: the ids differ and neither is the Wild Card.  The countdown
+    // it arms is `Card+0x3C = Board+0x1C4`, and Board::XMLConstants (0x100089FDC) stores
+    // /RevealDuration there RAW -- unlike /SneakPeakIconFreq and /SneakPeakIconDur, which it
+    // multiplies by 30.  So the shipped 8 is 8 ticks, not 8 seconds: Card::Update's tail
+    // decrements Card+0x3C once per tick and calls Card::FlipBack when it goes below zero, and
+    // Card::FlipBack (0x10007D060) only acts from state 1 or 8, i.e. once the pair is face up.
     if (id_a != id_b && !wild_a && !wild_b) {
-        lockout_ = 30 * constants_.reveal_duration;
+        lockout_ = constants_.reveal_duration;
+        lockout_delay_ = kFlipForwardTicks;
         result.mismatch = true;
         return result;
     }
@@ -595,7 +615,11 @@ void ConcentrationBoard::tick(int ticks) {
         ticks_left_ -= ticks;
         if (ticks_left_ < 0) ticks_left_ = 0;
     }
-    if (lockout_ > 0) {
+    if (lockout_delay_ > 0) {
+        // The pair is still turning over; Card::DoMatcher has not run yet.
+        lockout_delay_ -= ticks;
+        if (lockout_delay_ < 0) lockout_delay_ = 0;
+    } else if (lockout_ > 0) {
         lockout_ -= ticks;
         if (lockout_ <= 0) {
             lockout_ = 0;
@@ -620,6 +644,111 @@ void ConcentrationBoard::tick(int ticks) {
         round_over_ = true;
         end_pending_ = false;
     }
+}
+
+// UI\Concentration\RANKS.XML.  ConRoundData::CalcEndGame (0x100080718) walks four of its blocks;
+// the element names below are the ones the code searches for, verbatim, including the odd
+// "/AdvancedUnTimed" (the file spells it that way).
+bool concentration_ranks_parse(std::span<const std::uint8_t> ranks_xml, ConcentrationRanks& ranks,
+                               std::string& error) {
+    XmlNode root;
+    if (!xml_parse(ranks_xml, root, error)) return false;
+    const auto int_of = [](const XmlNode& node, const char* name) {
+        return std::atoi(node.child_text(name).c_str());
+    };
+    if (const XmlNode* bonus = root.find("TimeBonus")) {
+        for (const XmlNode& rank : bonus->children) {
+            TimeBonusRank r;
+            r.floor = int_of(rank, "floor");
+            r.ceil = int_of(rank, "ceil");
+            r.advanced = int_of(rank, "advanced");
+            r.intermediate = int_of(rank, "intermediate");
+            ranks.time_bonus.push_back(r);
+        }
+    }
+    if (const XmlNode* flips = root.find("FlipBonus")) {
+        for (const XmlNode& rank : flips->children) {
+            FlipBonusRank r;
+            r.multiplier = static_cast<float>(std::atof(rank.child_text("multiplier").c_str()));
+            r.advanced = int_of(rank, "advanced");
+            r.intermediate = int_of(rank, "intermediate");
+            r.beginner = int_of(rank, "beginner");
+            ranks.flip_bonus.push_back(r);
+        }
+    }
+    if (const XmlNode* names = root.find("RankNames")) {
+        for (const XmlNode& rank : names->children)
+            ranks.rank_names.push_back(localized_default(rank.child_text("title")));
+    }
+    const auto table = [&](const char* path, std::vector<ScoreRank>& out) {
+        const XmlNode* node = root.find(path);
+        if (node == nullptr) return;
+        for (const XmlNode& rank : node->children) {
+            ScoreRank r;
+            r.floor = int_of(rank, "floor");
+            r.ceil = int_of(rank, "ceil");
+            out.push_back(r);
+        }
+    };
+    table("Ranks/BeginnerUntimed", ranks.beginner_untimed);
+    table("Ranks/IntermediateTimed", ranks.intermediate_timed);
+    table("Ranks/IntermediateUntimed", ranks.intermediate_untimed);
+    table("Ranks/AdvancedTimed", ranks.advanced_timed);
+    table("Ranks/AdvancedUnTimed", ranks.advanced_untimed);
+    return true;
+}
+
+// ConRoundData::CalcEndGame (0x100080718), read in order.
+ConcentrationBoard::EndGame ConcentrationBoard::calc_end_game(const ConcentrationRanks& ranks) const {
+    EndGame out;
+    out.points = score_;
+    const int difficulty = level().difficulty_index;
+    // TimeBonus: `if (Round+0x0C != 0 && Round+0x154 != 0)`, i.e. anything but Beginner.  The
+    // shipped Round+0x154 is 1, so the difficulty is what decides.
+    if (difficulty != 0) {
+        const int total_time = level().total_ticks();  // Level+0x0C of the CURRENT level
+        if (total_time != 0) {
+            // `(int)((double)BonusTime / (double)TotalGameTime * 100.0 + 0.05)`.
+            out.time_percent = static_cast<int>(
+                static_cast<double>(ticks_left_) / static_cast<double>(total_time) * 100.0 + 0.05);
+        }
+        for (const TimeBonusRank& r : ranks.time_bonus) {
+            if (out.time_percent < r.ceil && out.time_percent >= r.floor) {
+                out.time_bonus = difficulty == 1 ? r.intermediate : r.advanced;
+                break;
+            }
+        }
+    }
+    out.total = out.points + out.time_bonus;
+    // FlipBonus: the first fliprank whose <multiplier> is >= Clicks / (levels * NumCards).
+    const double cards = static_cast<double>(std::max(1, static_cast<int>(levels_.size()))) *
+                         static_cast<double>(std::max(1, cell_count()));
+    out.flip_ratio = static_cast<double>(clicks_) / cards;
+    for (const FlipBonusRank& r : ranks.flip_bonus) {
+        if (static_cast<double>(r.multiplier) >= out.flip_ratio) {
+            out.flip_bonus = difficulty == 0 ? r.beginner
+                                             : (difficulty == 1 ? r.intermediate : r.advanced);
+            break;
+        }
+    }
+    out.total += out.flip_bonus;
+    // Rank: the last /Ranks entry whose <floor> the total reaches.
+    const std::vector<ScoreRank>* chosen = nullptr;
+    if (difficulty == 2) {
+        chosen = timed() ? &ranks.advanced_timed : &ranks.advanced_untimed;
+    } else if (difficulty == 1) {
+        chosen = timed() ? &ranks.intermediate_timed : &ranks.intermediate_untimed;
+    } else {
+        chosen = &ranks.beginner_untimed;
+    }
+    if (chosen != nullptr) {
+        for (std::size_t i = 0; i < chosen->size(); ++i) {
+            if (out.total >= (*chosen)[i].floor) out.rank = static_cast<int>(i);
+        }
+    }
+    if (out.rank >= 0 && out.rank < static_cast<int>(ranks.rank_names.size()))
+        out.title = ranks.rank_names[static_cast<std::size_t>(out.rank)];
+    return out;
 }
 
 std::vector<CardBackPaths> concentration_cardbacks(std::span<const std::uint8_t> cardbacks_xml) {

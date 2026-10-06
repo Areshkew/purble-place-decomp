@@ -1449,6 +1449,9 @@ int main(int argc, char** argv) {
     bool pairs_ready = false;
     pple::CardPools pairs_pools;
     pple::CardsBox pairs_box;
+    // UI\Concentration\RANKS.XML, for ConRoundData::CalcEndGame (0x100080718).
+    pple::ConcentrationRanks pairs_ranks;
+    bool pairs_ranks_ok = false;
     // Kept so the click handler can reach the constants the peek timers use.
     pple::ConcentrationConstants pairs_constants;
     // The sneak-peek token rects, one per <NumStartTokens>, at /SneakPeekContainer.
@@ -1673,6 +1676,7 @@ int main(int argc, char** argv) {
     // --bench measures the card layer: refresh_cards is what replaced the per-tick build_pairs,
     // so its cost per call is the number that matters.
     double refresh_total_ms = 0.0;
+    double refresh_first_ms = 0.0;
     std::size_t refresh_calls = 0;
     std::function<void()> timed_refresh;
     double build_ms = 0.0;
@@ -1828,11 +1832,36 @@ int main(int argc, char** argv) {
             }
         }
         if (!immediate) return;
-        for (int cell : card_fx_pending_fly) {
-            const std::vector<int> one{cell};
-            spawn_arcs(one);
-        }
+        // The scripted hooks have no frames to fly the coins in, so the tray takes the fill the
+        // landings would have produced (Jar::DoFiller) and no arcs are spawned.
         card_fx_pending_fly.clear();
+        jar_grow();
+    };
+    // End of round.  Board::Update's loss goes straight to OnEnterState(3), and
+    // OnEnterWonGameState is reached from Jar::StopExplosion, so `round_over` is the signal and
+    // `won()` alone is not.  Con_Win / Con_GameOver are the sounds OnEnterWonGameState /
+    // OnEnterLoseGameState play, and CalcEndGame's total and rank are what the game's own end
+    // dialog shows -- not the status bar's Round+0x120.
+    const auto report_round_end = [&]() {
+        if (!pairs_board.round_over() || pairs_end_played) return;
+        pairs_end_played = true;
+        if (pairs_board.round_won()) {
+            play_pair_sfx("Con_Win");
+            std::printf("  round over: WON at level %d/%d, score %d\n",
+                        pairs_board.level_position() + 1, pairs_board.level_count(),
+                        pairs_board.score());
+            if (pairs_ranks_ok) {
+                const pple::ConcentrationBoard::EndGame end = pairs_board.calc_end_game(pairs_ranks);
+                std::printf("  end game: points %d + time bonus %d (%d%%) + flip bonus %d "
+                            "(clicks %d, ratio %.3f) = %d -> rank %d, \"%s\"\n",
+                            end.points, end.time_bonus, end.time_percent, end.flip_bonus,
+                            pairs_board.clicks(), end.flip_ratio, end.total, end.rank + 1,
+                            end.title.c_str());
+            }
+        } else {
+            play_pair_sfx("Con_GameOver");
+            std::printf("  round over: LOST, score %d\n", pairs_board.score());
+        }
     };
     const auto build_pairs = [&]() {
         const Uint64 build_t0 = SDL_GetPerformanceCounter();
@@ -1857,6 +1886,19 @@ int main(int argc, char** argv) {
         }
         pple::concentration_cards_box_parse(scene_bytes, pairs_box, error);
         pairs_constants = constants;
+        // RANKS.XML is read by ConRoundData::CalcEndGame at the end of a won round.
+        if (!pairs_ranks_ok) {
+            const auto* ranks_slot = bundle.find("UI\\CONCENTRATION\\RANKS.XML");
+            if (ranks_slot != nullptr) {
+                std::string ranks_error;
+                pairs_ranks_ok = pple::concentration_ranks_parse(bundle.read(*ranks_slot), pairs_ranks,
+                                                                 ranks_error);
+                if (!pairs_ranks_ok)
+                    std::printf("  ranks: RANKS.XML did not parse (%s)\n", ranks_error.c_str());
+            } else {
+                std::printf("  ranks: UI\\Concentration\\Ranks.xml not found\n");
+            }
+        }
         // --pairs "Difficulty,Level[,Seed]"
         std::string want_difficulty = "Beginner";
         int want_level = 0;
@@ -2121,6 +2163,26 @@ int main(int argc, char** argv) {
         // Level and Level+0x148 is its index -- and Card::InitCardButton (0x10007CB4C) builds
         // Card+0x98 ("CardButton") from `GetXml(*(CardBack[level] + 8))`, i.e. /buttonpath.
         // Level 0 is ShamButton.xml, so the shipped Beginner screen's backs are shamrocks.
+        // Per-level state that has to be cleared before anything reads the board: the jar starts
+        // each level empty (Jar::InitUI 0x100083593 zeroes Jar+0xC8, and the burst's own wipe has
+        // already hidden the previous level's coins), and the card animation belongs to the board
+        // that is being replaced.
+        pairs_arcs.clear();
+        pairs_jar_fill = 0;
+        pairs_jar_phase = JarPhase::Idle;
+        pairs_burst_frame = 0.0f;
+        card_fx.assign(pairs_board.cell_count(), CardFx{});
+        card_fx_pending_fly.clear();
+        // Card::InitUI's tail shows the BlankCard for a card already in state 2 and the art
+        // otherwise, so a rebuild -- after a level change, the Mixer, or a scripted run that has
+        // already played cards out -- keeps the matched cells blank.
+        for (std::size_t i = 0; i < card_fx.size(); ++i) {
+            const bool matched = pairs_board.face(static_cast<int>(i)) == pple::CardFace::Matched;
+            card_fx[i].blank = matched;
+            card_fx[i].doomed = matched;
+        }
+        card_flip.assign(pairs_board.cell_count(), CardFlip{});
+        card_face_shown.assign(pairs_board.cell_count(), pple::CardFace::Hidden);
         {
             const auto* cardbacks = bundle.find("UI\\Concentration\\CardBacks.xml");
             if (cardbacks != nullptr) {
@@ -2240,6 +2302,10 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
+                // The tray's fill follows the board, so a scripted hook that has already played
+                // cards out (its clicks ran before this block) still shows the pile, and a fresh
+                // or re-dealt level starts empty because Round+0x12C is 0 for it.
+                jar_grow();
                 // Jar::LoadMovies (0x1000835D0): `(Board+0x20)[i] + 1032` for i = 0..3, so the
                 // burst movie is per level.  Jar+0x30 selects `Jar+0x48[Round+0x124]`.  The
                 // document itself is loaded lazily, when the burst starts.
@@ -2251,16 +2317,6 @@ int main(int argc, char** argv) {
         const float card_scale = static_cast<float>(pairs_board.slots().front().scale_percent) / 100.0f;
         int failed = 0;
         card_cache.clear();
-        // The jar starts each level empty: Jar::InitUI (0x100083218, at 0x100083593) zeroes
-        // Jar+0xC8 and the burst's own wipe has already hidden the previous level's coins.
-        pairs_arcs.clear();
-        pairs_jar_fill = 0;
-        pairs_jar_phase = JarPhase::Idle;
-        pairs_burst_frame = 0.0f;
-        card_fx.assign(pairs_board.cell_count(), CardFx{});
-        card_fx_pending_fly.clear();
-        card_flip.assign(pairs_board.cell_count(), CardFlip{});
-        card_face_shown.assign(pairs_board.cell_count(), pple::CardFace::Hidden);
         const auto build_card_sprite = [&](const std::string& xml, SDL_Texture** tex_out,
                                            SDL_FRect& src_out, float& fw_out, float& fh_out,
                                            int* frames_out = nullptr, float* reg_x_out = nullptr,
@@ -2929,8 +2985,12 @@ int main(int argc, char** argv) {
         const Uint64 t0 = SDL_GetPerformanceCounter();
         refresh_cards();
         const Uint64 t1 = SDL_GetPerformanceCounter();
-        refresh_total_ms += 1000.0 * static_cast<double>(t1 - t0) /
-                            static_cast<double>(SDL_GetPerformanceFrequency());
+        const double ms = 1000.0 * static_cast<double>(t1 - t0) /
+                          static_cast<double>(SDL_GetPerformanceFrequency());
+        refresh_total_ms += ms;
+        // The first call also decodes whatever sheets the cards need, so it is reported apart
+        // from the steady-state cost: that priming call is what build_pairs' own timing covers.
+        if (refresh_calls == 0) refresh_first_ms = ms;
         ++refresh_calls;
     };
     // ---- the main menu ---------------------------------------------------------------
@@ -3595,11 +3655,11 @@ int main(int argc, char** argv) {
                             ++i;
                         }
                     }
+                    flipped = true;  // the coins moved, so the frame has to be rebuilt
                     if (landed) jar_grow();  // ArcBehavior::Update's tail calls Jar::DoFiller
                     if (pairs_arcs.empty()) {
                         pairs_jar_phase = JarPhase::Idle;
                         jar_begin_burst();
-                        if (pairs_jar_phase == JarPhase::Burst) flipped = true;
                     }
                 }
                 if (pairs_jar_phase == JarPhase::Burst) {
@@ -3621,19 +3681,9 @@ int main(int argc, char** argv) {
                 // End of round.  Board::Update's loss goes straight to OnEnterState(3), and
                 // OnEnterWonGameState is reached from Jar::StopExplosion, so `round_over` is the
                 // signal and `won()` alone is not.
-                if (pairs_board.round_over() && !pairs_end_played) {
-                    pairs_end_played = true;
-                    if (pairs_board.round_won()) {
-                        play_pair_sfx("Con_Win");
-                        std::printf("  round over: WON at level %d/%d, score %d\n",
-                                    pairs_board.level_position() + 1, pairs_board.level_count(),
-                                    pairs_board.score());
-                    } else {
-                        play_pair_sfx("Con_GameOver");
-                        std::printf("  round over: LOST, score %d\n", pairs_board.score());
-                    }
-                }
+                report_round_end();
             }
+            report_round_end();  // a scripted hook can end the round without a tick
             if (ticked || flipped) {
                 timed_refresh();
                 refresh_hud();
@@ -3650,10 +3700,15 @@ int main(int argc, char** argv) {
                                         static_cast<double>(SDL_GetPerformanceFrequency());
                 std::printf("bench: %zu frames in %.1f ms (%.3f ms/frame)\n", bench_done, total_ms,
                             total_ms / static_cast<double>(bench_done));
-                std::printf("bench: card layer %zu call(s), %.4f ms total, %.4f ms/call\n",
+                std::printf("bench: card layer %zu call(s), %.4f ms total, %.4f ms/call, "
+                            "%.4f ms/call primed (first call %.4f ms)\n",
                             refresh_calls, refresh_total_ms,
                             refresh_calls == 0 ? 0.0
-                                               : refresh_total_ms / static_cast<double>(refresh_calls));
+                                               : refresh_total_ms / static_cast<double>(refresh_calls),
+                            refresh_calls <= 1 ? 0.0
+                                               : (refresh_total_ms - refresh_first_ms) /
+                                                     static_cast<double>(refresh_calls - 1),
+                            refresh_first_ms);
                 std::printf("bench: full build_pairs %zu call(s), %.3f ms total, %.3f ms/call\n",
                             build_calls, build_ms,
                             build_calls == 0 ? 0.0 : build_ms / static_cast<double>(build_calls));

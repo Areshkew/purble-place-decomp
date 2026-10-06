@@ -586,6 +586,25 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
                     board.won() ? "WON" : (board.lost() ? "LOST" : "unfinished"));
     else
         std::printf("                 untimed, %s\n", board.won() ? "WON" : (board.lost() ? "LOST" : "unfinished"));
+    // ConRoundData::CalcEndGame (0x100080718), which needs RANKS.XML.  It lives beside the
+    // Concentration documents, so it is only reachable when the same PE carries it.
+    if (board.won()) {
+        const auto* ranks_slot = pe->find("UI\\CONCENTRATION\\RANKS.XML");
+        pple::ConcentrationRanks ranks;
+        std::string ranks_error;
+        if (ranks_slot != nullptr &&
+            pple::concentration_ranks_parse(pe->read(*ranks_slot), ranks, ranks_error)) {
+            const pple::ConcentrationBoard::EndGame end = board.calc_end_game(ranks);
+            std::printf("  end game     : points %d + time bonus %d (%d%%) + flip bonus %d "
+                        "(clicks %d, ratio %.3f) = %d -> rank %d, \"%s\"\n",
+                        end.points, end.time_bonus, end.time_percent, end.flip_bonus, board.clicks(),
+                        end.flip_ratio, end.total, end.rank + 1, end.title.c_str());
+        } else if (ranks_slot != nullptr) {
+            std::printf("  end game     : RANKS.XML did not parse (%s)\n", ranks_error.c_str());
+        } else {
+            std::printf("  end game     : no UI\\CONCENTRATION\\RANKS.XML in this PE\n");
+        }
+    }
     return board.won() ? 0 : 2;
 }
 

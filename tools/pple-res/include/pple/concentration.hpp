@@ -215,6 +215,49 @@ struct ClickResult {
     std::vector<int> flew;
 };
 
+// UI\Concentration\RANKS.XML, read by ConRoundData::CalcEndGame (0x100080718).  Its four tables:
+//
+//   /TimeBonus/timerank[]     floor, ceil, advanced, intermediate  -- picked by the percentage of
+//                             the last level's time still on the clock
+//   /FlipBonus/fliprank[]     multiplier, advanced, intermediate, beginner -- the first entry
+//                             whose multiplier is >= Clicks / (levels * cards)
+//   /RankNames/rank[]/title   five titles, indexed by the rank the score lands in
+//   /Ranks/<table>/Rank[]     floor, ceil -- the table is chosen by difficulty and timed-ness:
+//                             /BeginnerUntimed, /IntermediateTimed, /IntermediateUntimed,
+//                             /AdvancedTimed, /AdvancedUnTimed
+struct TimeBonusRank {
+    int floor = 0;
+    int ceil = 0;
+    int advanced = 0;
+    int intermediate = 0;
+};
+
+struct FlipBonusRank {
+    float multiplier = 0.0f;
+    int advanced = 0;
+    int intermediate = 0;
+    int beginner = 0;
+};
+
+struct ScoreRank {
+    int floor = 0;
+    int ceil = 0;
+};
+
+struct ConcentrationRanks {
+    std::vector<TimeBonusRank> time_bonus;
+    std::vector<FlipBonusRank> flip_bonus;
+    std::vector<std::string> rank_names;
+    std::vector<ScoreRank> beginner_untimed;
+    std::vector<ScoreRank> intermediate_timed;
+    std::vector<ScoreRank> intermediate_untimed;
+    std::vector<ScoreRank> advanced_timed;
+    std::vector<ScoreRank> advanced_untimed;
+};
+
+bool concentration_ranks_parse(std::span<const std::uint8_t> ranks_xml, ConcentrationRanks& ranks,
+                               std::string& error);
+
 class ConcentrationBoard {
 public:
     // `levels` is the difficulty's whole <Levels> list, in document order.  `start` picks the
@@ -291,6 +334,36 @@ public:
     bool round_over() const { return round_over_; }
     bool round_won() const { return round_over_ && won(); }
 
+    // ConRoundData::CalcEndGame (0x100080718), the second scoring stage that runs at the end of a
+    // won round.  It is NOT the number the game's own status bar shows
+    // (ConcentrationGame::UpdateStatusBar 0x100082D68 shows Round+0x120, "Score"): this is
+    // Points + TimeBonus + FlipBonus, and the rank that lands in.
+    //
+    //   TimeBonus = /TimeBonus's <intermediate|advanced> for the timerank whose
+    //               [floor, ceil) contains (int)(BonusTime / TotalGameTime * 100 + 0.05),
+    //               where TotalGameTime is the CURRENT level's budget and BonusTime the time left
+    //               on it (OnEnterWonGameState 0x10008222B adds `Level+0x0C` and `Round+0x118`).
+    //               Gated on the difficulty being non-Beginner, as the code is.
+    //   FlipBonus = /FlipBonus's column for the first fliprank whose <multiplier> is >=
+    //               Clicks / (levels * NumCards), where Clicks is Round+0x128 -- one per
+    //               Card::FlipForward (0x10007D017), so the completion pass and a sneak peek both
+    //               count against it.
+    //   Rank      = the last /Ranks/<table> entry whose <floor> the total reaches, and the title
+    //               is /RankNames/rank[that index]/title.
+    struct EndGame {
+        int points = 0;
+        int time_bonus = 0;
+        int flip_bonus = 0;
+        int total = 0;
+        int rank = -1;
+        std::string title;
+        int time_percent = 0;
+        double flip_ratio = 0.0;
+    };
+    EndGame calc_end_game(const ConcentrationRanks& ranks) const;
+    // Round+0x128: Card::FlipForward increments it for every card turned face up.
+    int clicks() const { return clicks_; }
+
     // Reveals card `index`.  Returns false when the click cannot do anything.
     ClickResult click(int index);
 
@@ -325,12 +398,17 @@ private:
     std::vector<CardFace> faces_;
     int first_reveal_ = -1;
     int lockout_ = 0;
+    // The mismatch countdown does not start at the click: Card::DoMatcher runs from
+    // Card::OnReveal (0x10007FA6B), i.e. when the second card's flip-forward finishes.  The
+    // reconstruction's flip is 17 percent a tick from 100 down to 15 and back, so 10 ticks.
+    int lockout_delay_ = 0;
     int ticks_left_ = 0;
     int score_ = 0;
     int matches_ = 0;
     int cards_removed_total_ = 0;
     int tokens_ = 0;
     int sneak_ticks_ = 0;
+    int clicks_ = 0;
     bool end_pending_ = false;
     bool round_over_ = false;
 };
