@@ -613,6 +613,9 @@ int main(int argc, char** argv) {
     int shot_delay_ms = 0;
     int bench_frames = 0;
     int bench_build = 0;
+    bool loading_mode = false;
+    int loading_ms = 1200;
+    Uint64 loading_start = 0;
     for (std::size_t i = 0;
     i < args.size();
     ++i) {
@@ -625,6 +628,12 @@ int main(int argc, char** argv) {
         else if (a == "--pairs") pairs_spec = (i + 1 < args.size() && args[i + 1][0] != '-') ? args[++i] : "Beginner,0";
         else if (a == "--pairs-reveal") pairs_reveal = true;
         else if (a == "--menu") menu_mode = true;
+        else if (a == "--loading") {
+            loading_mode = true;
+            // An optional millisecond count; Engine_SetBackMode's screen is up for however long
+            // PurblePlaceManager::Init takes, which the reconstruction cannot measure.
+            if (i + 1 < args.size() && args[i + 1][0] != '-') loading_ms = std::atoi(args[++i].c_str());
+        }
         else if (a == "--mce") mce_mode = true;
         else if (a == "--no-container-offsets") container_offsets = false;
         else if (a == "--script-click" && i + 1 < args.size()) script_click_spec = args[++i];
@@ -1671,7 +1680,7 @@ int main(int argc, char** argv) {
     std::function<bool(const std::string&)> load_professor;
     // Which screen is up, and the clickable rectangles on each.  A hot-spot rect is the engine's
     // node rect: (x, y) - registration, sized SourceWidth x SourceHeight.
-    enum class Screen { Other, Menu, Concentration };
+    enum class Screen { Other, Menu, Loading, Concentration };
     Screen screen = Screen::Other;
     struct Hotspot {
         std::string name;
@@ -2932,6 +2941,146 @@ int main(int argc, char** argv) {
     // (section 10.5): the icons are painted into PurblePlaceForeground.png and the buttons are
     // hot-spots over them, with slots 1 and 2 as the hover and pressed art.
     const std::string menu_xml = "UI\\PurblePlace\\PurblePlaceManager.xml";
+    // PurblePlaceManager::Init (0x10007124B): a "Base" is created as a child of the Background
+    // sprite, UI\PurblePlace\CloudsMovie.xml is built into it, and the container is put at
+    // (-390,-300).  The movie is 1016 frames at 10 fps and the engine turns its loop off
+    // (0x10007131E), so it plays once and stops on its last frame.
+    const std::string menu_clouds_xml = "UI\\PurblePlace\\CloudsMovie.xml";
+    pple::Movie menu_clouds;
+    bool menu_clouds_ok = false;
+    bool menu_clouds_loaded = false;
+    float menu_cloud_fps = 10.0f;
+    float menu_clouds_x = -390.0f, menu_clouds_y = -300.0f;
+    // Where in scene_draws the clouds belong: right after the Background, so they sit behind the
+    // Foreground's houses and show through the sky.
+    std::size_t menu_cloud_at = 0;
+    Uint64 menu_cloud_start = 0;
+    const auto load_menu_clouds = [&]() {
+        if (menu_clouds_loaded) return;
+        menu_clouds_loaded = true;
+        std::vector<std::uint8_t> bytes;
+        const auto fetch = [&](const std::string& name, std::vector<std::uint8_t>& out) {
+            std::string inner_how;
+            const auto* s = bundle.resolve(name, inner_how);
+            if (s == nullptr) return false;
+            out = bundle.read(*s);
+            return true;
+        };
+        std::string error;
+        if (!fetch(menu_clouds_xml, bytes) ||
+            !pple::movie_load(bytes, fetch, menu_clouds, error) || menu_clouds.parts.empty()) {
+            std::printf("menu clouds: %s did not load (%s)\n", menu_clouds_xml.c_str(),
+                        error.c_str());
+            return;
+        }
+        menu_cloud_fps = menu_clouds.parts.empty()
+                             ? menu_clouds.fps
+                             : pple::movie_frame_rate(menu_clouds, menu_clouds.parts.front());
+        menu_clouds_ok = true;
+        std::printf("menu clouds: %s, %d frame(s) at %.0f fps, %zu part(s), at %.0f,%.0f\n",
+                    menu_clouds_xml.c_str(), menu_clouds.frame_count,
+                    static_cast<double>(menu_cloud_fps), menu_clouds.parts.size(),
+                    static_cast<double>(menu_clouds_x), static_cast<double>(menu_clouds_y));
+    };
+    // A label through SDL_ttf, positioned with the <Justify> mask (a DrawText flag mask; see
+    // section 15 of the notes).  Returns false when it could not be drawn.
+    const auto append_label = [&](const pple::SceneItem& item) -> bool {
+        if (item.text.empty()) return false;
+        TTF_Font* f = font_for(item.font_size > 0 ? item.font_size : 16.0f);
+        if (f == nullptr) return false;
+        SDL_Surface* surface = TTF_RenderText_Blended(
+            f, item.text.c_str(), item.text.size(),
+            SDL_Color{static_cast<Uint8>((item.colour >> 16) & 0xFF),
+                      static_cast<Uint8>((item.colour >> 8) & 0xFF),
+                      static_cast<Uint8>(item.colour & 0xFF),
+                      static_cast<Uint8>((item.colour >> 24) & 0xFF)});
+        if (surface == nullptr) return false;
+        const float box_w = item.w > 0 ? item.w * item.scale : 0.0f;
+        const float box_h = item.h > 0 ? item.h * item.scale : 0.0f;
+        float dx = item.x * item.scale;
+        if ((item.justify & 0x04) != 0) {
+            if (box_w > 0.0f) dx += box_w - static_cast<float>(surface->w);
+        } else if ((item.justify & 0x40) != 0) {
+            if (box_w > 0.0f) dx += (box_w - static_cast<float>(surface->w)) * 0.5f;
+        }
+        float dy = item.y * item.scale;
+        if ((item.justify & 0x01) != 0) {
+            if (box_h > 0.0f) dy += box_h - static_cast<float>(surface->h);
+        } else if ((item.justify & 0x20) != 0) {
+            if (box_h > 0.0f) dy += (box_h - static_cast<float>(surface->h)) * 0.5f;
+        }
+        DrawItem d;
+        d.texture = SDL_CreateTextureFromSurface(renderer, surface);
+        d.dst = SDL_FRect{dx, dy, static_cast<float>(surface->w), static_cast<float>(surface->h)};
+        d.alpha = item.alpha;
+        SDL_DestroySurface(surface);
+        scene_draws.push_back(d);
+        return true;
+    };
+    // Engine_SetBackMode(1, L"UI\\PurblePlace\\Loading.xml") is called by both
+    // PurblePlaceManager::Init (0x100070A62) and ConcentrationGame::LoadGameUI (0x100081008), and
+    // Engine_SetBackMode (0x10009D424) hands the name to RenderManager::SetBack.  Loading.xml is
+    // one 800x496 sprite on UI\PurblePlace\Loading.jpg with <Anchor>center</Anchor>.
+    // PurblePlaceManager::Init loads the two <NodeLabel Name="Loading"> labels and hides them at
+    // the end of Init (0x100070F25), so they are on screen for exactly as long as the load lasts.
+    const auto build_loading = [&]() {
+        release_draws();
+        scene_w = scene_h = 0.0f;
+        menu_hotspots.clear();
+        const Sprite back = resolve_sprite(bundle, "UI\\PurblePlace\\Loading.xml", 0);
+        std::string how;
+        const auto* slot = back.ok ? bundle.resolve(back.requested, how) : nullptr;
+        if (back.ok && slot != nullptr) {
+            std::string note;
+            SDL_Texture* tex = load_sheet_texture(back.requested, slot->entry->name, note);
+            if (tex != nullptr) {
+                pple::SceneItem geo;
+                geo.src_x = back.src.x;
+                geo.src_y = back.src.y;
+                geo.src_w = back.src.w;
+                geo.src_h = back.src.h;
+                geo.frames = back.frames;
+                geo.per_row = back.per_row;
+                geo.prepped = back.prepped;
+                float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
+                pple::sprite_frame_rect(geo, 0, fx, fy, fw, fh);
+                DrawItem d;
+                d.texture = tex;
+                d.src = SDL_FRect{fx, fy, fw, fh};
+                d.dst = SDL_FRect{0.0f, 0.0f, fw, fh};
+                d.alpha = 255;
+                scene_draws.push_back(d);
+                scene_w = std::max(scene_w, fw);
+                scene_h = std::max(scene_h, fh);
+            }
+        }
+        std::size_t labels = 0;
+        std::string mhow;
+        const auto* mslot = bundle.resolve(menu_xml, mhow);
+        if (mslot != nullptr) {
+            const auto fetch = [&](const std::string& name, std::vector<std::uint8_t>& out) {
+                std::string inner_how;
+                const auto* s = bundle.resolve(name, inner_how);
+                if (s == nullptr) return false;
+                out = bundle.read(*s);
+                return true;
+            };
+            pple::Scene scene;
+            std::string error;
+            if (pple::scene_load(bundle.read(*mslot), fetch, scene, error)) {
+                for (const pple::SceneItem& item : scene.items) {
+                    const std::string& key = item.name.empty() ? item.instance : item.name;
+                    if (item.kind != pple::NodeKind::Label || key != "Loading") continue;
+                    if (append_label(item)) ++labels;
+                }
+            }
+        }
+        scene_w = std::max(scene_w, pple::kScreenWidth);
+        scene_h = std::max(scene_h, pple::kScreenHeight);
+        std::printf("loading: UI\\PurblePlace\\Loading.xml + %zu Loading label(s)\n", labels);
+        hud_lines = {"UI\\PurblePlace\\Loading.xml", "the loading screen, back mode 1"};
+        rebuild_hud();
+    };
     const auto build_menu = [&]() {
         release_draws();
         scene_w = scene_h = 0.0f;
@@ -2961,36 +3110,7 @@ int main(int argc, char** argv) {
             if (item.kind == pple::NodeKind::Label) {
                 // The two "Loading" labels are hidden once the menu is up (0x100070EEA / 0x100070F36).
                 if (key == "Loading" || item.text.empty()) continue;
-                TTF_Font* f = font_for(item.font_size > 0 ? item.font_size : 16.0f);
-                if (f == nullptr) continue;
-                SDL_Surface* surface = TTF_RenderText_Blended(
-                    f, item.text.c_str(), item.text.size(),
-                    SDL_Color{static_cast<Uint8>((item.colour >> 16) & 0xFF),
-                              static_cast<Uint8>((item.colour >> 8) & 0xFF),
-                              static_cast<Uint8>(item.colour & 0xFF),
-                              static_cast<Uint8>((item.colour >> 24) & 0xFF)});
-                if (surface == nullptr) continue;
-                const float box_w = item.w > 0 ? item.w * item.scale : 0.0f;
-                const float box_h = item.h > 0 ? item.h * item.scale : 0.0f;
-                float dx = item.x * item.scale;
-                if ((item.justify & 0x04) != 0) {
-                    if (box_w > 0.0f) dx += box_w - static_cast<float>(surface->w);
-                } else if ((item.justify & 0x40) != 0) {
-                    if (box_w > 0.0f) dx += (box_w - static_cast<float>(surface->w)) * 0.5f;
-                }
-                float dy = item.y * item.scale;
-                if ((item.justify & 0x01) != 0) {
-                    if (box_h > 0.0f) dy += box_h - static_cast<float>(surface->h);
-                } else if ((item.justify & 0x20) != 0) {
-                    if (box_h > 0.0f) dy += (box_h - static_cast<float>(surface->h)) * 0.5f;
-                }
-                DrawItem d;
-                d.texture = SDL_CreateTextureFromSurface(renderer, surface);
-                d.dst = SDL_FRect{dx, dy, static_cast<float>(surface->w),
-                                  static_cast<float>(surface->h)};
-                d.alpha = item.alpha;
-                SDL_DestroySurface(surface);
-                scene_draws.push_back(d);
+                if (!append_label(item)) continue;
                 ++drawn;
                 continue;
             }
@@ -3029,6 +3149,17 @@ int main(int argc, char** argv) {
             d.dst = SDL_FRect{dx, dy, fw * item.scale, fh * item.scale};
             d.alpha = item.alpha;
             scene_draws.push_back(d);
+            // The cloud container is a child of the Background, so the clouds go right here.
+            // scene_load names a <Background>path</Background> shorthand "<parent>/Background".
+            const bool is_background =
+                key == "Background" ||
+                (key.size() > 11 && key.compare(key.size() - 11, 11, "/Background") == 0);
+            if (is_background) {
+                load_menu_clouds();
+                menu_cloud_at = scene_draws.size();
+                // A hover rebuild must not restart the drift.
+                if (menu_cloud_start == 0) menu_cloud_start = SDL_GetTicks();
+            }
             scene_w = std::max(scene_w, d.dst.x + d.dst.w);
             scene_h = std::max(scene_h, d.dst.y + d.dst.h);
             ++drawn;
@@ -3143,8 +3274,18 @@ int main(int argc, char** argv) {
         screen = Screen::Concentration;
         load_current(true);
     } else if (menu_mode) {
-        screen = Screen::Menu;
-        build_menu();
+        if (loading_mode) {
+            screen = Screen::Loading;
+            loading_start = SDL_GetTicks();
+            build_loading();
+        } else {
+            screen = Screen::Menu;
+            build_menu();
+        }
+    } else if (loading_mode) {
+        screen = Screen::Loading;
+        loading_start = SDL_GetTicks();
+        build_loading();
     } else {
         load_current(true);
     }
@@ -3409,6 +3550,15 @@ int main(int argc, char** argv) {
             pairs_rebuild_pending = false;
             build_pairs();
         }
+        // --loading MS: the loading screen is up for MS milliseconds, which stands in for however
+        // long PurblePlaceManager::Init takes in the shipped game, then the menu arrives.
+        if (screen == Screen::Loading && SDL_GetTicks() - loading_start >= static_cast<Uint64>(loading_ms)) {
+            if (menu_mode) {
+                screen = Screen::Menu;
+                build_menu();
+            }
+            // Without --menu the loading screen stays up so --shot can capture it.
+        }
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {
             const Uint64 now = SDL_GetTicks();
@@ -3542,8 +3692,8 @@ int main(int argc, char** argv) {
                     running = click_scene(c.first, c.second, false);
                 }
             }
-            for (const DrawItem& d : scene_draws) {
-                if (d.texture == nullptr) continue;
+            const auto draw_item = [&](const DrawItem& d) {
+                if (d.texture == nullptr) return;
                 SDL_SetTextureAlphaMod(d.texture, static_cast<Uint8>(std::clamp(d.alpha, 0, 255)));
                 const SDL_FRect dst{
                     ox + d.dst.x * s, oy + d.dst.y * s, d.dst.w * s, d.dst.h * s
@@ -3556,7 +3706,48 @@ int main(int argc, char** argv) {
                     SDL_RenderTexture(renderer, d.texture, src, &dst);
                 }
                 SDL_SetTextureAlphaMod(d.texture, 255);
+            };
+            // The menu's cloud movie sits between the Background and the Foreground, which is
+            // where PurblePlaceManager::Init's own container puts it: it is created as a child of
+            // the Background sprite, so it draws after the background and before the next sibling.
+            const auto draw_clouds = [&]() {
+                if (!menu_clouds_ok || menu_clouds.parts.empty()) return;
+                const int frames = std::max(1, menu_clouds.frame_count);
+                const double seconds = static_cast<double>(SDL_GetTicks() - menu_cloud_start) / 1000.0;
+                int cf = static_cast<int>(seconds * static_cast<double>(menu_cloud_fps));
+                // The engine turns the movie's loop off (0x10007131E), so it plays once and rests
+                // on its last frame.
+                if (cf >= frames) cf = frames - 1;
+                std::vector<pple::MoviePlacement> placements;
+                pple::movie_evaluate(menu_clouds, cf, placements);
+                for (const pple::MoviePlacement& p : placements) {
+                    if (p.part == nullptr || !p.part->resolved || p.part->sprite.sheet.empty())
+                        continue;
+                    std::string sheet_how;
+                    const auto* sheet_slot = bundle.resolve(p.part->sprite.sheet, sheet_how);
+                    if (sheet_slot == nullptr) continue;
+                    std::string note;
+                    SDL_Texture* tex = load_sheet_texture(p.part->sprite.sheet,
+                                                          sheet_slot->entry->name, note);
+                    if (tex == nullptr) continue;
+                    float sx2 = 0.0f, sy2 = 0.0f, sw2 = 0.0f, sh2 = 0.0f;
+                    pple::sprite_frame_rect(p.part->sprite, 0, sx2, sy2, sw2, sh2);
+                    DrawItem d;
+                    d.texture = tex;
+                    d.src = SDL_FRect{sx2, sy2, sw2, sh2};
+                    d.dst = SDL_FRect{menu_clouds_x + p.x - p.part->sprite.reg_x,
+                                      menu_clouds_y + p.y - p.part->sprite.reg_y, sw2 * p.xscale,
+                                      sh2 * p.yscale};
+                    d.alpha = static_cast<int>(std::clamp(p.alpha * 255.0f, 0.0f, 255.0f));
+                    d.rotation = p.rotation;
+                    draw_item(d);
+                }
+            };
+            for (std::size_t i = 0; i < scene_draws.size(); ++i) {
+                if (i == menu_cloud_at) draw_clouds();
+                draw_item(scene_draws[i]);
             }
+            if (menu_cloud_at >= scene_draws.size()) draw_clouds();
         }
         if (scene_draws.empty() && texture != nullptr) {
             const SDL_FRect fitted =                fit_rect_within(out_w, out_h - hud_strip, static_cast<int>(src_rect.w),                                static_cast<int>(src_rect.h), integer_scale);
