@@ -246,6 +246,11 @@ std::vector<int> concentration_build_deck(const ConcentrationLevel& level, const
         deck.push_back(id);
         deck.push_back(id);
     }
+    // ShuffleCards (0x1000896D6) appends the Wild Card to the list *before* it draws from it, and
+    // it draws NumCards times, so the extra card is shuffled in like any other -- it is not pinned
+    // to the last cell.  (The list holds cells-1 cards in the odd case, plus this one.)
+    while (deck.size() < static_cast<std::size_t>(level.cell_count()))
+        deck.push_back(pools.wild);
     // ShuffleCards: the ids are drawn out of the list at random, so the board order is random.
     std::shuffle(deck.begin(), deck.end(), rng);
     return deck;
@@ -325,7 +330,8 @@ void ConcentrationBoard::deal(std::size_t position, unsigned seed) {
     slots_ = concentration_layout(lv, box_.width);
 
     // ShuffleCards appends one Wild Card when the cell count is odd, and the deck it built
-    // holds cells-1 cards in that case.
+    // already carries it in shuffled position; this is only a safety net for a deck that came
+    // back short.
     while (deck_.size() < slots_.size()) deck_.push_back(pools_->wild);
     deck_.resize(slots_.size());
     for (std::size_t i = 0; i < slots_.size(); ++i) slots_[i].card_id = deck_[i];
@@ -407,6 +413,19 @@ int ConcentrationBoard::card_id(int index) const {
 const CardDef* ConcentrationBoard::card(int index) const {
     if (pools_ == nullptr) return nullptr;
     return pools_->find(card_id(index));
+}
+
+// Card::FindOtherMatch (0x10007E3F8), verbatim: the first card in the board array whose id is
+// `a2`, whose index differs from `a3`, and whose state is neither 2 (matched) nor 4 with
+// Card+0x4C set (already in its match flip-back).  A card that is merely face up -- a pending
+// mismatch, states 1 and 4 without that flag -- is accepted, so Shown counts as available here.
+int ConcentrationBoard::find_other_match(int id, int exclude) const {
+    for (std::size_t i = 0; i < slots_.size(); ++i) {
+        if (static_cast<int>(i) == exclude) continue;
+        if (faces_[i] == CardFace::Matched) continue;
+        if (slots_[i].card_id == id) return static_cast<int>(i);
+    }
+    return -1;
 }
 
 void ConcentrationBoard::force_match_remaining(std::vector<int>* flew) {
@@ -529,6 +548,30 @@ ClickResult ConcentrationBoard::click(int index) {
         // Board::MatchMade, so the match counter and the type table do not apply.
         score_ += 10;
         result.wild_match = true;
+        // ... and the branch does not stop there.  0x10007D762..0x10007D7D5 takes the *non*-
+        // Wild card's id and index and calls Card::FindOtherMatch (0x10007E3F8) for the other
+        // card carrying that id, then marks it `Card+0x45 = 1` and `Card+0xF8 = this`; the
+        // Sparks (0x10007D812) belong to that card, and Board::SparkAnimate (0x10008B4B0) calls
+        // Card::FlipForward on it once 15 ticks have passed, so Card::OnReveal's
+        // `Card+0xF8 != 0 || Card+0x45 != 0` test runs Card::DoMatcher -> Card::DoForceMatch on
+        // it.  Card::DoCardClick (0x10007CEE1) blocks clicks on it in the meantime
+        // (`Card+0x70 = 1`, the flag DoCardClick itself tests at 0x10007CDB1).
+        //
+        // Without that twin the card the Wild Card stood in for is stranded, and Board::Update's
+        // completion test -- `NumCards - matched <= the remaining Wild and Mixer cards` -- can
+        // never be met again, so the round never finishes.  The twin is matched here, with the
+        // same spark/coin animation as the pair, rather than after SparkAnimate's 15 ticks.
+        const int stood_in_for = wild_a ? b : a;
+        const int twin = find_other_match(slots_[stood_in_for].card_id, stood_in_for);
+        if (twin >= 0) {
+            faces_[twin] = CardFace::Matched;
+            ++matches_;
+            ++cards_removed_total_;
+            result.flew.push_back(twin);
+            result.wild_twin = true;
+            const CardDef* tdef = card(twin);
+            score_ += match_score(tdef != nullptr ? tdef->type : 0, 0);
+        }
     } else {
         // Card::DoMixerCheck (0x10007D9DC) on both cards: the Mixer reshuffles the cards that
         // are still on the board.  Its gate is `card id == Board+0x174` plus

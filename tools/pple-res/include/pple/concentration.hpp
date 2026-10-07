@@ -17,8 +17,11 @@
 //    sprite node definition per card (<path>), so the face art is an ordinary
 //    <Root Type="Sprite"> frame.
 //  * <CardPairs> carries one character per PAIR of cards, over NumCols*NumRows cells; an odd
-//    cell count drops the last cell and then gets one extra Wild Card appended, so an odd
-//    board has a single card that can never match.
+//    cell count drops the last cell and then gets one extra Wild Card appended to the list
+//    before Board::ShuffleCards (0x100089604) draws from it, so an odd board has a single card
+//    that can never be matched.  Board::ShuffleCards puts that Wild Card into the draw like any
+//    other card -- it is not pinned to the last cell -- and Card::DoMatcher (0x10007D224)
+//    clears the twin of whatever card the Wild Card is matched with.
 #pragma once
 
 #include <array>
@@ -203,6 +206,7 @@ struct ClickResult {
     bool match = false;       // Con_Correct             idA == idB
     bool mismatch = false;    // Con_TileFlip_Incorrect  neither is the Wild Card
     bool wild_match = false;  // Con_PowerUp             exactly one is the Wild Card
+    bool wild_twin = false;   // the Wild Card's partner's twin left the board with it
     bool chef = false;        // Con_PurbleChef          the Chef's cake swept the board
     bool mixer = false;       // Con_Mixer               Board::DoMixer reshuffled the deck
     bool sneak_get = false;   // Con_SneakPeek_Get       the card carried the sneak-peek icon
@@ -444,6 +448,9 @@ public:
 private:
     void deal(std::size_t position, unsigned seed);
     void force_match_remaining(std::vector<int>* flew);
+    // Card::FindOtherMatch (0x10007E3F8): the first card whose id is `id`, whose index is not
+    // `exclude` and which is not already matched.  -1 when there is none.
+    int find_other_match(int id, int exclude) const;
 
     std::vector<ConcentrationLevel> levels_;
     std::size_t level_pos_ = 0;

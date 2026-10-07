@@ -99,7 +99,7 @@ Expected baseline:
 | XML inventory | 840 parsed; 3652 references seen, 3047 resolved |
 | WMA decode | 201 decoded, zero failures; 201/201 duration agreement |
 | UI_BUTTON playback | 0.325 s, wasapi |
-| CLI autoplay score / rank total | Beginner 410 / 2710; Intermediate 1120 / 7120; Advanced 3920 / 13920; rank 5 |
+| CLI autoplay score / rank total | Beginner 390 / 2690; Intermediate 1120 / 7120; Advanced 3920 / 13920; rank 5 (Beginner was 410 / 2710 while `Board::ShuffleCards` still pinned the odd board's Wild Card to the last cell) |
 | Viewer solve score / rank total | 410 / 2710; 1180 / 7180; 4040 / 14040; rank 5 |
 | Settings `consave` | XML and file both BYTE-IDENTICAL |
 | Scene-only / MCE | 14 sprites, 0 labels / 16 sprites, 3 labels |

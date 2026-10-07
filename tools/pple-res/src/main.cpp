@@ -406,7 +406,7 @@ int cmd_cards(const std::vector<std::string>& files) {
 // autoplay is the rules test - it solves the board through the same click/tick API the viewer
 // would use, so a win proves the deck, the match rule and the scoring agree.
 int cmd_pairs(const std::string& path, const std::string& difficulty, int level_index, unsigned seed,
-              bool autoplay, bool show_layout, bool sneak_check) {
+              bool autoplay, bool show_layout, bool sneak_check, bool wild_early) {
     std::string error;
     const auto pe = PeImage::load(path, error);
     if (!pe) {
@@ -552,6 +552,38 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
                     constants.sneak_reveal_duration, cost,
                     fixture.timed() ? ", zero-clamp/loss" : "", ok ? "PASS" : "FAIL");
         if (!ok) return 1;
+    }
+    if (!autoplay && !wild_early) return 0;
+
+    // --wild-early spends the Wild Card on the first partner it can find, which is what a player
+    // does.  Card::DoMatcher's wild branch then clears that card's twin through
+    // Card::FindOtherMatch; before that twin was modelled, the stranded card made Board::Update's
+    // completion test unreachable and the round never finished.  Combine with --autoplay.
+    if (wild_early) {
+        if (pools.wild < 0) {
+            std::printf("  wild early   : this deck has no Wild Card\n");
+        } else {
+            int wild = -1, other = -1;
+            for (int i = 0; i < board.cell_count(); ++i)
+                if (board.card_id(i) == pools.wild) { wild = i; break; }
+            for (int i = 0; i < board.cell_count(); ++i) {
+                if (i == wild || board.card_id(i) == pools.wild) continue;
+                other = i;
+                break;
+            }
+            if (wild < 0 || other < 0) {
+                std::printf("  wild early   : no Wild Card to spend (wild %d, partner %d)\n", wild,
+                            other);
+            } else {
+                board.click(wild);
+                const pple::ClickResult r = board.click(other);
+                std::printf("  wild early   : cells %d,%d -> wild %d, twin %d, fled %zu, score %d, "
+                            "matches %d/%d\n",
+                            wild, other, r.wild_match ? 1 : 0, r.wild_twin ? 1 : 0, r.flew.size(),
+                            board.score(), board.matches(), board.round_pairs_total());
+                if (board.end_pending()) board.end_board();
+            }
+        }
     }
     if (!autoplay) return 0;
 
@@ -1395,7 +1427,7 @@ void usage() {
                  "  pple-res strings <file.mui> [--id N] [--grep TEXT] [--limit N]\n"
                  "  pple-res muicheck <file.mui> <pe>...   validate the |id|context|text ids\n"
                  "  pple-res cards   <pe>...    the Concentration card deck and its pools\n"
-                 "  pple-res pairs   <pe> [--difficulty D] [--level N] [--seed N] [--autoplay] [--layout] [--sneak-check]\n"
+                 "  pple-res pairs   <pe> [--difficulty D] [--level N] [--seed N] [--autoplay] [--layout] [--sneak-check] [--wild-early]\n"
                  "  pple-res png     <pe> <resource-name> [outfile.ppm]\n"
                  "  pple-res pngscan <pe>...\n"
                  "  pple-res rgmh    <file>\n"
@@ -1554,7 +1586,7 @@ int main(int argc, char** argv) {
         const int level_index = std::atoi(flag_value("--level", "0").c_str());
         const unsigned seed = static_cast<unsigned>(std::stoul(flag_value("--seed", "1")));
         return cmd_pairs(positional[0], difficulty, level_index, seed, has_flag("--autoplay"),
-                         has_flag("--layout"), has_flag("--sneak-check"));
+                         has_flag("--layout"), has_flag("--sneak-check"), has_flag("--wild-early"));
     }
     if (cmd == "cards") {
         if (positional.empty()) { usage(); return 1; }
