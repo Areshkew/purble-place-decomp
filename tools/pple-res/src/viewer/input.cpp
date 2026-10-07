@@ -148,6 +148,15 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         refresh_hud();
         return true;
     }
+    // Card::HandleEvent (0x10007C1F4, case 1) only sends a click on to Card::DoCardClick from a
+    // card the player can act on: state 0, whose back is up, or state 4 without the match flag.
+    // State 3, the flip-forward, is refused, and the reconstruction's single flip covers the
+    // whole turn in both directions, so a card that is still turning is not clickable here.
+    if (hit >= 0 && hit < static_cast<int>(card_flip.size()) &&
+        card_flip[static_cast<std::size_t>(hit)].phase != FlipPhase::None) {
+        std::printf("  click %-3d -> ignored, the card is still turning\n", hit);
+        return true;
+    }
     if (hit < 0) {
         // The sneak-peek tokens: SneakPeakArea::HandleEvent (0x100084D3C) plays
         // Con_SneakPeek_Click (proto 0x7A) and starts the peek, which is Board::SneakPeaker
@@ -186,6 +195,15 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
     }
     const pple::ClickResult clicked = pairs_board.click(hit);
     if (!clicked.accepted) return true;
+    // Card::FlipBack (0x10007D060) plays nothing, unlike Card::FlipForward's Con_TileFlip, so a
+    // card turned back down is silent and only the draw list and the highlight change.
+    if (clicked.taken_back) {
+        sync_flips();
+        timed_refresh();
+        refresh_hud();
+        std::printf("  click %-3d -> turned back down\n", hit);
+        return true;
+    }
     play_click_sfx(clicked);
     // Card::DoForceMatch per matched card.  A completed board does not end the round here:
     // the jar's own state machine runs the flight and the burst and then calls
@@ -207,7 +225,7 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
                                      ? "WILD (+10)"
                                      : (clicked.mismatch ? "MISS" : "revealed")),
                 pairs_board.score(), pairs_board.matches(), pairs_board.round_pairs_total(),
-                pairs_board.lockout_ticks() > 0 ? ", reveal timer armed" : "");
+                pairs_board.mismatch_ticks() >= 0 ? ", reveal timer armed" : "");
     return true;
 }
 

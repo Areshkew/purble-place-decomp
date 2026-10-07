@@ -80,6 +80,16 @@ end of the deal and the place `Board::Update`'s `DisplayIntro` is reproduced, so
 is consumed there rather than at `start_game`. `click_scene`'s card hit test stops the deal the
 way `Card::DoCardClick` does; the screen's own buttons are not gated by it.
 
+`click_scene` is also the only place a card click turns into rules: it refuses a card that is still
+flipping, hands a face-up card to `ConcentrationBoard::click`'s take-back path (`Card::HandleEvent`'s
+`FaceAnimation` branch, which also clears the card waiting for a partner and plays nothing), and
+otherwise passes the reveal on. Mismatch timing belongs to the rules, not here: the board keeps one
+`Card+0x3C` countdown per cell, so the loop redraws on `face_revision()` rather than on a single
+lockout value, and a pair that is already counting down is not postponed by a newer one. The time bar
+is part of the same draw list and is built from the board's clock, so `App::time_bar_state()`
+([pairs_render.cpp](pairs_render.cpp)) is what says whether a tick moved it -- the segment index and
+the 900-tick red threshold -- and `refresh_cards` draws from that one function.
+
 ## Verification and future changes
 
 Build with the commands in the [project README](../../README.md). The offline full

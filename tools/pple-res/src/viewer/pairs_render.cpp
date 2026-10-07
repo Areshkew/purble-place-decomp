@@ -2,6 +2,24 @@
 
 namespace pple::viewer {
 
+// The time bar's drawn state: segment i is lit while i >= elapsed, and the bar swaps to
+// <TimeBarRed> for the last 900 ticks.  Board::Update stops the clock once the board is complete,
+// and a level with no <TotalTime> has `total_ticks` of 30 * -1, which cannot light a segment.
+App::TimeBarState App::time_bar_state() const {
+    TimeBarState state;
+    if (!pairs_ready) return state;
+    const int total = pairs_board.level().total_ticks();
+    const int left = static_cast<int>(pairs_board.ticks_remaining());
+    state.red = left < 900;
+    if (timebar.segments > 0 && total > 0) {
+        const double per = static_cast<double>(total) / static_cast<double>(timebar.segments);
+        if (per > 0.0) state.elapsed = static_cast<int>(static_cast<double>(total - left) / per);
+    }
+    if (state.elapsed < 0) state.elapsed = 0;
+    if (state.elapsed > timebar.segments) state.elapsed = timebar.segments;
+    return state;
+}
+
 void App::refresh_cards() {
     if (!pairs_ready) return;
     scene_draws.assign(pairs_scene_layer.begin(), pairs_scene_layer.end());
@@ -292,24 +310,13 @@ void App::refresh_cards() {
                            jar_layer.begin(), jar_layer.end());
     }
     // The time bar: segment i is lit while i >= elapsed, red for the last 900 ticks.
-    const int pending = pairs_board.pending_reveal();
-    (void)pending;
     if (timebar.ok) {
-        const int total = pairs_board.level().total_ticks();
-        const int left = static_cast<int>(pairs_board.ticks_remaining());
-        int elapsed = 0;
-        if (timebar.segments > 0 && total > 0) {
-            const double per = static_cast<double>(total) / static_cast<double>(timebar.segments);
-            if (per > 0.0) elapsed = static_cast<int>((total - left) / per);
-        }
-        if (elapsed < 0) elapsed = 0;
-        if (elapsed > timebar.segments) elapsed = timebar.segments;
-        const bool red = left < 900;
-        SDL_Texture* tex = red ? timebar.red : timebar.green;
-        const SDL_FRect* src = red ? &timebar.red_src : &timebar.green_src;
-        const float x = red ? timebar.x_red : timebar.x_green;
+        const TimeBarState bar = time_bar_state();
+        SDL_Texture* tex = bar.red ? timebar.red : timebar.green;
+        const SDL_FRect* src = bar.red ? &timebar.red_src : &timebar.green_src;
+        const float x = bar.red ? timebar.x_red : timebar.x_green;
         if (tex != nullptr) {
-            for (int i = elapsed; i < timebar.segments; ++i) {
+            for (int i = bar.elapsed; i < timebar.segments; ++i) {
                 DrawItem d;
                 d.texture = tex;
                 d.src = *src;

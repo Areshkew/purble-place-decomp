@@ -183,8 +183,11 @@ std::vector<ConcentrationSlot> concentration_layout(const ConcentrationLevel& le
 // The playable board.  Rules as read from Card::DoMatcher (0x10007D224) and Board::MatchMade
 // (0x10008B0AC):
 //
-//   mismatch : the ids differ and neither is the Wild Card -> Board+452 is armed as a lockout
-//              and the pair flips back after RevealDuration; Con_TileFlip_Incorrect (proto 0x74)
+//   mismatch : the ids differ and neither is the Wild Card -> the SECOND card's Card+0x3C is
+//              armed with Board+452 (raw /RevealDuration) and Card+0xF8 is linked to the first
+//              card; Card::Update counts it down and flips both back; Con_TileFlip_Incorrect
+//              (proto 0x74).  There is no board-wide lockout: several pairs can be counting
+//              down at once, each on its own clock.
 //   match    : the ids are equal, or exactly one of them is the Wild Card
 //   points   : MatchPoints for the card's <type>   (3 and 0 and 6 and everything else -> Normal,
 //              4 -> Tricky, 5 -> SuperTricky), times 3 when the multiplier input is <= 1, times 2
@@ -201,8 +204,12 @@ enum class CardFace { Hidden, Shown, Matched };
 
 // What one click did, so the caller drives the audio from the engine's own branches.
 struct ClickResult {
-    bool accepted = false;    // a card was turned over
+    bool accepted = false;    // the click did something
     bool second = false;      // it was the second card of the pair, so the rules ran
+    // Card::HandleEvent (0x10007C1F4, case 1) sends a click on a card's "FaceAnimation" node to
+    // Card::FlipBack: a card that is already face up turns back down, and Board+0xB0 is cleared
+    // when that card was the one waiting for a partner.  Card::FlipBack plays nothing.
+    bool taken_back = false;  // a face-up card was turned back down
     bool match = false;       // Con_Correct             idA == idB
     bool mismatch = false;    // Con_TileFlip_Incorrect  neither is the Wild Card
     bool wild_match = false;  // Con_PowerUp             exactly one is the Wild Card
@@ -342,8 +349,16 @@ public:
     // The id of the drawn card, as the pools give it.
     const CardDef* card(int index) const;
 
-    int pending_reveal() const { return first_reveal_; }
-    int lockout_ticks() const { return lockout_; }
+    int pending_reveal() const { return pending_; }
+    // Card::DoCardClick (0x10007CD65) gates on the intro animation, the game state, a running
+    // sneak peek and Card+0x70 -- never on a mismatched pair -- so `pending_` (Board+0xB0) is
+    // the only thing waiting for a partner, and the mismatch countdowns are per card.
+    bool mismatch_active() const;
+    // The largest Card+0x3C still counting down, for diagnostics.  -1 when none is armed.
+    int mismatch_ticks() const;
+    // Bumped on every face change, so a caller can tell whether a tick or a click moved anything
+    // without walking the board.
+    int face_revision() const { return face_revision_; }
     float ticks_remaining() const { return static_cast<float>(ticks_left_); }
     float seconds_remaining() const { return static_cast<float>(ticks_left_) / 30.0f; }
     bool timed() const { return level().timed(); }
@@ -425,7 +440,8 @@ public:
     // Round+0x128: Card::FlipForward increments it for every card turned face up.
     int clicks() const { return clicks_; }
 
-    // Reveals card `index`.  Returns false when the click cannot do anything.
+    // Reveals card `index`, or turns it back down when it is already face up
+    // (`taken_back`).  `accepted` is false when the click cannot do anything.
     ClickResult click(int index);
 
     // Board::SneakPeaker (0x10008B280): spends one <NumStartTokens> token and turns the whole
@@ -451,6 +467,12 @@ private:
     // Card::FindOtherMatch (0x10007E3F8): the first card whose id is `id`, whose index is not
     // `exclude` and which is not already matched.  -1 when there is none.
     int find_other_match(int id, int exclude) const;
+    void set_face(int index, CardFace face);
+    // Card::FlipBack (0x10007D060): only a card in state 1 or 8 turns over, i.e. a face-up one.
+    void flip_back(int index);
+    // Card::DoMatcher's mismatch branch: arm the second card's countdown after its flip-forward
+    // and link it to the first card, so both turn back together.
+    void arm_mismatch(int second, int first);
 
     std::vector<ConcentrationLevel> levels_;
     std::size_t level_pos_ = 0;
@@ -463,12 +485,20 @@ private:
     std::vector<bool> sneak_icon_;  // Card+0x18: the sneak-peek mini icon is on this card
     std::vector<bool> sneak_shown_;  // Card+0x46: this card was turned by a sneak peek
     std::vector<CardFace> faces_;
-    int first_reveal_ = -1;
-    int lockout_ = 0;
-    // The mismatch countdown does not start at the click: Card::DoMatcher runs from
-    // Card::OnReveal (0x10007FA6B), i.e. when the second card's flip-forward finishes.  The
-    // reconstruction's flip is 17 percent a tick from 100 down to 15 and back, so 10 ticks.
-    int lockout_delay_ = 0;
+    // Card::DoMatcher's mismatch state, per cell.  The countdown is Card+0x3C, `partner` is
+    // Card+0xF8, and `delay` is the flip-forward still to run before Card::OnReveal arms the
+    // countdown: Card::DoMatcher runs from Card::OnReveal (0x10007FA6B), not from the click.
+    // The reconstruction's flip is 17 percent a tick from 100 down to 15 and back, so 10 ticks.
+    struct CardReveal {
+        int countdown = -1;  // Card+0x3C; -1 = not armed
+        int delay = 0;       // flip-forward ticks before OnReveal arms the countdown
+        int partner = -1;    // Card+0xF8; the first card of the pair, -1 when there is none
+    };
+    std::vector<CardReveal> reveal_;
+    // Board+0xB0: the card waiting for a partner.  Card::DoCardClick moves it into the second
+    // card's Card+0xF8 and clears it, and a face click on it clears it too.
+    int pending_ = -1;
+    int face_revision_ = 0;
     int ticks_left_ = 0;
     int score_ = 0;
     int matches_ = 0;

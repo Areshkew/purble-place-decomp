@@ -205,8 +205,8 @@ void App::build_pairs() {
                 std::printf("    left: cell %d id %d face %d (wild %d)\n", i, id_of(i),
                             static_cast<int>(pairs_board.face(i)), wild);
             }
-            std::printf("    pending reveal %d, lockout %d\n", pairs_board.pending_reveal(),
-                        pairs_board.lockout_ticks());
+            std::printf("    pending reveal %d, mismatch timer %d\n", pairs_board.pending_reveal(),
+                        pairs_board.mismatch_ticks());
         }
     }
     // --pairs-ticks N advances the engine's 30 Hz step N times before the first frame, so the
@@ -235,19 +235,23 @@ void App::build_pairs() {
                 continue;
             }
             if (pairs_board.face(cell) != pple::CardFace::Hidden) {
-                std::printf("  click %d: already face up\n", cell);
+                // A face-up card goes back down through the same handler (Card::HandleEvent).
+                pairs_board.click(cell);
+                std::printf("  click %-3d -> turned back down\n", cell);
+                sync_flips();
                 continue;
             }
             const pple::ClickResult r = pairs_board.click(cell);
             if (!r.accepted) {
-                std::printf("  click %d: refused (lockout %d)\n", cell, pairs_board.lockout_ticks());
+                std::printf("  click %d: refused (mismatch timer %d)\n", cell,
+                            pairs_board.mismatch_ticks());
                 continue;
             }
             std::printf("  click %-3d -> %s, score %d, matches %d/%d%s\n", cell,
                         r.match ? "MATCH" : (r.wild_match ? "WILD" : (r.mismatch ? "MISS" : "revealed")),
                         pairs_board.score(), pairs_board.matches(),
                         pairs_board.round_pairs_total(),
-                        pairs_board.lockout_ticks() > 0 ? ", reveal timer armed" : "");
+                        pairs_board.mismatch_ticks() >= 0 ? ", reveal timer armed" : "");
             play_click_sfx(r);
             // The scripted path has no frames to animate in, so the card animation is taken
             // to its end state and the jar's flight and burst are skipped: Jar::StopExplosion

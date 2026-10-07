@@ -339,8 +339,8 @@ void ConcentrationBoard::deal(std::size_t position, unsigned seed) {
     faces_.assign(slots_.size(), CardFace::Hidden);
     sneak_icon_.assign(slots_.size(), false);
     sneak_shown_.assign(slots_.size(), false);
-    first_reveal_ = -1;
-    lockout_ = 0;
+    reveal_.assign(slots_.size(), CardReveal{});
+    pending_ = -1;
     sneak_ticks_ = 0;
     sneak_delay_ = 0;
     // Board::InitGame: Round+280 (TimeLeft) = Level+12, Round+292 (Level) = 0 on a new game and
@@ -415,6 +415,50 @@ const CardDef* ConcentrationBoard::card(int index) const {
     return pools_->find(card_id(index));
 }
 
+// Every face write goes through here, so a caller can tell whether a tick or a click moved
+// anything without walking the board.
+void ConcentrationBoard::set_face(int index, CardFace face) {
+    if (index < 0 || index >= static_cast<int>(faces_.size())) return;
+    CardFace& slot = faces_[static_cast<std::size_t>(index)];
+    if (slot == face) return;
+    slot = face;
+    ++face_revision_;
+}
+
+// Card::FlipBack (0x10007D060) only acts from state 1 or 8, i.e. on a card that is face up; a card
+// already down or matched stays where it is.
+void ConcentrationBoard::flip_back(int index) {
+    if (index < 0 || index >= static_cast<int>(faces_.size())) return;
+    if (faces_[static_cast<std::size_t>(index)] != CardFace::Shown) return;
+    set_face(index, CardFace::Hidden);
+    // The engine leaves Board+0xB0 alone here, so the pending card can go back down while it is
+    // still the pending one, and the next click would pair with a card nobody can see.  Clearing
+    // it keeps the pending slot equal to what is actually face up.
+    if (pending_ == index) pending_ = -1;
+}
+
+// Card::DoMatcher's mismatch branch: Card+0x3C is armed from Board+0x1C4 and Card+0xF8 keeps the
+// first card, so Card::Update can turn both back together.
+void ConcentrationBoard::arm_mismatch(int second, int first) {
+    if (second < 0 || second >= static_cast<int>(reveal_.size())) return;
+    CardReveal& r = reveal_[static_cast<std::size_t>(second)];
+    r.delay = kFlipForwardTicks;
+    r.countdown = -1;
+    r.partner = first;
+}
+
+bool ConcentrationBoard::mismatch_active() const {
+    for (const CardReveal& r : reveal_)
+        if (r.countdown >= 0 || r.delay > 0) return true;
+    return false;
+}
+
+int ConcentrationBoard::mismatch_ticks() const {
+    int most = -1;
+    for (const CardReveal& r : reveal_) most = std::max(most, r.countdown);
+    return most;
+}
+
 // Card::FindOtherMatch (0x10007E3F8), verbatim: the first card in the board array whose id is
 // `a2`, whose index differs from `a3`, and whose state is neither 2 (matched) nor 4 with
 // Card+0x4C set (already in its match flip-back).  A card that is merely face up -- a pending
@@ -432,7 +476,7 @@ void ConcentrationBoard::force_match_remaining(std::vector<int>* flew) {
     // Board::Update's completion pass: every card still in state 0 is force-matched and flipped.
     for (std::size_t i = 0; i < faces_.size(); ++i) {
         if (faces_[i] == CardFace::Matched) continue;
-        faces_[i] = CardFace::Matched;
+        set_face(static_cast<int>(i), CardFace::Matched);
         ++matches_;
         ++cards_removed_total_;
         ++clicks_;  // Board::Update calls Card::FlipForward here too
@@ -440,16 +484,18 @@ void ConcentrationBoard::force_match_remaining(std::vector<int>* flew) {
         const CardDef* def = card(static_cast<int>(i));
         score_ += match_score(def != nullptr ? def->type : 0, 0);
     }
+    // Board::Update's pass only takes the cards in state 0, so the engine can end a level with a
+    // lone card still face up.  This pass takes every card that is left, which means the pending
+    // one goes too; clearing it keeps the highlight off a card that is no longer there.
+    pending_ = -1;
 }
 
 bool ConcentrationBoard::use_token() {
     if (finished() || tokens_ <= 0 || sneak_ticks_ > 0 || sneak_delay_ > 0 || slots_.empty())
         return false;
     --tokens_;
-    // Board::SneakPeaker turns every card whose state is 0 or 4 face up and flags it with
-    // Card+0x46; Board::Update flips those back when Board+0x194 reaches zero.
-    // Card::OnReveal (0x10007FA50) copies raw /SneakRevealDuration to Board+0x194.
-    // The flip takes 10 ticks in this model; the reveal countdown starts after it.
+    // Card::OnReveal (0x10007FA50) copies raw /SneakRevealDuration to Board+0x194.  The flip
+    // takes 10 ticks in this model; the reveal countdown starts after it.
     sneak_ticks_ = constants_.sneak_reveal_duration;
     sneak_delay_ = 10;
     // SneakPeakArea::HandleEvent (0x100084F69): float32 percent of this level's
@@ -459,37 +505,49 @@ bool ConcentrationBoard::use_token() {
                                           100.0f) * static_cast<float>(level().total_ticks()));
         ticks_left_ = std::max(0, ticks_left_ - cost);
     }
+    // Board::SneakPeaker (0x10008B280) turns the cards whose state is 0 or 4 face up and flags
+    // each with Card+0x46; Board::Update flips those back when Board+0x194 reaches zero.  A card
+    // that is already face up -- the one waiting for a partner -- is neither turned nor flagged,
+    // so it is still there when the peek ends.
     for (std::size_t i = 0; i < faces_.size(); ++i) {
-        if (faces_[i] == CardFace::Matched) continue;
-        faces_[i] = CardFace::Shown;
+        if (faces_[i] != CardFace::Hidden) continue;
+        set_face(static_cast<int>(i), CardFace::Shown);
         sneak_shown_[i] = true;
         ++clicks_;  // Board::SneakPeaker FlipForwards every card it turns, and Clicks counts
     }
-    first_reveal_ = -1;
     return true;
 }
 
 ClickResult ConcentrationBoard::click(int index) {
     ClickResult result;
-    // Card::DoCardClick (0x10007CD65) gates on the intro being over, the game not being in state
+    // Card::DoCardClick (0x10007CD4C) gates on the intro being over, the game not being in state
     // 3 or 2, a sneak peek not running and the card itself being available -- it does NOT wait for
-    // a mismatched pair to turn back.  So `lockout_` is only the mismatched pair's own countdown,
-    // and the board accepts the next click straight away.
+    // a mismatched pair to turn back.  So the board accepts the next click straight away and the
+    // mismatch countdowns belong to their own pairs.
     if (finished() || sneak_ticks_ > 0) return result;
     if (index < 0 || index >= static_cast<int>(faces_.size())) return result;
+    // Card::HandleEvent (0x10007C1F4, case 1) routes a click on the "FaceAnimation" node of a
+    // face-up card to Card::FlipBack: the card goes back down, and Board+0xB0 is cleared when
+    // that card was the one waiting for a partner.  Card::FlipBack plays nothing.
+    if (faces_[index] == CardFace::Shown) {
+        flip_back(index);
+        result.accepted = true;
+        result.taken_back = true;
+        return result;
+    }
     if (faces_[index] != CardFace::Hidden) return result;
 
-    faces_[index] = CardFace::Shown;
+    set_face(index, CardFace::Shown);
     result.accepted = true;
     ++clicks_;  // Card::FlipForward's `inc [Round+0x128]`
-    if (first_reveal_ < 0) {
-        first_reveal_ = index;
+    if (pending_ < 0) {
+        pending_ = index;
         return result;
     }
 
-    const int a = first_reveal_;
+    const int a = pending_;
     const int b = index;
-    first_reveal_ = -1;
+    pending_ = -1;
     const int id_a = slots_[a].card_id;
     const int id_b = slots_[b].card_id;
     const int wild = pools_ != nullptr ? pools_->wild : -1;
@@ -498,20 +556,20 @@ ClickResult ConcentrationBoard::click(int index) {
     result.second = true;
 
     // Card::DoMatcher's first test: the ids differ and neither is the Wild Card.  The countdown
-    // it arms is `Card+0x3C = Board+0x1C4`, and Board::XMLConstants (0x100089FDC) stores
-    // /RevealDuration there RAW -- unlike /SneakPeakIconFreq and /SneakPeakIconDur, which it
-    // multiplies by 30.  So the shipped 8 is 8 ticks, not 8 seconds: Card::Update's tail
-    // decrements Card+0x3C once per tick and calls Card::FlipBack when it goes below zero, and
-    // Card::FlipBack (0x10007D060) only acts from state 1 or 8, i.e. once the pair is face up.
+    // it arms is `Card+0x3C = Board+0x1C4` on the second card, with `Card+0xF8` left holding the
+    // first one, and Board::XMLConstants (0x100089FDC) stores /RevealDuration there RAW -- unlike
+    // /SneakPeakIconFreq and /SneakPeakIconDur, which it multiplies by 30.  So the shipped 8 is a
+    // tick count, not seconds: Card::Update's tail decrements Card+0x3C once per tick and calls
+    // Card::FlipBack on the card and on Card+0xF8 when it goes below zero, and Card::FlipBack
+    // (0x10007D060) only acts from state 1 or 8, i.e. once the pair is face up.
     if (id_a != id_b && !wild_a && !wild_b) {
-        lockout_ = constants_.reveal_duration;
-        lockout_delay_ = kFlipForwardTicks;
+        arm_mismatch(b, a);
         result.mismatch = true;
         return result;
     }
 
-    faces_[a] = CardFace::Matched;
-    faces_[b] = CardFace::Matched;
+    set_face(a, CardFace::Matched);
+    set_face(b, CardFace::Matched);
     ++matches_;
     cards_removed_total_ += 2;
     result.flew.push_back(a);
@@ -524,7 +582,7 @@ ClickResult ConcentrationBoard::click(int index) {
         for (std::size_t i = 0; i < faces_.size(); ++i) {
             if (faces_[i] == CardFace::Matched) continue;
             if (slots_[i].card_id != chef) continue;
-            faces_[i] = CardFace::Matched;
+            set_face(static_cast<int>(i), CardFace::Matched);
             ++matches_;
             ++cards_removed_total_;
             result.flew.push_back(static_cast<int>(i));
@@ -564,7 +622,7 @@ ClickResult ConcentrationBoard::click(int index) {
         const int stood_in_for = wild_a ? b : a;
         const int twin = find_other_match(slots_[stood_in_for].card_id, stood_in_for);
         if (twin >= 0) {
-            faces_[twin] = CardFace::Matched;
+            set_face(twin, CardFace::Matched);
             ++matches_;
             ++cards_removed_total_;
             result.flew.push_back(twin);
@@ -653,10 +711,9 @@ ClickResult ConcentrationBoard::end_board() {
 }
 
 void ConcentrationBoard::reveal_all() {
-    for (CardFace& f : faces_)
-        if (f == CardFace::Hidden) f = CardFace::Shown;
-    first_reveal_ = -1;
-    lockout_ = 0;
+    for (std::size_t i = 0; i < faces_.size(); ++i)
+        if (faces_[i] == CardFace::Hidden) set_face(static_cast<int>(i), CardFace::Shown);
+    pending_ = -1;
 }
 
 void ConcentrationBoard::tick(int ticks) {
@@ -669,16 +726,25 @@ void ConcentrationBoard::tick(int ticks) {
         ticks_left_ -= ticks;
         if (ticks_left_ < 0) ticks_left_ = 0;
     }
-    if (lockout_delay_ > 0) {
-        // The pair is still turning over; Card::DoMatcher has not run yet.
-        lockout_delay_ -= ticks;
-        if (lockout_delay_ < 0) lockout_delay_ = 0;
-    } else if (lockout_ > 0) {
-        lockout_ -= ticks;
-        if (lockout_ <= 0) {
-            lockout_ = 0;
-            for (std::size_t i = 0; i < faces_.size(); ++i)
-                if (faces_[i] == CardFace::Shown) faces_[i] = CardFace::Hidden;
+    // Card::Update's tail (0x10007DE08): Card+0x3C is armed by Card::OnReveal -- after the
+    // second card's flip-forward -- and counted down once per tick; when it goes below zero the
+    // card and its Card+0xF8 partner turn back.  Every pair has its own clock, so a pair that is
+    // already counting down is not held up by a newer one, and cards do not pile up face up.
+    for (int t = 0; t < ticks; ++t) {
+        for (std::size_t i = 0; i < reveal_.size(); ++i) {
+            CardReveal& r = reveal_[i];
+            if (r.delay > 0) {
+                // The pair is still turning over: Card::DoMatcher has not run yet.
+                if (--r.delay == 0) r.countdown = constants_.reveal_duration;
+                continue;
+            }
+            if (r.countdown < 0) continue;
+            --r.countdown;
+            if (r.countdown >= 0) continue;
+            const int partner = r.partner;
+            r.partner = -1;
+            flip_back(static_cast<int>(i));
+            flip_back(partner);
         }
     }
     if (sneak_ticks_ > 0 || sneak_delay_ > 0) {
@@ -690,7 +756,7 @@ void ConcentrationBoard::tick(int ticks) {
             for (std::size_t i = 0; i < faces_.size(); ++i) {
                 if (!sneak_shown_[i]) continue;
                 sneak_shown_[i] = false;
-                if (faces_[i] == CardFace::Shown) faces_[i] = CardFace::Hidden;
+                if (faces_[i] == CardFace::Shown) flip_back(static_cast<int>(i));
             }
         }
     }

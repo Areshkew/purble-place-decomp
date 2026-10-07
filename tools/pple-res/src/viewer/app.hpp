@@ -52,6 +52,14 @@ private:
     bool advance_flips();
     bool advance_card_fx();
     void timed_refresh();
+    // What the time bar draws from: the first lit segment of <TimeBarGreen>'s 226, and whether the
+    // clock has reached the <TimeBarRed> threshold.  The bar is part of the card layer's draw list,
+    // so the tick loop has to notice a change in it even when no card moved.
+    struct TimeBarState {
+        int elapsed = 0;
+        bool red = false;
+    };
+    TimeBarState time_bar_state() const;
     void load_menu_clouds();
     bool append_label(const pple::SceneItem& item);
     void build_loading();

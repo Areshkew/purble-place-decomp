@@ -402,11 +402,184 @@ int cmd_cards(const std::vector<std::string>& files) {
     return 0;
 }
 
+// The three special cards are the ones whose match does more than score: the Wild Card pairs with
+// anything, the Chef sweeps every Chef card and the Mixer reshuffles the board.  The spam check
+// stays on plain type-0 cards so its bookkeeping is not disturbed.
+bool is_special_card(const pple::CardPools& pools, int id) {
+    return id == pools.wild || id == pools.mixer || id == pools.chef || id == pools.time_bonus;
+}
+
+int face_up_cards(const pple::ConcentrationBoard& board) {
+    int up = 0;
+    for (int i = 0; i < board.cell_count(); ++i)
+        if (board.face(i) == pple::CardFace::Shown) ++up;
+    return up;
+}
+
+// The invariant the bug broke: Board+0xB0 is the card the next click will pair with, so it is
+// always one the player can see.
+bool waiting_card_is_face_up(const pple::ConcentrationBoard& board) {
+    const int waiting = board.pending_reveal();
+    return waiting < 0 || board.face(waiting) == pple::CardFace::Shown;
+}
+
+// `pairs --spam-check`: the fast-click regression.  Card::HandleEvent (0x10007C1F4, case 1)
+// accepts a click on any card that is down while a mismatched pair is still face up, and the
+// engine holds exactly one card waiting for a partner (Board+0xB0) plus one Card+0x3C countdown
+// per pair.  The reconstruction had a single board-wide lockout instead, which let every extra
+// click leave another card face up and let the waiting card be turned back while its slot kept
+// pointing at it -- so the next click could pair with, and send to the jar, a card that was not
+// face up.  This drives the same click/tick API the mouse handler uses.
+bool pairs_spam_check(const std::vector<pple::ConcentrationLevel>& levels, std::size_t at,
+                      const pple::CardPools& pools, const pple::ConcentrationConstants& constants,
+                      const pple::CardsBox& box, unsigned seed) {
+    pple::ConcentrationBoard board;
+    if (!board.reset(levels, at, pools, constants, box, seed)) {
+        std::printf("  spam check   : board reset failed\n");
+        return false;
+    }
+    bool ok = true;
+    const auto check = [&ok](bool pass, const char* what) {
+        std::printf("  spam check   : %-52s %s\n", what, pass ? "PASS" : "FAIL");
+        ok = ok && pass;
+    };
+    // A plain type-0 card, so Card::DoMatcher's ordinary branches are the only ones that run.
+    const auto plain = [&](int cell) {
+        const pple::CardDef* def = board.card(cell);
+        return def != nullptr && def->type == 0 && !is_special_card(pools, def->id);
+    };
+    const int cells = board.cell_count();
+    // a,b: a mismatching pair.  c,d: a matching pair used as the third click and its partner.
+    // e,f: a second mismatching pair, clicked while the first is still counting down.
+    int a = -1, b = -1, c = -1, d = -1, e = -1, f = -1;
+    for (int i = 0; i < cells && a < 0; ++i) {
+        if (!plain(i)) continue;
+        for (int j = i + 1; j < cells; ++j)
+            if (plain(j) && board.card_id(j) != board.card_id(i)) { a = i; b = j; break; }
+    }
+    for (int i = 0; i < cells && c < 0; ++i) {
+        if (i == a || i == b || !plain(i)) continue;
+        for (int j = i + 1; j < cells; ++j)
+            if (j != a && j != b && plain(j) && board.card_id(j) == board.card_id(i)) {
+                c = i; d = j; break;
+            }
+    }
+    for (int i = 0; i < cells && e < 0; ++i) {
+        if (i == a || i == b || i == c || i == d || !plain(i) || board.card_id(i) == board.card_id(c))
+            continue;
+        for (int j = i + 1; j < cells; ++j)
+            if (j != a && j != b && j != c && j != d && plain(j) &&
+                board.card_id(j) != board.card_id(i))
+                { e = i; f = j; break; }
+    }
+    if (a < 0 || b < 0 || c < 0 || d < 0 || e < 0 || f < 0) {
+        std::printf("  spam check   : this board has no plain mismatch/match/mismatch set\n");
+        return false;
+    }
+    std::printf("  spam check   : cells a=%d b=%d (ids %d,%d mismatch), c=%d d=%d (id %d), e=%d f=%d\n",
+                a, b, board.card_id(a), board.card_id(b), c, d, board.card_id(c), e, f);
+
+    // 1. Two mismatched pairs, armed five ticks apart.  Each one has its own Card+0x3C, so the
+    //    older pair turns back on its own clock instead of being postponed by the newer one --
+    //    which is what used to let a fast clicker keep every card it touched face up.
+    const pple::ClickResult r1 = board.click(a);
+    const int waiting_after_first = board.pending_reveal();
+    const pple::ClickResult r2 = board.click(b);
+    check(r1.accepted && !r1.second && waiting_after_first == a, "the first card waits for a partner");
+    check(r2.mismatch && board.pending_reveal() < 0 && board.mismatch_active(),
+          "a mismatch arms that pair only");
+    check(waiting_card_is_face_up(board), "the waiting card is always face up");
+    board.tick(5);
+    board.click(e);
+    const pple::ClickResult r3 = board.click(f);
+    check(r3.mismatch && board.mismatch_active(), "a second pair counts down as well");
+    // 19 ticks is a pair's own schedule: 10 of flip-forward, then /RevealDuration 8 spent down to
+    // -1.  At t=20 the first pair is due and the second, armed at t=5, is not.
+    board.tick(15);
+    check(board.face(a) == pple::CardFace::Hidden && board.face(b) == pple::CardFace::Hidden,
+          "the first pair turns back on its own clock");
+    check(board.face(e) == pple::CardFace::Shown && board.face(f) == pple::CardFace::Shown,
+          "a newer pair does not postpone it");
+
+    // 2. A card picked while the second pair is still up -- the click that used to be swallowed
+    //    into the same lockout.  It keeps its place and stays face up when that pair goes back
+    //    down, so the next click pairs with a card the player can see.
+    board.click(c);
+    check(board.pending_reveal() == c && board.face(c) == pple::CardFace::Shown,
+          "a card picked during a reveal waits, face up");
+    board.tick(10);
+    check(board.face(e) == pple::CardFace::Hidden && board.face(f) == pple::CardFace::Hidden,
+          "the second pair turns back too");
+    check(face_up_cards(board) == 1 && board.pending_reveal() == c &&
+              board.face(c) == pple::CardFace::Shown,
+          "the waiting card is still the one that is up");
+    check(waiting_card_is_face_up(board), "nothing waits that the player cannot see");
+    const bool both_visible =
+        board.face(c) == pple::CardFace::Shown && board.face(d) == pple::CardFace::Hidden;
+    const pple::ClickResult r4 = board.click(d);
+    check(both_visible && r4.match && r4.flew.size() == 2 &&
+              board.face(c) == pple::CardFace::Matched && board.face(d) == pple::CardFace::Matched,
+          "the jar takes only the pair that is on screen");
+
+    // 3. Card::HandleEvent's other click path: a card that is already face up goes back down, and
+    //    the slot it was waiting in is cleared with it.
+    if (!board.reset(levels, at, pools, constants, box, seed)) return false;
+    board.click(a);
+    const pple::ClickResult r5 = board.click(a);
+    check(r5.accepted && r5.taken_back && board.pending_reveal() < 0 &&
+              board.face(a) == pple::CardFace::Hidden,
+          "a second click on a face-up card turns it back down");
+
+    // A storm: one click per tick for three seconds.  Every pair turns back 19 ticks after its own
+    // second card, so what can be face up at once is the clicks of the last 19 ticks, not the
+    // board.  The biggest level of the difficulty is used, so that window is much smaller than the
+    // board and the check has something to catch.
+    std::size_t storm_at = 0;
+    for (std::size_t i = 1; i < levels.size(); ++i)
+        if (levels[i].cell_count() > levels[storm_at].cell_count()) storm_at = i;
+    if (!board.reset(levels, storm_at, pools, constants, box, seed)) return false;
+    const int window = 10 + constants.reveal_duration + 1;
+    int peak = 0;
+    bool every_waiting_card_was_up = true;
+    for (int t = 0; t < 90; ++t) {
+        for (int i = 0; i < board.cell_count(); ++i) {
+            if (board.face(i) != pple::CardFace::Hidden) continue;
+            board.click(i);
+            break;
+        }
+        board.tick();
+        peak = std::max(peak, face_up_cards(board));
+        every_waiting_card_was_up = every_waiting_card_was_up && waiting_card_is_face_up(board);
+    }
+    std::printf("  spam check   : 90 clicks on the %dx%d board, peak %d card(s) face up, window %d tick(s)\n",
+                board.columns(), board.rows(), peak, window);
+    check(peak <= window + 2, "the face-up count stays inside one reveal window");
+    check(every_waiting_card_was_up, "no click paired with a card that was not up");
+
+    // Stop clicking: everything except the waiting card goes back down, and putting that one back
+    // leaves the board with nothing face up at all.
+    while (board.pending_reveal() >= 0 && board.face(board.pending_reveal()) == pple::CardFace::Shown)
+        board.click(board.pending_reveal());
+    board.tick(window + 5);
+    check(face_up_cards(board) == 0 && board.pending_reveal() < 0,
+          "nothing is left face up or waiting");
+    return ok;
+}
+
+// The optional checks `pairs` can run on the board it just built, so the command's own signature
+// stays one board plus one autoplay flag.
+struct PairsChecks {
+    bool layout = false;      // print every cell
+    bool sneak = false;       // the one-token peek fixture
+    bool wild_early = false;  // spend the Wild Card before the autoplay does
+    bool spam = false;        // the fast-click regression
+};
+
 // Purble Pairs: build a real board from the shipped data and, on request, play it out.  The
 // autoplay is the rules test - it solves the board through the same click/tick API the viewer
 // would use, so a win proves the deck, the match rule and the scoring agree.
 int cmd_pairs(const std::string& path, const std::string& difficulty, int level_index, unsigned seed,
-              bool autoplay, bool show_layout, bool sneak_check, bool wild_early) {
+              bool autoplay, const PairsChecks& checks) {
     std::string error;
     const auto pe = PeImage::load(path, error);
     if (!pe) {
@@ -508,7 +681,7 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
                     static_cast<int>(board.deck().size()), distinct_normal, chosen->num_card_types, wilds);
     }
 
-    if (show_layout) {
+    if (checks.layout) {
         std::printf("\n  index  col row     x     y   w   h   id  type  face\n");
         for (const pple::ConcentrationSlot& s : board.slots()) {
             const pple::CardDef* def = pools.find(s.card_id);
@@ -518,7 +691,7 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
         }
     }
 
-    if (sneak_check) {
+    if (checks.sneak) {
         // Fixture grants one token, including Advanced (which starts with none), so the
         // same clock/duration regression runs on each difficulty without a special-card match.
         auto fixture = *chosen;
@@ -553,13 +726,16 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
                     fixture.timed() ? ", zero-clamp/loss" : "", ok ? "PASS" : "FAIL");
         if (!ok) return 1;
     }
-    if (!autoplay && !wild_early) return 0;
+    if (checks.spam) {
+        if (!pairs_spam_check(chosen_levels, chosen_at, pools, constants, box, seed)) return 1;
+    }
+    if (!autoplay && !checks.wild_early) return 0;
 
     // --wild-early spends the Wild Card on the first partner it can find, which is what a player
     // does.  Card::DoMatcher's wild branch then clears that card's twin through
     // Card::FindOtherMatch; before that twin was modelled, the stranded card made Board::Update's
     // completion test unreachable and the round never finished.  Combine with --autoplay.
-    if (wild_early) {
+    if (checks.wild_early) {
         if (pools.wild < 0) {
             std::printf("  wild early   : this deck has no Wild Card\n");
         } else {
@@ -595,10 +771,17 @@ int cmd_pairs(const std::string& path, const std::string& difficulty, int level_
 
     int guard = 0;
     while (!board.finished() && guard++ < 200000) {
-        if (board.lockout_ticks() > 0) {
+        // A pair that did not match counts itself down, and nothing else can be clicked until the
+        // board has settled, so let the clock run.
+        if (board.mismatch_active()) {
             board.tick();
             continue;
         }
+        // This helper clicks in pairs, so a card left waiting for a partner is turned back over
+        // first -- the mouse's own way out, Card::HandleEvent's click on a face-up card.
+        while (board.pending_reveal() >= 0 &&
+               board.face(board.pending_reveal()) == pple::CardFace::Shown)
+            board.click(board.pending_reveal());
         int first = -1, second = -1;
         for (int i : order) {
             if (board.face(i) != pple::CardFace::Hidden) continue;
@@ -1427,7 +1610,7 @@ void usage() {
                  "  pple-res strings <file.mui> [--id N] [--grep TEXT] [--limit N]\n"
                  "  pple-res muicheck <file.mui> <pe>...   validate the |id|context|text ids\n"
                  "  pple-res cards   <pe>...    the Concentration card deck and its pools\n"
-                 "  pple-res pairs   <pe> [--difficulty D] [--level N] [--seed N] [--autoplay] [--layout] [--sneak-check] [--wild-early]\n"
+                 "  pple-res pairs   <pe> [--difficulty D] [--level N] [--seed N] [--autoplay] [--layout] [--sneak-check] [--wild-early] [--spam-check]\n"
                  "  pple-res png     <pe> <resource-name> [outfile.ppm]\n"
                  "  pple-res pngscan <pe>...\n"
                  "  pple-res rgmh    <file>\n"
@@ -1585,8 +1768,13 @@ int main(int argc, char** argv) {
         const std::string difficulty = flag_value("--difficulty", "");
         const int level_index = std::atoi(flag_value("--level", "0").c_str());
         const unsigned seed = static_cast<unsigned>(std::stoul(flag_value("--seed", "1")));
+        PairsChecks checks;
+        checks.layout = has_flag("--layout");
+        checks.sneak = has_flag("--sneak-check");
+        checks.wild_early = has_flag("--wild-early");
+        checks.spam = has_flag("--spam-check");
         return cmd_pairs(positional[0], difficulty, level_index, seed, has_flag("--autoplay"),
-                         has_flag("--layout"), has_flag("--sneak-check"), has_flag("--wild-early"));
+                         checks);
     }
     if (cmd == "cards") {
         if (positional.empty()) { usage(); return 1; }

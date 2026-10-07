@@ -38,9 +38,11 @@ $game = @("$d\PurblePlace.dll", "$d\PurblePlace2.dll", "$d\CardGames.dll")
 ```
 
 Controls: **left click** a card to flip it, or a choice button to pick a difficulty and start the
-next round; **click anywhere** to advance or dismiss the Professor's tip; **N** or **R** for a new
-round, **ESC** to go back to the menu (and to quit from the menu), **SPACE** to toggle whole-pixel
-scaling, **S** to write the current image as a PPM. `--mute` silences the sound effects. `--mui`
+next round; **click a card that is already face up** to turn it back down (`Card::HandleEvent`'s
+`FaceAnimation` path, which also clears the card waiting for a partner); **click anywhere** to
+advance or dismiss the Professor's tip; **N** or **R** for a new round, **ESC** to go back to the
+menu (and to quit from the menu), **SPACE** to toggle whole-pixel scaling, **S** to write the
+current image as a PPM. `--mute` silences the sound effects. `--mui`
 is optional; without it the labels fall back to the English text embedded in the XML, which is why
 the title then renders in Comic Sans MS rather than Segoe UI. The difficulty chooser and the
 end-of-round panel keep working without it: they carry the shipped `.mui` wording as their
@@ -127,7 +129,7 @@ name filter runs before the case fold. Use `pple-res find <pe>... <payload text>
 | `find <pe>... <text> [--limit N]` | Case-insensitive search (ASCII and UTF-16LE) over every resource payload; prints resource, offset and context |
 | `split <pe>...` | The `SPLITLIST.XML` table, with each split sheet's four `x2` page resources |
 | `cards <pe>...` | The Concentration card deck (`UI\CONCENTRATION\CARDS.XML`) and the `<type>` -> pool mapping |
-| `pairs <pe> [--difficulty D] [--level N] [--seed N] [--layout] [--autoplay] [--sneak-check] [--wild-early]` | Builds a real Purble Pairs board from the shipped data; `--layout` prints every cell, `--autoplay` plays the whole round out, `--wild-early` spends the Wild Card on the first partner before the autoplay does (the regression test for the twin it clears) |
+| `pairs <pe> [--difficulty D] [--level N] [--seed N] [--layout] [--autoplay] [--sneak-check] [--wild-early] [--spam-check]` | Builds a real Purble Pairs board from the shipped data; `--layout` prints every cell, `--autoplay` plays the whole round out, `--wild-early` spends the Wild Card on the first partner before the autoplay does (the regression test for the twin it clears), `--spam-check` is the fast-click regression: one click per tick, per-pair mismatch countdowns and the card waiting for a partner (17 assertions) |
 | `strings <file.mui> [--id N] [--grep TEXT] [--limit N]` | Dumps the `RT_STRING` table by id |
 | `muicheck <file.mui> <pe>...` | Compares every `\|id\|context\|English` reference in the XML resources against the MUI |
 | `audio <pe>... [--list]` | `AUDIO.XML` events with their `File`/`Volume`/`Buffers`, and how each `File` resolves under `AUDIO\SFX\` |
@@ -379,7 +381,9 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-view --pairs` match animation | `Card::DoForceMatch` (`0x10007D114`) arms a 10-tick countdown and `Card::InitExplosion` (`0x10007E518`) gives each of the four sparks a source at a corner of the cell and a destination 30 px outside it; `Card::AnimateExplosion` (`0x10007E6D0`) walks them for 30 ticks with `position = src + (dst-src)*(3t^2(1-t)+t^4)` and `scale = 300t(1-t)^2 + 100(1-t)^3 + 600t^2(1-t) + 300t^4` percent. `Card::OnHide` (`0x10007F538`) then hides the art and shows the level's **BlankCard** (`blankcardbutton.xml`), and the coin leaves. `s6-match-strip.png`, `s6-matchnet800.png` |
 | `pple-view --pairs` the card deal-in | `Card::InitUI` (`0x10007C0B6`) puts every card in state 6 with `Card+0x14 = 0` and clears `Board+0x1E8`; `Board::InitLevel` (`0x1000895C7`) gives each one `Card+0x40 = rand() % 60` ticks of delay; `Card::DoIntroMove` (`0x10007E104`) then shows its "IntroImage" — a second node built from this level's CardBack `/buttonpath`, i.e. the card back — and grows it for 45 ticks as `Card+0x30 * (6v(1-v)^2 + (Card+0x30/10)(1-v)^3 + 3*(Card+0x30/2)*v^2(1-v) + Card+0x30*v^3)`, `v = Card+0x14 / 45`: 10 percent at `v = 0`, a 7.5 percent overshoot at the half way point. `Card::StopIntroAnimation` (`0x10007E390`) hides the IntroImage and shows the real card, and `Board::Update` (`0x10008A576`) sets `Board+0x1E8 = 1` and calls `DisplayIntro`. The run logs `deal: 25 card(s), delay 0..52 tick(s), 45 ticks each` then `deal: done` after 97 ticks (3.2 s); a click on a card logs `deal: stopped by a click`. Captures `s11-deal-300/900/1400/2000/3000.png` across the deal, `s11-intro.png` after it |
 | `pple-view --pairs` jar burst | `Jar::Update` (`0x10008373C`) plays `Con_BoardCleared` when the last coin lands, shows the level's `/moviepath` (`Jar::LoadMovies` `0x1000835D0`), wipes the tray from the top down as it runs and then calls `Jar::StopExplosion` (`0x100083A20`). The movie is 88 frames / 322 parts at the default **30 fps** (`PurblePlaceMovie::InitFromXml` `0x100087A89`) and its anchor is `/JarContainer` + `/JarMovieContainer` = `0,-110`. After a win the tray is empty: `s6-burst-3200.png`, `s6-won.png` |
-| `pple-view --pairs` mismatch reveal | `Card::DoMatcher`'s mismatch branch is `Card+0x3C = Board+0x1C4` and `Board::XMLConstants` (`0x100089FDC`) stores `/RevealDuration` **raw**, so the shipped 8 is 8 ticks, not 8 seconds. It starts when `Card::OnReveal` (`0x10007FA6B`) runs `DoMatcher`, i.e. after the flip, and `Card::DoCardClick` (`0x10007CD65`) has no board-wide lockout. `s6-miss-strip.png`: face up at 300 and 500 ms, flipping back at 700, backs at 900 |
+| `pple-view --pairs` mismatch reveal | `Card::DoMatcher`'s mismatch branch is `Card+0x3C = Board+0x1C4` on the **second** card, with `Card+0xF8` left holding the first, and `Board::XMLConstants` (`0x100089FDC`) stores `/RevealDuration` **raw**, so the shipped 8 is a tick value, not seconds. It starts when `Card::OnReveal` (`0x10007FA6B`) runs `DoMatcher`, i.e. after the flip, and `Card::Update`'s tail (`0x10007DE08`) flips the pair back on the tick after the counter passes zero: 10 + 9 = **19 ticks (633 ms)** from the second click. `Card::DoCardClick` (`0x10007CD4C`) has no board-wide lockout, so every pair counts down on its own. `s6-miss-strip.png`: face up at 300 and 500 ms, flipping back at 700, backs at 900 |
+| `pple-view --pairs` time bar (section 23.6) | Drawn from the board's own clock by `App::time_bar_state()`: segment `i` is lit while `i >= (total - left) / (total / 226)` and the bar swaps to `<TimeBarRed>` below 900 ticks. The frame loop compares that state before and after each tick, so a timed board keeps updating while nothing else moves — an idle `Intermediate,0` board now differs between 2 s and 5 s by 41,807 bytes where the previous commit was byte-identical |
+| `pple-view --pairs` click handling (section 23) | A click while a mismatched pair is still face up is accepted, exactly as `Card::DoCardClick` does: the board holds **one** card waiting for a partner (`Board+0xB0`) and one `Card+0x3C` countdown per pair, and a click on a card's `FaceAnimation` node turns a face-up card back down and clears that slot. `--spam-check` asserts all of it: 17/17 PASS, and the 90-click storm on Advanced's 8x8 board peaks at **19 cards face up** against a 19-tick window, where a single restarted board-wide timer peaks at 48 and fails 8 of the assertions. Captures `s23-mismatch-third.png`, `s23-extra-card-stays.png`, `s23-taken-back.png` |
 | `pple-view --menu --loading` | `Engine_SetBackMode`'s `UI\PurblePlace\Loading.xml` on `Loading.jpg` with the two `LOADING...` labels, then the menu. `s6-loading.png` |
 | `pple-view --menu` clouds | `PurblePlaceManager::Init` (`0x10007124B`) builds `UI\PurblePlace\CloudsMovie.xml` into a `Base` created as a child of the Background sprite and puts it at `-390,-300`: **1016 frames at 10 fps**, loop off (`0x10007131E`), so it drifts once and rests. Drawn between the Background and the Foreground, which is where that child sits: `s6-clouds-strip.png` differs only in the sky band between 0.2, 12 and 24 s |
 | `pple-view --difficulty` | the in-canvas Select Difficulty screen: `difficulty: Select Difficulty, 3 option(s)`; the classroom background, the waiting Professor and a green `Tips\Styles\Green` panel at `180,36 440x320` with MUI 213/214/219 and three `251x60` option buttons at `274,146+68i` carrying MUI 215/216/217 split into name and grid description. `s11-picker3.png` |
@@ -520,6 +524,18 @@ features or existing known-gap fixes were included in this structural milestone.
     off. The shipped build also gates tips on `g_pPurblePlaceManager+3*8+12`;
   * the Mixer's once-per-level guard `Board+0x1DC` is approximated by `Card::DoMixerCheck`'s
     `> 3` card gate alone;
+  * **the card's state machine is coarser than the engine's**. `Card+0x568` (`+346` dwords) holds
+    0/1/2/3/4/5/6/8 in the shipped build, and `Card::HandleEvent` (`0x10007C1F4`) lets a state-4
+    card — one that is turning back down, its back art visible again — start its flip forward
+    again. The reconstruction keeps `CardFace` plus the viewer's single flip for both directions,
+    so a click on a card that is still turning is refused instead. Two related simplifications:
+    `Board::Update`'s completion pass only force-matches cards in state 0, where the
+    reconstruction takes every card that is left (and clears the card waiting for a partner with
+    it), and `mismatch_ticks()` reports -1 during the flip-forward, before `Card::OnReveal` arms
+    `Card+0x3C`;
+  * the Professor's `ProFlipNoMatchTimed` / `ProFlipMatchUntimed` tip, which `Card::DoMatcher`
+    shows on a mismatch (`0x10007D2BC..0x10007D31F` through `Professor::MoveIn`/`MoveOut`), is
+    not shown;
   * `<NumCardTypes>`, which is read from the XML into `Level+8` and has no reader I could find.
     It agrees with the number of letter runs for Beginner (4) but not for Intermediate (stored 5,
     8 runs) or Advanced (`-1`, 9-12 runs);

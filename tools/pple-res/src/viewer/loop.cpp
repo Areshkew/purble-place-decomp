@@ -166,12 +166,19 @@ int App::run_loop() {
                 // arrived.
                 if (advance_deal()) flipped = true;
                 const int before = pairs_board.pending_reveal();
-                const int lock_before = pairs_board.lockout_ticks();
+                const int faces_before = pairs_board.face_revision();
                 const bool sneak_before = pairs_board.sneak_active();
+                const TimeBarState bar_before = time_bar_state();
                 pairs_board.tick();
+                const TimeBarState bar_after = time_bar_state();
+                // Each mismatched pair has its own countdown now, so the faces themselves are what
+                // says whether a tick turned something over.  The time bar's segment and its red
+                // threshold are part of the same draw list, so a clock tick that moves them counts
+                // too -- otherwise only a mismatch would keep the bar up to date.
                 if (pairs_board.pending_reveal() != before ||
-                    pairs_board.lockout_ticks() != lock_before ||
-                    pairs_board.sneak_active() != sneak_before) {
+                    pairs_board.face_revision() != faces_before ||
+                    pairs_board.sneak_active() != sneak_before ||
+                    bar_after.elapsed != bar_before.elapsed || bar_after.red != bar_before.red) {
                     ticked = true;
                     sync_flips();
                 }
