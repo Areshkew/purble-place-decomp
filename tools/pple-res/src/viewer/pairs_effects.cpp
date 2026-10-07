@@ -1,7 +1,81 @@
 #include "app.hpp"
 #include "audio.hpp"
 
+#include <algorithm>
+#include <random>
+
 namespace pple::viewer {
+
+// ---- the card deal-in -------------------------------------------------------------
+// Board::InitLevel (0x1000895C7) gives every card `Card+0x40 = rand() % 60` ticks of delay while
+// the intro runs, and Card::InitUI (0x10007C0B6) puts each one in state 6 with `Card+0x14 = 0`
+// and clears `Board+0x1E8`, so the board does not answer clicks until the deal is over.
+// Card::DoIntroMove (0x10007E104) then shows the card's "IntroImage" -- the node created from
+// this level's CardBack /buttonpath, i.e. a copy of the card back -- and grows it for 45 ticks:
+//
+//   v     = Card+0x14 / 45, clamped to [0, 1]
+//   scale = Card+0x30 * (6v(1-v)^2 + (Card+0x30/10)(1-v)^3
+//                       + 3*(Card+0x30/2) * v^2(1-v) + Card+0x30 * v^3)
+//
+// i.e. it starts at 10 percent of the card's own size, overshoots by 7.5 percent at the half way
+// point and settles.  Card::StopIntroAnimation (0x10007E390) then hides the IntroImage and shows
+// the real card, Board::Update (0x10008A576) sets Board+0x1E8 = 1, and the same function calls
+// Professor::DisplayIntro -- which is where the reconstruction starts the intro bubbles.
+void App::start_deal() {
+    // One entry per cell of this board; the highlight slot build_pair_card_assets pushes after
+    // the cards carries index -1 and is not a card.
+    const std::size_t cards = static_cast<std::size_t>(pairs_board.cell_count());
+    card_deal_delay.assign(cards, 0);
+    card_deal_tick.assign(cards, 0);
+    if (cards == 0) {
+        pairs_dealing = false;
+        return;
+    }
+    std::mt19937 rng(seed_for_pairs ^ 0x9e3779b9u);
+    int longest = 0;
+    for (std::size_t i = 0; i < cards; ++i) {
+        const int delay = static_cast<int>(rng() % 60u);
+        card_deal_delay[i] = delay;
+        longest = std::max(longest, delay);
+    }
+    pairs_dealing = true;
+    std::printf("  deal: %zu card(s), delay 0..%d tick(s), %d ticks each\n", cards, longest,
+                kCardIntroTicks);
+}
+
+// One 30 Hz step.  Returns true while a card moved, so the frame is rebuilt.
+bool App::advance_deal() {
+    if (!pairs_dealing) return false;
+    bool changed = false;
+    bool any_left = false;
+    for (std::size_t i = 0; i < card_deal_tick.size(); ++i) {
+        if (card_deal_delay[i] > 0) {
+            --card_deal_delay[i];
+            changed = true;
+        } else if (card_deal_tick[i] < kCardIntroTicks) {
+            ++card_deal_tick[i];
+            changed = true;
+        }
+        if (card_deal_delay[i] > 0 || card_deal_tick[i] < kCardIntroTicks) any_left = true;
+    }
+    if (!any_left) finish_deal();
+    return changed;
+}
+
+// Card::StopIntroAnimation / Board::StopIntroAnimation (0x10008B45C): every card takes its final
+// size at once (a click during the deal stops it and is swallowed by Card::DoCardClick
+// 0x10007CD76), and Board::Update's DisplayIntro follows.
+void App::finish_deal() {
+    if (!pairs_dealing) return;
+    pairs_dealing = false;
+    for (int& tick : card_deal_tick) tick = kCardIntroTicks;
+    for (int& delay : card_deal_delay) delay = 0;
+    std::printf("  deal: done\n");
+    if (intro_wanted) {
+        intro_wanted = false;
+        professor_intro_begin();
+    }
+}
 
 // Loads a level's burst movie once and caches it.  Jar::LoadMovies does this at Jar::InitUI,
 // but the document is 250 KB of keyframes (88 frames, 322 parts), so it is deferred to the

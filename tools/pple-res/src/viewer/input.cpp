@@ -137,6 +137,17 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             break;
         }
     }
+    // Card::DoCardClick (0x10007CD65) tests Board+0x1E8 first: while the deal-in is still running
+    // a click on a card stops the whole thing (Board::StopIntroAnimation 0x10008B45C, which brings
+    // every card in at once) and does nothing else.  The screen's own buttons are not gated by
+    // it, so ReturnToMainMenu and New Game still work while the cards are arriving.
+    if (hit >= 0 && pairs_dealing) {
+        std::printf("  deal: stopped by a click\n");
+        finish_deal();
+        timed_refresh();
+        refresh_hud();
+        return true;
+    }
     if (hit < 0) {
         // The sneak-peek tokens: SneakPeakArea::HandleEvent (0x100084D3C) plays
         // Con_SneakPeek_Click (proto 0x7A) and starts the peek, which is Board::SneakPeaker

@@ -49,6 +49,8 @@ int App::run(int argc, char** argv) {
         else if (a == "--difficulty") difficulty_mode = true;
         else if (a == "--intro") intro_wanted = true;
         else if (a == "--no-intro") intro_wanted = false;
+        else if (a == "--deal") deal_enabled = true;
+        else if (a == "--no-deal") deal_enabled = false;
         else if (a == "--no-tips") tips_enabled = false;
         else if (a == "--no-container-offsets") container_offsets = false;
         else if (a == "--script-click" && i + 1 < args.size()) script_click_spec = args[++i];
@@ -234,9 +236,9 @@ int App::run(int argc, char** argv) {
         screen = Screen::Concentration;
         load_current(true);
         // An explicit --pairs start is the analysis hook: it goes straight to the board.  The
-        // menu path runs the Professor's entrance and his intro bubbles, and --intro asks for
-        // them here too.
-        if (intro_wanted) professor_intro_begin();
+        // menu path and --intro ask for the Professor's entrance and his intro bubbles, and
+        // Board::Update calls DisplayIntro only once the deal-in has finished, so build_pairs
+        // starts them from there rather than here.
     } else if (difficulty_mode) {
         // The in-canvas "Select Difficulty" screen on its own, for a capture or a manual run.
         build_difficulty();

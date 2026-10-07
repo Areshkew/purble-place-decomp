@@ -270,6 +270,18 @@ void App::build_pairs() {
     }
     build_pair_level_art(scene_bytes, scene_how);
     const int failed = build_pair_card_assets();
+    // Card::InitUI (0x10007C0B6) puts every card in state 6 and clears Board+0x1E8, so the board
+    // is inert while the cards grow in; Board::Update then calls Professor::DisplayIntro.  The
+    // headless hooks take Card::InitUI's other branch -- Card+0x14 = 45, Board+0x1E8 = 1, no
+    // IntroImage -- because a scripted run has no frames to watch the deal with, which is the
+    // same reason --pairs-click and --pairs-solve skip the jar's flight.  A rebuild of an
+    // already-dealt board (Board::NewLevel or the Mixer) does not deal again.
+    const bool deal_this_board = !keep_state && deal_enabled && pairs_click.empty() &&
+                                 !pairs_solve && !pairs_reveal && pairs_ticks <= 0;
+    if (deal_this_board)
+        start_deal();
+    else
+        finish_deal();
     pairs_scene_draws = scene_draws.size();
     pairs_scene_layer = scene_draws;
     pairs_scene_width = pple::kScreenWidth;

@@ -34,6 +34,41 @@ void App::refresh_cards() {
             continue;
         }
         if (entry.index < 0 || entry.index >= pairs_board.cell_count()) continue;
+        // The deal-in.  While Board+0x1E8 is 0 the card draws its "IntroImage" -- a copy of the
+        // level's card-back art -- growing from 10 percent of its size to 100 with an overshoot,
+        // and nothing at all until its `rand() % 60` tick delay has run out.  The card's own art
+        // is hidden until Card::StopIntroAnimation (0x10007E390).
+        if (pairs_dealing) {
+            const int delay = static_cast<int>(entry.index) < static_cast<int>(card_deal_delay.size())
+                                  ? card_deal_delay[static_cast<std::size_t>(entry.index)]
+                                  : 0;
+            const int tick = static_cast<int>(entry.index) < static_cast<int>(card_deal_tick.size())
+                                 ? card_deal_tick[static_cast<std::size_t>(entry.index)]
+                                 : kCardIntroTicks;
+            if (delay > 0) continue;
+            if (tick < kCardIntroTicks && entry.tex_back != nullptr) {
+                const double v = static_cast<double>(tick) / static_cast<double>(kCardIntroTicks);
+                const double u = 1.0 - v;
+                const double s = static_cast<double>(pairs_board.slots()[static_cast<std::size_t>(
+                                     entry.index)]
+                                                         .scale_percent);
+                // Card+0x30/10 and Card+0x30/2 are integer divisions in the engine.
+                const double f = 6.0 * v * u * u + 0.1 * u * u * u +
+                                 (3.0 * std::floor(s / 2.0) / s) * v * v * u + v * v * v;
+                const float w = entry.w * static_cast<float>(f);
+                const float h = entry.h * static_cast<float>(f);
+                DrawItem d;
+                d.texture = entry.tex_back;
+                d.src = entry.src_back;
+                d.dst = SDL_FRect{entry.base_x + (entry.w - w) * 0.5f,
+                                  entry.base_y + (entry.h - h) * 0.5f, w, h};
+                d.alpha = 255;
+                scene_draws.push_back(d);
+                extent_w = std::max(extent_w, d.dst.x + d.dst.w);
+                extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+                continue;
+            }
+        }
         const pple::CardFace face = pairs_board.face(entry.index);
         const CardFx& fx = card_fx[static_cast<std::size_t>(entry.index)];
         // Card::OnHide (0x10007F538): a matched card's art is hidden and the level's

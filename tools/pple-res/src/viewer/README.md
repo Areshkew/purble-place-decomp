@@ -24,8 +24,8 @@ flags and the core library's public interfaces are unchanged.
 | Per-level card back, jar points/coins, arc and burst configuration, animation reset | [level_art.cpp](level_art.cpp): `build_pair_level_art` |
 | Card face/back/outline/blank/spark cache and time-bar assets | [card_assets.cpp](card_assets.cpp): `build_pair_card_assets` |
 | Progress indicators, count-aware sneak tokens, sneak movie loading | [pair_hud.cpp](pair_hud.cpp): `build_pair_hud` |
-| Cached card/effect draw lists, jar layering, timer/token/Professor draws | [pairs_render.cpp](pairs_render.cpp): `refresh_cards`, `timed_refresh` |
-| Flips, match sparks, flying jar coins, burst start/cache | [pairs_effects.cpp](pairs_effects.cpp): `advance_flips`, `advance_card_fx`, `spawn_arcs` |
+| Cached card/effect draw lists (including the deal-in's growing cards), jar layering, timer/token/Professor draws | [pairs_render.cpp](pairs_render.cpp): `refresh_cards`, `timed_refresh` |
+| Flips, the deal-in, match sparks, flying jar coins, burst start/cache | [pairs_effects.cpp](pairs_effects.cpp): `advance_flips`, `advance_card_fx`, `start_deal`, `advance_deal`, `finish_deal`, `spawn_arcs` |
 | Board completion, score/rank, settings save | [pairs_round.cpp](pairs_round.cpp): `finish_board_end`, `report_round_end` |
 | Professor state machine, tips, transitions | [professor.cpp](professor.cpp): `professor_show`, `professor_display_tip`, `professor_tip_closed`, `professor_advance`, `professor_round_end`, `professor_intro_begin`, `professor_level_tip` |
 | Tip panel: TIPS.XML, the green 9-slice, text and fonts | [tips.cpp](tips.cpp): `load_tips`, `load_tip_style`, `show_tip`, `append_panel`, `append_text`, `face_font`, `rebuild_overlay` |
@@ -72,6 +72,13 @@ textures live in `tip.owned` and the panels' in `result_draws`, so `release_over
 The Professor's six movies are parsed once into `prof_movie_cache` and the live one is copied
 into `professor.movie`; `professor_advance` runs from the 30 Hz tick in [loop.cpp](loop.cpp) and
 is the only place the state machine moves. Do not add movie or sheet loads to it.
+
+The deal-in runs on the same 30 Hz tick, before the board's own step: `advance_deal` moves each
+card's `Card+0x14` counter, `refresh_cards` draws a card that has not started yet as nothing and
+one that is still growing as its back art scaled around the cell, and `finish_deal` is both the
+end of the deal and the place `Board::Update`'s `DisplayIntro` is reproduced, so `intro_wanted`
+is consumed there rather than at `start_game`. `click_scene`'s card hit test stops the deal the
+way `Card::DoCardClick` does; the screen's own buttons are not gated by it.
 
 ## Verification and future changes
 

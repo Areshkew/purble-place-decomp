@@ -143,10 +143,13 @@ void App::professor_round_end(bool won) {
         professor_display_tip();
 }
 
-// DisplayIntro: from hidden, Pro_Enter plays first and DisplayTip follows when it stops.
+// DisplayIntro: from hidden, Pro_Enter plays first and DisplayTip follows when it stops.  The
+// caller (Board::Update, once the deal-in has finished) may already have chosen the bubble:
+// DisplayIntro shows the "How To Play" pair while ProIntro is enabled and falls back to the
+// single ProWelcome bubble for a game already seen.
 void App::professor_intro_begin() {
+    if (professor.tip_name.empty()) professor.tip_name = "ProIntro";
     professor.anim_kind = 0;
-    professor.tip_name = "ProIntro";
     professor.tip_y = 150.0f;
     professor_show("ProfessorEnterAnimation", ProfPhase::Enter, false);
 }

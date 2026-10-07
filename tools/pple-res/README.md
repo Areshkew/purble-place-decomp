@@ -156,7 +156,7 @@ pple-view <pe>... [--menu] [--difficulty] [--resource NAME] [--sprite XML] [--sc
                   [--movie-name NAME] [--anchor X,Y] [--frame N] [--state N]
                   [--pairs [D,L,S]] [--pairs-reveal] [--pairs-click I,J] [--pairs-ticks N]
                   [--pairs-solve] [--pairs-save PATH] [--mce] [--no-container-offsets] [--mui PATH]
-                  [--intro] [--no-intro] [--no-tips]
+                  [--intro] [--no-intro] [--no-tips] [--deal] [--no-deal]
                   [--loading [MS]]
                   [--play NAME] [--volume N] [--mute]
                   [--script-click "x,y;x,y;wait:MS"] [--shot-delay MS] [--bench N] [--bench-build N]
@@ -241,6 +241,15 @@ mouse uses, and `--pairs-ticks N` advances the engine's fixed 30 Hz step N times
 time bar, the red threshold and the loss state are reachable immediately. `--bench N` renders N
 frames with vsync off and reports the card-layer cost; `--bench-build N` reports the cost of N
 whole scene rebuilds.
+
+Both hooks — and `--pairs-reveal`, `--pairs-ticks` and `--no-deal` — skip the **deal-in** for the
+same reason they skip the jar's flight: a scripted run has no frames to watch it with. A normal
+`--pairs` start deals: every card grows from 10 percent of its size to full over 45 ticks after
+its own `rand() % 60` ticks of delay, the board ignores clicks until the last card has arrived,
+and the first click on a card stops the whole thing and brings every card in at once
+(`Card::DoCardClick` `0x10007CD65` → `Board::StopIntroAnimation` `0x10008B45C`). The screen's own
+buttons are not gated by it, so `ReturnToMainMenu` works during the deal. The Professor's intro
+bubbles start when the deal ends, which is where `Board::Update` calls `DisplayIntro`.
 
 `--loading [MS]` starts on the game's own loading screen — `Engine_SetBackMode`'s
 `UI\PurblePlace\Loading.xml`, one 800x496 sprite on `Loading.jpg`, with the two `LOADING...`
@@ -368,6 +377,7 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-view --pairs` the jar's flying coins | `Board::DoFlyIntoJar` (`0x10008AF54`) spawns one `ArcBehavior` per matched card; `ArcBehavior::Update` (`0x100084128`) walks a quadratic Bezier over `/ArcAnimation/Frames` (25) from the card to `(LidOffSet + CurJar.w/2, CurJar.h/2)`. The apex question is settled: the control point is a constant 375 px above the container, **off the top of the scene**, but a quadratic Bezier only reaches about half way to its control point, so the drawn curve stays in frame. `s6-flight.png` |
 | `pple-view --pairs` jar draw order (session 6) | Cached cards and their sparks now precede JarBase/JarBkg; burst, arc coins and tray follow, then JarFg. `Jar::InitUI` (`0x100083218`) creates those jar children in that order. `--script-click "180,30;350,30" --shot-delay 900` visibly crosses over the board; `C:\re\traces\cpp\s7-flight-900.png` and `s7-jar-side-by-side.png`. Static scene draws are retained separately so repeated refreshes do not overwrite them. Warm card layer: **0.0838 ms/call**, 34 calls, first 9.258 ms; no per-tick scene rebuild |
 | `pple-view --pairs` match animation | `Card::DoForceMatch` (`0x10007D114`) arms a 10-tick countdown and `Card::InitExplosion` (`0x10007E518`) gives each of the four sparks a source at a corner of the cell and a destination 30 px outside it; `Card::AnimateExplosion` (`0x10007E6D0`) walks them for 30 ticks with `position = src + (dst-src)*(3t^2(1-t)+t^4)` and `scale = 300t(1-t)^2 + 100(1-t)^3 + 600t^2(1-t) + 300t^4` percent. `Card::OnHide` (`0x10007F538`) then hides the art and shows the level's **BlankCard** (`blankcardbutton.xml`), and the coin leaves. `s6-match-strip.png`, `s6-matchnet800.png` |
+| `pple-view --pairs` the card deal-in | `Card::InitUI` (`0x10007C0B6`) puts every card in state 6 with `Card+0x14 = 0` and clears `Board+0x1E8`; `Board::InitLevel` (`0x1000895C7`) gives each one `Card+0x40 = rand() % 60` ticks of delay; `Card::DoIntroMove` (`0x10007E104`) then shows its "IntroImage" — a second node built from this level's CardBack `/buttonpath`, i.e. the card back — and grows it for 45 ticks as `Card+0x30 * (6v(1-v)^2 + (Card+0x30/10)(1-v)^3 + 3*(Card+0x30/2)*v^2(1-v) + Card+0x30*v^3)`, `v = Card+0x14 / 45`: 10 percent at `v = 0`, a 7.5 percent overshoot at the half way point. `Card::StopIntroAnimation` (`0x10007E390`) hides the IntroImage and shows the real card, and `Board::Update` (`0x10008A576`) sets `Board+0x1E8 = 1` and calls `DisplayIntro`. The run logs `deal: 25 card(s), delay 0..52 tick(s), 45 ticks each` then `deal: done` after 97 ticks (3.2 s); a click on a card logs `deal: stopped by a click`. Captures `s11-deal-300/900/1400/2000/3000.png` across the deal, `s11-intro.png` after it |
 | `pple-view --pairs` jar burst | `Jar::Update` (`0x10008373C`) plays `Con_BoardCleared` when the last coin lands, shows the level's `/moviepath` (`Jar::LoadMovies` `0x1000835D0`), wipes the tray from the top down as it runs and then calls `Jar::StopExplosion` (`0x100083A20`). The movie is 88 frames / 322 parts at the default **30 fps** (`PurblePlaceMovie::InitFromXml` `0x100087A89`) and its anchor is `/JarContainer` + `/JarMovieContainer` = `0,-110`. After a win the tray is empty: `s6-burst-3200.png`, `s6-won.png` |
 | `pple-view --pairs` mismatch reveal | `Card::DoMatcher`'s mismatch branch is `Card+0x3C = Board+0x1C4` and `Board::XMLConstants` (`0x100089FDC`) stores `/RevealDuration` **raw**, so the shipped 8 is 8 ticks, not 8 seconds. It starts when `Card::OnReveal` (`0x10007FA6B`) runs `DoMatcher`, i.e. after the flip, and `Card::DoCardClick` (`0x10007CD65`) has no board-wide lockout. `s6-miss-strip.png`: face up at 300 and 500 ms, flipping back at 700, backs at 900 |
 | `pple-view --menu --loading` | `Engine_SetBackMode`'s `UI\PurblePlace\Loading.xml` on `Loading.jpg` with the two `LOADING...` labels, then the menu. `s6-loading.png` |
@@ -494,11 +504,12 @@ features or existing known-gap fixes were included in this structural milestone.
   * **the two particle emitters** `Emitter_gold.xml` and `Emitter_white.xml`, which
     `ArcBehavior::Init` (`0x100083E48`) builds with `ParticleUpdate` (`0x100084678`) and
     `ParticlePaperCreation` (`0x100084424`) as callbacks;
-  * **the card deal-in**: `Board::Update` (`0x10008A4F0`) keeps the board inert until every card
-    has left `Card+0x1384`'s state 6 and then sets `Board+0x1E8 = 1`, which `Card::HandleEvent`
-    (`0x10007C4A3`) tests before it acts; the animation itself is `Card_shadow.xml` (`Card+0xC0`),
-    which is not drawn. The reconstruction sets the board playable at once, so a card can be
-    clicked while the Professor is still walking in, where the shipped build waits out the deal;
+  * **the card deal-in's own shadow**: the deal is drawn (see the `--pairs` deal row), but
+    `Card_shadow.xml` (`Card+0xC0`, sized from `Card+0x30`) and `tileglow.xml` / `tilecover.xml`
+    are not, and the "IntroImage" is drawn as the card's back art at the growing scale rather
+    than through its own node. The first card of a new board also deals instantly when the board
+    is rebuilt for a new `<Level>` (`keep_state`), where the shipped `Board::NewLevel` runs
+    `Card::InitUI` again and would deal the new board in;
   * **the tip's style selection**: `<Type>` picks one of the three style documents
     (`TipManager::parseXml` `0x1000934C3`: `Intro` → 0, `Error` → 2, anything else → 1) and the
     reconstruction always draws the green set, so the one `<Type>Error</Type>` tip (`BlankCard`)

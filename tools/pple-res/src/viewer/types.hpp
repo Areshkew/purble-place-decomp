@@ -2,6 +2,9 @@
 #include "resources.hpp"
 
 namespace pple::viewer {
+    // The deal-in's length: Card::DoIntroMove (0x10007E104) runs Card+0x14 from 0 to 45 and then
+    // calls Card::StopIntroAnimation.
+    inline constexpr int kCardIntroTicks = 45;
     // Scene mode: a flat draw list in scene coordinates, plus the scene's extent.
     struct DrawItem {
         SDL_Texture* texture = nullptr;

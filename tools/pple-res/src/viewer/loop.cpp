@@ -161,6 +161,10 @@ int App::run_loop() {
             bool flipped = false;
             while (pairs_accumulator >= (1.0f / 30.0f)) {
                 pairs_accumulator -= (1.0f / 30.0f);
+                // The card deal-in: every card's IntroImage grows for 45 ticks after its own
+                // delay, and Board::Update only makes the board playable once the last one has
+                // arrived.
+                if (advance_deal()) flipped = true;
                 const int before = pairs_board.pending_reveal();
                 const int lock_before = pairs_board.lockout_ticks();
                 const bool sneak_before = pairs_board.sneak_active();
