@@ -62,26 +62,39 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
     // The end-of-round panel stands in for OnWinAnimStop's dialog box, so it is modal: only its
     // own buttons act and every other click is swallowed.
     if (result_shown) {
-        for (UiButton& button : result_buttons) {
+        const UiButton* hit = nullptr;
+        for (const UiButton& button : result_buttons) {
             const SDL_FRect& r = button.rect;
-            if (sx < r.x || sx >= r.x + r.w || sy < r.y || sy >= r.y + r.h) continue;
-            if (button.id == "PlayAgain") {
-                std::printf("pairs: New Game -> a new %s round\n", picker_choice.c_str());
-                ++seed_for_pairs;
-                start_game(picker_choice, true);
-            } else if (button.id == "ChangeDifficulty") {
-                std::printf("pairs: Change Difficulty -> the chooser\n");
-                hide_tip();
-                free_direct(result_draws);
-                result_buttons.clear();
-                result_shown = false;
-                rebuild_overlay();
-                build_difficulty();
-            } else {
-                std::printf("pairs: Main Menu -> main menu\n");
-                game_to_menu();
+            if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
+                hit = &button;
+                break;
             }
-            return true;
+        }
+        // The chooser highlights on motion, so this panel does too; only the draws are rebuilt.
+        bool hover_changed = false;
+        for (UiButton& button : result_buttons) {
+            const bool hover = hit != nullptr && button.id == hit->id;
+            if (button.hover == hover) continue;
+            button.hover = hover;
+            hover_changed = true;
+        }
+        if (hover_changed) draw_result_panel();
+        if (motion_only || hit == nullptr) return true;
+        if (hit->id == "PlayAgain") {
+            std::printf("pairs: New Game -> a new %s round\n", picker_choice.c_str());
+            ++seed_for_pairs;
+            start_game(picker_choice, true);
+        } else if (hit->id == "ChangeDifficulty") {
+            std::printf("pairs: Change Difficulty -> the chooser\n");
+            hide_tip();
+            free_direct(result_draws);
+            result_buttons.clear();
+            result_shown = false;
+            rebuild_overlay();
+            build_difficulty();
+        } else {
+            std::printf("pairs: Main Menu -> main menu\n");
+            game_to_menu();
         }
         return true;
     }

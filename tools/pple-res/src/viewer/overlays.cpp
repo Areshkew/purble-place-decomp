@@ -72,23 +72,31 @@ std::string fill_count(const std::string& text, int value) {
 // Center host draws those two header buttons -- so an in-canvas button needs the panel style
 // instead.  Hover is the style's own vocabulary: the title colour and a bold pass, which is
 // what <TitleFontBold> would switch on in the shipped style.
+//
+// The style's top and bottom borders are 13 and 14 px, so 27 px of a button is frame.  The
+// name and the description are centred in what is left, which is why the buttons are 60 px
+// tall: at the MCE button art's 51 px the two lines spilled over the bottom border and the
+// description was drawn on the green edge.
 void App::append_button(std::vector<DrawItem>& out, const UiButton& button, float label_size) {
     append_panel(out, button.rect.x, button.rect.y, button.rect.w, button.rect.h);
     const std::uint32_t label_colour = button.hover ? tip_style.title_colour : 0x00494A4Du;
     int label_w = 0, label_h = 0;
     measure_text("Segoe UI", label_size, button.label, 0.0f, label_w, label_h);
+    int detail_w = 0, detail_h = 0;
+    if (!button.detail.empty())
+        measure_text("Segoe UI", 8.0f, button.detail, 0.0f, detail_w, detail_h);
+    const float face_top = button.rect.y + tip_style.top.h;
+    const float face_h = button.rect.h - tip_style.top.h - tip_style.bottom.h;
+    const float block_h = static_cast<float>(label_h) +
+                          (button.detail.empty() ? 0.0f : 2.0f + static_cast<float>(detail_h));
+    const float centre_y = face_top + (face_h - block_h) * 0.5f;
     const float centre_x = button.rect.x + (button.rect.w - static_cast<float>(label_w)) * 0.5f;
-    const float centre_y = button.detail.empty()
-                               ? button.rect.y + (button.rect.h - static_cast<float>(label_h)) * 0.5f
-                               : button.rect.y + 7.0f;
     append_text(out, "Segoe UI", label_size, label_colour, button.label, centre_x, centre_y, 0.0f);
     if (button.hover)  // a 1-pixel second pass is the only bold this viewer has
         append_text(out, "Segoe UI", label_size, label_colour, button.label, centre_x + 1.0f,
                     centre_y, 0.0f);
     if (!button.detail.empty()) {
-        int detail_w = 0, detail_h = 0;
-        measure_text("Segoe UI", 8.0f, button.detail, 0.0f, detail_w, detail_h);
-        append_text(out, "Segoe UI", 8.0f, tip_style.body_colour, button.detail,
+        append_text(out, "Segoe UI", 8.0f, 0x00606060u, button.detail,
                     button.rect.x + (button.rect.w - static_cast<float>(detail_w)) * 0.5f,
                     centre_y + static_cast<float>(label_h) + 2.0f, 0.0f);
     }
@@ -114,7 +122,7 @@ void App::build_difficulty() {
     for (int i = 0; i < 3; ++i) {
         UiButton button;
         button.id = choices[i].difficulty;
-        button.rect = SDL_FRect{274.0f, 150.0f + static_cast<float>(i) * 62.0f, 251.0f, 51.0f};
+        button.rect = SDL_FRect{274.0f, 146.0f + static_cast<float>(i) * 68.0f, 251.0f, 60.0f};
         const std::string text = mui_text(choices[i].text->id);
         split_option(text.empty() ? choices[i].text->english : text, button.label, button.detail);
         picker_buttons.push_back(button);
@@ -170,37 +178,64 @@ void App::draw_difficulty() {
         append_movie(idle, mframe, 295.0f, 70.0f, picker_draws, extent_w, extent_h);
     }
     if (load_tip_style()) {
-        append_panel(picker_draws, 180.0f, 40.0f, 440.0f, 300.0f);
+        append_panel(picker_draws, 180.0f, 36.0f, 440.0f, 320.0f);
         const std::string title = mui_text(kSelectDifficulty.id);
         const std::string question = mui_text(kDifficultyQuestion.id);
         const std::string note = mui_text(kDifficultyNote.id);
         append_text(picker_draws, tip_style.title_face, 14.0f, tip_style.title_colour,
-                    title.empty() ? kSelectDifficulty.english : title, 194.0f, 56.0f, 0.0f);
+                    title.empty() ? kSelectDifficulty.english : title, 194.0f, 52.0f, 0.0f);
         append_text(picker_draws, tip_style.body_face, 10.0f, 0x00303030u,
-                    question.empty() ? kDifficultyQuestion.english : question, 194.0f, 82.0f,
+                    question.empty() ? kDifficultyQuestion.english : question, 194.0f, 78.0f,
                     412.0f);
         append_text(picker_draws, tip_style.body_face, 8.0f, 0x00606060u,
-                    note.empty() ? kDifficultyNote.english : note, 194.0f, 104.0f, 412.0f);
+                    note.empty() ? kDifficultyNote.english : note, 194.0f, 100.0f, 412.0f);
     }
     for (const UiButton& button : picker_buttons) append_button(picker_draws, button, 12.0f);
 }
 
 // The end-of-round summary, drawn over the live board.  `won` picks the title from the same
 // TIPS.XML entries the Professor's own win and lose bubbles use ("You Won!" / "Lost Game").
+// The buttons are built once and the draws rebuilt separately, so moving the mouse over them
+// can redraw the panel without losing their labels or reprinting the summary line.
 void App::build_result_panel(bool won) {
     load_tip_style();
     load_tips();
-    free_direct(result_draws);
-    result_buttons.clear();
     result_shown = true;
     result_won = won;
 
-    const float panel_x = 200.0f, panel_y = 86.0f, panel_w = 400.0f, panel_h = 300.0f;
+    const std::string new_game = mui_text(kNewGame.id);
+    const std::string main_menu = mui_text(kMainMenu.id);
+    UiButton again;
+    again.id = "PlayAgain";
+    again.rect = SDL_FRect{274.0f, 208.0f, 251.0f, 60.0f};
+    again.label = new_game.empty() ? kNewGame.english : new_game;
+    UiButton difficulty;
+    difficulty.id = "ChangeDifficulty";
+    difficulty.rect = SDL_FRect{274.0f, 274.0f, 251.0f, 60.0f};
+    difficulty.label = "Change Difficulty";
+    UiButton menu;
+    menu.id = "MainMenu";
+    menu.rect = SDL_FRect{274.0f, 340.0f, 251.0f, 60.0f};
+    menu.label = main_menu.empty() ? kMainMenu.english : main_menu;
+    result_buttons.clear();
+    result_buttons = {again, difficulty, menu};
+    draw_result_panel();
+    std::printf("  result panel: %s, score %d%s\n", won ? "WON" : "LOST", pairs_board.score(),
+                (won && last_end_ok)
+                    ? (", " + std::to_string(last_end.total) + " -> " + last_end.title).c_str()
+                    : "");
+}
+
+void App::draw_result_panel() {
+    load_tip_style();
+    load_tips();
+    free_direct(result_draws);
+    const float panel_x = 200.0f, panel_y = 80.0f, panel_w = 400.0f, panel_h = 336.0f;
     append_panel(result_draws, panel_x, panel_y, panel_w, panel_h);
 
-    const TipDef* title_tip = find_tip(won ? "ProWin1" : "ProLose1");
+    const TipDef* title_tip = find_tip(result_won ? "ProWin1" : "ProLose1");
     const std::string title = title_tip != nullptr ? title_tip->title
-                             : (won ? std::string("You Won!") : std::string("Lost Game"));
+                             : (result_won ? std::string("You Won!") : std::string("Lost Game"));
     append_text(result_draws, tip_style.title_face, 16.0f, tip_style.title_colour, title,
                 panel_x + 16.0f, panel_y + 14.0f, 0.0f);
 
@@ -213,38 +248,18 @@ void App::build_result_panel(bool won) {
         y += 20.0f;
     };
     line(kGamePoints, pairs_board.score());
-    if (won && last_end_ok) {
+    if (result_won && last_end_ok) {
         line(kFinalScore, last_end.total);
         append_text(result_draws, tip_style.body_face, 11.0f, tip_style.title_colour, last_end.title,
                     panel_x + 16.0f, y, 0.0f);
         y += 20.0f;
-    } else if (!won) {
+    } else if (!result_won) {
         append_text(result_draws, tip_style.body_face, 9.0f, 0x00606060u,
                     "Try again, or pick another difficulty.", panel_x + 16.0f, y, 0.0f);
         y += 20.0f;
     }
-
-    const std::string new_game = mui_text(kNewGame.id);
-    const std::string main_menu = mui_text(kMainMenu.id);
-    UiButton again;
-    again.id = "PlayAgain";
-    again.rect = SDL_FRect{274.0f, 216.0f, 251.0f, 51.0f};
-    again.label = new_game.empty() ? kNewGame.english : new_game;
-    UiButton difficulty;
-    difficulty.id = "ChangeDifficulty";
-    difficulty.rect = SDL_FRect{274.0f, 272.0f, 251.0f, 51.0f};
-    difficulty.label = "Change Difficulty";
-    UiButton menu;
-    menu.id = "MainMenu";
-    menu.rect = SDL_FRect{274.0f, 328.0f, 251.0f, 51.0f};
-    menu.label = main_menu.empty() ? kMainMenu.english : main_menu;
-    result_buttons = {again, difficulty, menu};
     for (const UiButton& button : result_buttons) append_button(result_draws, button, 12.0f);
     rebuild_overlay();
-    std::printf("  result panel: %s, score %d%s\n", won ? "WON" : "LOST", pairs_board.score(),
-                (won && last_end_ok)
-                    ? (", " + std::to_string(last_end.total) + " -> " + last_end.title).c_str()
-                    : "");
 }
 
 // ConcentrationGame::NewGame (0x100081E4C): a fresh round at a difficulty, optionally with the
@@ -260,16 +275,16 @@ void App::start_game(const std::string& difficulty, bool intro) {
     screen = Screen::Concentration;
     menu_ready = false;
     pairs_ready = false;
+    // The first game in a session gets the "How To Play" pair; later ones get the single
+    // ProWelcome bubble, which is what DisplayIntro (0x10008C3F0) chooses between.  DisplayIntro
+    // runs when the deal-in ends -- Board::Update calls it once no card is left in state 6 -- so
+    // the choice is only recorded here.
+    professor.tip_name = intro_seen ? "ProWelcome" : "ProIntro";
+    professor.anim_kind = 0;
+    professor.tip_y = 150.0f;
+    intro_wanted = intro;
+    if (intro) intro_seen = true;
     build_pairs();
-    if (intro) {
-        // The first game in a session gets the "How To Play" pair; later ones get the single
-        // ProWelcome bubble, which is what DisplayIntro (0x10008C3F0) chooses between.
-        professor.tip_name = intro_seen ? "ProWelcome" : "ProIntro";
-        intro_seen = true;
-        professor.anim_kind = 0;
-        professor.tip_y = 150.0f;
-        professor_show("ProfessorEnterAnimation", ProfPhase::Enter, false);
-    }
     rebuild_overlay();
 }
 

@@ -229,9 +229,16 @@ void App::append_panel(std::vector<DrawItem>& out, float px, float py, float wid
         d.alpha = 255;
         out.push_back(d);
     };
-    piece(tip_style.back, tip_style.ul.w - 1.0f, tip_style.ul.h - 1.0f,
-          width - tip_style.ul.w - tip_style.ur.w + 2.0f,
-          height - tip_style.ul.h - tip_style.ll.h + 2.0f);
+    // Tip::Arrange (0x1000A49A0) places the back at exactly (LeftBorder.w, TopBorder.h) and
+    // sizes it (width - left - right) x (height - top - bottom), i.e. flush against the inside
+    // of the four borders, and stretches each border between its two corner sprites.  The
+    // corners are drawn last, over the ends of the borders.  An inset here -- the back used to
+    // start at ULCorner.w - 1, which is 12 px against a 3 px left border -- leaves a strip of
+    // whatever is behind the panel showing, which is the seam the chooser and the tip bubbles
+    // used to have.
+    piece(tip_style.back, tip_style.left.w, tip_style.top.h,
+          width - tip_style.left.w - tip_style.right.w,
+          height - tip_style.top.h - tip_style.bottom.h);
     piece(tip_style.left, 0.0f, tip_style.ul.h, tip_style.left.w,
           height - tip_style.ul.h - tip_style.ll.h);
     piece(tip_style.right, width - tip_style.right.w, tip_style.ur.h, tip_style.right.w,

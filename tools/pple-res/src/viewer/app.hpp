@@ -37,6 +37,9 @@ private:
     void spawn_arcs(const std::vector<int>& cells);
     void jar_grow();
     void arm_match_fx(const std::vector<int>& cells, bool immediate);
+    void start_deal();
+    bool advance_deal();
+    void finish_deal();
     void report_round_end();
     void build_pairs();
     void build_pair_level_art(const std::vector<std::uint8_t>& scene_bytes, std::string& scene_how);
@@ -83,6 +86,7 @@ private:
     void professor_round_end(bool won);
     void professor_intro_begin();
     void build_result_panel(bool won);
+    void draw_result_panel();
     void build_difficulty();
     void draw_difficulty();
     void start_game(const std::string& difficulty, bool intro);
@@ -238,6 +242,13 @@ private:
     std::vector<CardFlip> card_flip;
     std::vector<pple::CardFace> card_face_shown;
     std::vector<CardFx> card_fx;
+    // The deal-in, per card: Card+0x40 is `rand() % 60` ticks of delay (Board::InitLevel
+    // 0x1000895C7) and Card+0x14 counts Card::DoIntroMove's 45 ticks.  Card+0x14 = 45 means the
+    // card has arrived; Board+0x1E8 (`pairs_dealing`) stays 0 until every card has.
+    std::vector<int> card_deal_delay;
+    std::vector<int> card_deal_tick;
+    bool pairs_dealing = false;
+    bool deal_enabled = true;
     // Board::DoFlyIntoJar is called from Card::OnHide, i.e. when the flip-back ends, not when the
     // match is made, so the coin is spawned a few ticks after the pair turns over.
     std::vector<int> card_fx_pending_fly;

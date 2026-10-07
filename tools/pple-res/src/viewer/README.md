@@ -29,7 +29,7 @@ flags and the core library's public interfaces are unchanged.
 | Board completion, score/rank, settings save | [pairs_round.cpp](pairs_round.cpp): `finish_board_end`, `report_round_end` |
 | Professor state machine, tips, transitions | [professor.cpp](professor.cpp): `professor_show`, `professor_display_tip`, `professor_tip_closed`, `professor_advance`, `professor_round_end`, `professor_intro_begin`, `professor_level_tip` |
 | Tip panel: TIPS.XML, the green 9-slice, text and fonts | [tips.cpp](tips.cpp): `load_tips`, `load_tip_style`, `show_tip`, `append_panel`, `append_text`, `face_font`, `rebuild_overlay` |
-| In-canvas difficulty chooser and end-of-round panel | [overlays.cpp](overlays.cpp): `build_difficulty`, `draw_difficulty`, `append_button`, `build_result_panel`, `start_game`, `game_to_menu` |
+| In-canvas difficulty chooser and end-of-round panel | [overlays.cpp](overlays.cpp): `build_difficulty`, `draw_difficulty`, `append_button`, `build_result_panel`, `draw_result_panel`, `start_game`, `game_to_menu` |
 | State and small rendering records | [app.hpp](app.hpp), [types.hpp](types.hpp) |
 | Game rules (no SDL) | [concentration.cpp](../concentration.cpp), [concentration.hpp](../../include/pple/concentration.hpp) |
 
@@ -57,6 +57,12 @@ Three layers draw over the frame, in this order, and each has one owner:
   and drawn instead of the scene while `screen == Screen::Difficulty`;
 * `overlay_draws` — the tip bubble and the end-of-round panel over the live board,
   reassembled by `rebuild_overlay` from `tip.draws`, `tip.owned` and `result_draws`.
+
+A panel and a button are the same 9-slice, built by `append_panel` from the loaded
+`Tips\Styles\Green` pieces with `Tip::Arrange`'s geometry (the back inset by the left and top
+borders). `append_button` centres its name and description between the top and bottom borders;
+`draw_result_panel` redraws the end-of-round panel without reprinting its summary line, which is
+what lets its buttons highlight on mouse motion.
 
 A draw item's texture is either borrowed from `sheet_cache` or created for a label. Only the
 second kind may be destroyed on a rebuild, which is what `free_direct` checks; the tip's label
