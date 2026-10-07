@@ -110,9 +110,15 @@ namespace pple::viewer {
     struct TimeBarDraw {
         bool ok = false;
         SDL_Texture* green = nullptr;
-        SDL_FRect green_src{};
         SDL_Texture* red = nullptr;
-        SDL_FRect red_src{};
+        // ConUILoader::CreateTimeSlice (0x10008C640) draws the slice it is handed with the frame
+        // index it is handed -- `mov [r9+180h], r10d`, node+0x180 being the NodeSprite's current
+        // frame -- so slice `i` uses frame `i` of the template's own <FrameCount> ramp.  Each
+        // frame is one scanline of the tube: the ramp is the bar's vertical profile, so drawing
+        // every slice from frame 0 turns it into a flat slab.  The geometry is what
+        // sprite_frame_rect needs to step to frame i.
+        pple::SceneItem green_geom{};
+        pple::SceneItem red_geom{};
         float x_green = 0.0f, x_red = 0.0f, y_top = 0.0f;
         int segments = 0;
     };

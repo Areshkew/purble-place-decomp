@@ -9,7 +9,8 @@ int App::build_pair_card_assets() {
     const auto build_card_sprite = [&](const std::string& xml, SDL_Texture** tex_out,
                                        SDL_FRect& src_out, float& fw_out, float& fh_out,
                                        int* frames_out = nullptr, float* reg_x_out = nullptr,
-                                       float* reg_y_out = nullptr) {
+                                       float* reg_y_out = nullptr,
+                                       pple::SceneItem* geom_out = nullptr) {
         const Sprite sprite = resolve_sprite(bundle, xml, 0);
         if (!sprite.ok) return false;
         if (frames_out != nullptr) *frames_out = sprite.frames;
@@ -28,6 +29,7 @@ int App::build_pair_card_assets() {
         geometry.frames = sprite.frames;
         geometry.per_row = sprite.per_row;
         geometry.prepped = sprite.prepped;
+        if (geom_out != nullptr) *geom_out = geometry;
         float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
         pple::sprite_frame_rect(geometry, 0, fx, fy, fw, fh);
         *tex_out = tex;
@@ -55,6 +57,11 @@ int App::build_pair_card_assets() {
                       pairs_blank_h, nullptr, &pairs_blank_reg_x, &pairs_blank_reg_y);
     build_card_sprite(pairs_spark_xml, &pairs_spark_tex, pairs_spark_src, pairs_spark_w,
                       pairs_spark_h, nullptr, &pairs_spark_reg_x, &pairs_spark_reg_y);
+    // Card+0xA8's SneakIcon.  Its frame is 37x37 at registration (-1,-6), so on the card it is
+    // drawn at the card's Base + (1, 6) * card scale.
+    build_card_sprite(pairs_sneak_icon_xml, &pairs_sneak_icon_tex, pairs_sneak_icon_src,
+                      pairs_sneak_icon_w, pairs_sneak_icon_h, nullptr, &pairs_sneak_icon_reg_x,
+                      &pairs_sneak_icon_reg_y);
     for (const pple::ConcentrationSlot& slot : pairs_board.slots()) {
         const pple::CardDef* def = pairs_pools.find(slot.card_id);
         CardCache entry;
@@ -93,7 +100,9 @@ int App::build_pair_card_assets() {
     // TimeBar::InitUI 0x10008517C loads /TimeBarBkg under /TimeBarContainer and then clones
     // /TimeBarGreen and /TimeBarRed CreateTimeSlice (0x10008C640) times, each stacked at
     // local (3, 21 + i); the registration offsets (-7, 0) / (-8, 0) / (-3, -5) shift each one
-    // by the amount NodeSprite::UpdateZero subtracts.
+    // by the amount NodeSprite::UpdateZero subtracts.  CreateTimeSlice also stores the slice
+    // index in the node's frame field, so refresh_cards steps the template's frame ramp with the
+    // same index.
     timebar = TimeBarDraw{};
     if (pairs_board.timed() && loaded_scene) {
         float cx = 0.0f, cy = 0.0f;
@@ -104,17 +113,23 @@ int App::build_pair_card_assets() {
                 cy = item.y;
             }
         }
+        SDL_FRect green_src{}, red_src{};
         float gw = 0.0f, gh = 0.0f, rw = 0.0f, rh = 0.0f;
         int green_frames = 0;
         timebar.ok =
-            build_card_sprite("UI\\Concentration\\GreenTimerBar.xml", &timebar.green,
-                              timebar.green_src, gw, gh, &green_frames) &&
-            build_card_sprite("UI\\Concentration\\RedTimerBar.xml", &timebar.red,
-                              timebar.red_src, rw, rh);
+            build_card_sprite("UI\\Concentration\\GreenTimerBar.xml", &timebar.green, green_src,
+                              gw, gh, &green_frames, nullptr, nullptr, &timebar.green_geom) &&
+            build_card_sprite("UI\\Concentration\\RedTimerBar.xml", &timebar.red, red_src, rw, rh,
+                              nullptr, nullptr, nullptr, &timebar.red_geom);
         if (timebar.ok) {
-            timebar.x_green = cx + 16.0f;  // container + bkg(3+3) + slice(3+7)
-            timebar.x_red = cx + 17.0f;    // container + bkg(3+3) + slice(3+8)
-            timebar.y_top = cy + 47.0f;    // container + bkg(21+5) + slice(21+0)
+            // The slices are children of /TimeBarBkg, so their world position is the bkg's own
+            // node position (container + 3,21 = 63,4) plus the slice's local (3,21) = (66,25);
+            // NodeSprite::UpdateZero then subtracts the slice's registration.  The bkg's own
+            // registration (-3,-5) moves only the bkg's drawn corner, not its children, so it
+            // must not appear here.
+            timebar.x_green = cx + 13.0f;  // container + bkg(3) + slice(3) + green reg 7
+            timebar.x_red = cx + 14.0f;    // the same, + red reg 8
+            timebar.y_top = cy + 42.0f;    // container + bkg(21) + slice(21), reg_y 0
             // TimeBar::InitUI stores the green template's <FrameCount> as the segment count
             // (0x100085251), and the shipped GreenTimerBar.xml says 226.
             timebar.segments = green_frames;

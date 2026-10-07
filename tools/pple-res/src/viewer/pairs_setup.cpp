@@ -326,16 +326,40 @@ void App::build_pairs() {
                     SDL_Texture* hover_tex =
                         load_sheet_texture(hover.requested, hover_slot->entry->name, pairs_sheet_note);
                     if (hover_tex != nullptr) {
+                        // The hover art is an animation, not a still.  NodeButton::Load
+                        // (0x1000AAFF0) builds one for the second and third <Animation> of a
+                        // three-source button -- Animator_LinearAbsolute from frame 0 to
+                        // <FrameCount>-1, with Animator_LinearAbsolute::GetPercentChange
+                        // (0x1000A3204) scaling that duration by 30 ticks a second -- and
+                        // NodeButton::HandleEvent's FocusGot case (0x1000AA985) resumes it, so
+                        // the focused button settles on the *last* frame.  ReturnToMainMenu's
+                        // hover art is the only one of these buttons with more than one frame:
+                        // frame 0 is a near-copy of the idle art and frame 1 is the white
+                        // highlight, which is why swapping in frame 0 alone looked like no hover
+                        // at all.
+                        pple::SceneItem geom;
+                        geom.src_x = hover.src.x;
+                        geom.src_y = hover.src.y;
+                        geom.src_w = hover.src.w;
+                        geom.src_h = hover.src.h;
+                        geom.frames = hover.frames;
+                        geom.per_row = hover.per_row;
+                        geom.prepped = hover.prepped;
+                        float hx = 0.0f, hy = 0.0f, hw = 0.0f, hh = 0.0f;
+                        pple::sprite_frame_rect(geom, hover.frames - 1, hx, hy, hw, hh);
                         spot.hover_draw.texture = hover_tex;
-                        spot.hover_draw.src = SDL_FRect{hover.src.x + (hover.prepped ? 1.0f : 0.0f),
-                                                        hover.src.y + (hover.prepped ? 1.0f : 0.0f),
-                                                        hover.src.w, hover.src.h};
+                        spot.hover_draw.src = SDL_FRect{hx, hy, hw, hh};
                         spot.hover_draw.dst = SDL_FRect{
                             item.x - item.reg_x * item.scale,
                             item.y - item.reg_y * item.scale + (mce_mode ? 51.0f : 0.0f),
-                            hover.src.w * item.scale, hover.src.h * item.scale};
+                            hw * item.scale, hh * item.scale};
                         spot.hover_draw.alpha = item.alpha;
                         spot.has_hover = true;
+                        std::printf("  button %s: idle slot %d, hover art frame %d of %d at "
+                                    "%.0f,%.0f %.0fx%.0f\n",
+                                    key.c_str(), spot.idle_at, hover.frames - 1, hover.frames,
+                                    static_cast<double>(hx), static_cast<double>(hy),
+                                    static_cast<double>(hw), static_cast<double>(hh));
                     }
                 }
             }

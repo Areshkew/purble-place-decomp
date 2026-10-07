@@ -243,6 +243,16 @@ private:
     SDL_FRect pairs_spark_src{};
     float pairs_spark_w = 0.0f, pairs_spark_h = 0.0f, pairs_spark_reg_x = 0.0f,
           pairs_spark_reg_y = 0.0f;
+    // Card+0xA8: Card::InitUI (0x10007BDFA) builds the node it names "SneakIcon" from
+    // SneakPeakMiniIcon.xml as a child of the card's own Base, so it inherits the card's scale,
+    // and Card::DoSneakIcon (0x10007DE60) shows it while Card+0x18 -- the flag
+    // Board::SelectSneakCard (0x10008B348) sets on one random card -- is set and Card+0x568 is
+    // below 2, i.e. while the card is still in play and face down or up.
+    std::string pairs_sneak_icon_xml = "UI\\Concentration\\SneakPeakMiniIcon.xml";
+    SDL_Texture* pairs_sneak_icon_tex = nullptr;
+    SDL_FRect pairs_sneak_icon_src{};
+    float pairs_sneak_icon_w = 0.0f, pairs_sneak_icon_h = 0.0f;
+    float pairs_sneak_icon_reg_x = 0.0f, pairs_sneak_icon_reg_y = 0.0f;
     std::vector<CardCache> card_cache;
     // How many draws belong to the scene; everything past this is the card layer.
     std::size_t pairs_scene_draws = 0;

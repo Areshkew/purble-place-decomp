@@ -385,6 +385,15 @@ public:
     // Round+284 / Round+0x11C, from Level+0x30 = <NumStartTokens>.
     int tokens() const { return tokens_; }
 
+    // Card+0x18.  Board::SelectSneakCard (0x10008B348) picks one card that is not already in
+    // state 2 and sets the flag on it; Card::DoSneakIcon (0x10007DE60) is what turns the flag
+    // into the card's "SneakIcon" node (Card+0xA8) being visible, and it does so while
+    // Card+0x568 < 2, so the eye is on the card both face down and face up until it is matched.
+    bool sneak_card(int index) const {
+        return index >= 0 && index < static_cast<int>(sneak_icon_.size()) &&
+               sneak_icon_[static_cast<std::size_t>(index)];
+    }
+
     // Board::Update (0x10008A4F0): the round is complete when
     // `NumCards - matched <= count(id == WildCard || id == MixerCard)`.  A fresh game starts with
     // Round+0x1D4 = 0 and Board::InitLevel sets it to 1; the deck's own Wild/Mixer cards are what

@@ -133,7 +133,9 @@ void App::build_menu() {
         }
         if (item.sheet.empty()) continue;
         // The engine starts a button at animation 0 and moves to 1 on <enter> and 2 on <down>
-        // (NodeButton::HandleEvent 0x1000AAC92 / 0x1000AAE1C).
+        // (NodeButton::HandleEvent 0x1000AAC92 / 0x1000AAE1C); the focus animation runs to its
+        // own last frame, and every button here has a one-frame hover art, so the frame choice
+        // only matters if the art ever gains frames.  See pairs_setup.cpp for the same rule.
         const bool hovered = item.kind == pple::NodeKind::Button && key == menu_hover_name;
         const int state = hovered ? 1 : 0;
         const Sprite sprite = resolve_sprite(bundle, item.ref, state);
@@ -153,7 +155,7 @@ void App::build_menu() {
         geometry.frames = sprite.frames;
         geometry.per_row = sprite.per_row;
         geometry.prepped = sprite.prepped;
-        pple::sprite_frame_rect(geometry, 0, fx, fy, fw, fh);
+        pple::sprite_frame_rect(geometry, hovered ? sprite.frames - 1 : 0, fx, fy, fw, fh);
         // NodeSprite::UpdateZero (0x100093740) subtracts the scaled registration offset.
         const float dx = (item.x - sprite.reg_x * item.scale) * item.scale;
         const float dy = (item.y - sprite.reg_y * item.scale) * item.scale;

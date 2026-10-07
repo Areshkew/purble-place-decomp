@@ -188,6 +188,34 @@ void App::refresh_cards() {
             extent_h = std::max(extent_h, d.dst.y + d.dst.h);
         }
     }
+    // The sneak bonus's own mark.  Card::InitUI builds Card+0xA8 ("SneakIcon") from
+    // SneakPeakMiniIcon.xml as a child of the card's Base, after card_glow and highlite_outline,
+    // so it draws over the card and its focus art; Card::DoSneakIcon (0x10007DE60) shows it while
+    // Card+0x18 is set and Card+0x568 < 2, and Board::SelectSneakCard (0x10008B348) sets that
+    // flag on one random card.  It is the eye the shipped game puts on some cards.
+    if (pairs_sneak_icon_tex != nullptr && !pairs_dealing) {
+        for (std::size_t i = 0; i < card_cache.size(); ++i) {
+            const CardCache& entry = card_cache[i];
+            if (entry.index < 0 || !pairs_board.sneak_card(entry.index)) continue;
+            const std::size_t at = static_cast<std::size_t>(entry.index);
+            if (at < card_fx.size() && card_fx[at].blank) continue;  // state 2: the card is gone
+            const float cs =
+                static_cast<float>(pairs_board.slots()[at].scale_percent) / 100.0f;
+            DrawItem d;
+            d.texture = pairs_sneak_icon_tex;
+            d.src = pairs_sneak_icon_src;
+            // The icon node sits at the card Base's own origin, so its drawn corner is
+            // (x, y) - registration * scale; the registration (-1,-6) is what puts the eye over
+            // the card's top-left corner.
+            d.dst = SDL_FRect{entry.base_x - pairs_sneak_icon_reg_x * cs,
+                              entry.base_y - pairs_sneak_icon_reg_y * cs,
+                              pairs_sneak_icon_w * cs, pairs_sneak_icon_h * cs};
+            d.alpha = 255;
+            scene_draws.push_back(d);
+            extent_w = std::max(extent_w, d.dst.x + d.dst.w);
+            extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+        }
+    }
     // The explosion sparks.  Card::InitExplosion (0x10007E518) gives each of the four
     // Card+0x110 sparks a source at one corner of the card's cell and a destination 30 px
     // outside it, and Card::AnimateExplosion (0x10007E6D0) walks them for 30 ticks:
@@ -359,19 +387,22 @@ void App::refresh_cards() {
         scene_draws.insert(scene_draws.begin() + static_cast<std::ptrdiff_t>(at),
                            jar_layer.begin(), jar_layer.end());
     }
-    // The time bar: segment i is lit while i >= elapsed, red for the last 900 ticks.
+    // The time bar: segment i is lit while i >= elapsed, red for the last 900 ticks, and drawn
+    // with frame i of its own template ramp (CreateTimeSlice 0x10008C640 stores the slice index
+    // in node+0x180), which is what gives the bar its tube profile instead of one flat colour.
     if (timebar.ok) {
         const TimeBarState bar = time_bar_state();
         SDL_Texture* tex = bar.red ? timebar.red : timebar.green;
-        const SDL_FRect* src = bar.red ? &timebar.red_src : &timebar.green_src;
+        const pple::SceneItem& geom = bar.red ? timebar.red_geom : timebar.green_geom;
         const float x = bar.red ? timebar.x_red : timebar.x_green;
         if (tex != nullptr) {
             for (int i = bar.elapsed; i < timebar.segments; ++i) {
+                float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
+                pple::sprite_frame_rect(geom, i, fx, fy, fw, fh);
                 DrawItem d;
                 d.texture = tex;
-                d.src = *src;
-                d.dst = SDL_FRect{x, timebar.y_top + static_cast<float>(i),
-                                  src->w, src->h};
+                d.src = SDL_FRect{fx, fy, fw, fh};
+                d.dst = SDL_FRect{x, timebar.y_top + static_cast<float>(i), fw, fh};
                 d.alpha = 255;
                 scene_draws.push_back(d);
             }
