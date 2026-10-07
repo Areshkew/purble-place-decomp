@@ -3,6 +3,57 @@
 
 namespace pple::viewer {
 
+// The engine's focus follows the mouse: UserInterface::ProcessMouseMove (0x100098498) hit-tests
+// the node under the cursor and calls SetFocus (0x1000992E0), so exactly one node at a time is
+// focused and only that node draws its focus art.  The order here is click_scene's own -- the
+// screen's buttons, then the cards topmost-first, then the sneak tokens -- and a hit test that
+// finds nothing clears every one of them, which is what a mouse leaving the board does.
+void App::update_hover(float sx, float sy) {
+    int button_at = -1, card = -1, token = -1;
+    for (std::size_t i = 0; i < conc_hotspots.size(); ++i) {
+        const SDL_FRect& r = conc_hotspots[i].rect;
+        if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
+            button_at = static_cast<int>(i);
+            break;
+        }
+    }
+    if (button_at < 0) {
+        for (std::size_t c = card_cache.size(); c-- > 0;) {
+            const CardCache& entry = card_cache[c];
+            if (entry.index < 0) continue;  // the highlight slot itself
+            if (sx >= entry.base_x && sx < entry.base_x + entry.w &&
+                sy >= entry.base_y && sy < entry.base_y + entry.h) {
+                card = static_cast<int>(c);
+                break;
+            }
+        }
+    }
+    if (button_at < 0 && card < 0) {
+        for (std::size_t t = 0; t < pairs_tokens.size(); ++t) {
+            if (t >= static_cast<std::size_t>(pairs_board.tokens())) break;
+            const SDL_FRect& r = pairs_tokens[t];
+            if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
+                token = static_cast<int>(t);
+                break;
+            }
+        }
+    }
+    if (button_at == hover_button_at && card == hover_card && token == hover_token) return;
+    hover_button_at = button_at;
+    hover_card = card;
+    hover_token = token;
+    std::string what;
+    if (card >= 0) what = "card " + std::to_string(card);
+    if (token >= 0) what += (what.empty() ? "" : ", ") + ("sneak token " + std::to_string(token));
+    if (button_at >= 0)
+        what += (what.empty() ? "" : ", ") +
+                conc_hotspots[static_cast<std::size_t>(button_at)].name;
+    std::printf("  hover: %s\n", what.empty() ? "nothing" : what.c_str());
+    // The old target's art has to come off and the new one's has to go on, so both changes
+    // rebuild the same layer: the scene layer holds the buttons, the cards and the tokens.
+    timed_refresh();
+}
+
 // One click handler for the mouse and for --script-click, so a scripted run exercises the
 // same navigation a mouse does.  Coordinates are scene coordinates.  Returns false when the
 // window should close.
@@ -79,7 +130,12 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             hover_changed = true;
         }
         if (hover_changed) draw_result_panel();
-        if (motion_only || hit == nullptr) return true;
+        // The panel stands in for a modal dialog, so the board behind it holds no focus.
+        if (motion_only) {
+            update_hover(-1.0f, -1.0f);
+            return true;
+        }
+        if (hit == nullptr) return true;
         if (hit->id == "PlayAgain") {
             std::printf("pairs: New Game -> a new %s round\n", picker_choice.c_str());
             ++seed_for_pairs;
@@ -99,12 +155,18 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         return true;
     }
     // A tip bubble with <CaptureGlobalClick> (the default) takes the click, which is how the
-    // intro's "How To Play" bubbles are dismissed in the shipped game.
-    if (tip.visible && tip.captures) {
+    // intro's "How To Play" bubbles are dismissed in the shipped game.  It takes the click only:
+    // the engine's mouse-move handler runs whatever is on screen, so the board behind the bubble
+    // still moves its focus.
+    if (tip.visible && tip.captures && !motion_only) {
         std::printf("  tip %s: closed\n", tip.id.c_str());
         professor_tip_closed();
         return true;
     }
+    // Focus follows the mouse (see update_hover).  A click moves it too, so a scripted click
+    // that never sent a motion event still highlights what it hit.
+    update_hover(sx, sy);
+    if (motion_only) return true;
     // Window -> scene -> card.  The target is the card's own node: the drawn sprite rect at
     // the cell's top-left, which at Beginner is 88x90 over a 74x74 cell, so the visible
     // card's right and bottom edges do work and neighbouring cells overlap by a few pixels.

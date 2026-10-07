@@ -11,7 +11,7 @@ flags and the core library's public interfaces are unchanged.
 | Process entry | [view_main.cpp](../view_main.cpp): constructs `App`, calls `run` |
 | Arguments, DLL/MUI loading, SDL setup, initial screen | [app.cpp](app.cpp): `App::run` |
 | Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown | [loop.cpp](loop.cpp): `run_loop` |
-| Mouse/script hit testing and screen navigation | [input.cpp](input.cpp): `click_scene` |
+| Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
 | Resource resolution, image decoding, sprite XML, file/PPM I/O, localiser | [resources.hpp](resources.hpp), [resources.cpp](resources.cpp): `Bundle`, `resolve_sprite`, `decode_payload`, `capture` |
 | Sheet texture cache, colour/alpha composition, coverage | [textures.cpp](textures.cpp): `load_sheet_texture`, `read_resource` |
@@ -22,9 +22,9 @@ flags and the core library's public interfaces are unchanged.
 | Fonts and diagnostic HUD | [hud.cpp](hud.cpp): `font_for`, `rebuild_hud`, `refresh_hud` |
 | Pairs setup orchestration, deal/reset, solve/click hooks, scene visibility | [pairs_setup.cpp](pairs_setup.cpp): `build_pairs` |
 | Per-level card back, jar points/coins, arc and burst configuration, animation reset | [level_art.cpp](level_art.cpp): `build_pair_level_art` |
-| Card face/back/outline/blank/spark cache and time-bar assets | [card_assets.cpp](card_assets.cpp): `build_pair_card_assets` |
+| Card face/back/outline/blank/spark/glow cache and time-bar assets | [card_assets.cpp](card_assets.cpp): `build_pair_card_assets` |
 | Progress indicators, count-aware sneak tokens, sneak movie loading | [pair_hud.cpp](pair_hud.cpp): `build_pair_hud` |
-| Cached card/effect draw lists (including the deal-in's growing cards), jar layering, timer/token/Professor draws | [pairs_render.cpp](pairs_render.cpp): `refresh_cards`, `timed_refresh` |
+| Cached card/effect draw lists (including the deal-in's growing cards), jar layering, timer/token/Professor draws, the hovered card's outline and glow | [pairs_render.cpp](pairs_render.cpp): `refresh_cards`, `timed_refresh` |
 | Flips, the deal-in, match sparks, flying jar coins, burst start/cache | [pairs_effects.cpp](pairs_effects.cpp): `advance_flips`, `advance_card_fx`, `start_deal`, `advance_deal`, `finish_deal`, `spawn_arcs` |
 | Board completion, score/rank, settings save | [pairs_round.cpp](pairs_round.cpp): `finish_board_end`, `report_round_end` |
 | Professor state machine, tips, transitions | [professor.cpp](professor.cpp): `professor_show`, `professor_display_tip`, `professor_tip_closed`, `professor_advance`, `professor_round_end`, `professor_intro_begin`, `professor_level_tip` |
@@ -95,6 +95,41 @@ lockout value, and a pair that is already counting down is not postponed by a ne
 is part of the same draw list and is built from the board's clock, so `App::time_bar_state()`
 ([pairs_render.cpp](pairs_render.cpp)) is what says whether a tick moved it -- the segment index and
 the 900-tick red threshold -- and `refresh_cards` draws from that one function.
+
+## Hover
+
+The engine's focus follows the mouse, so "hover" and "focus" are one thing:
+`UserInterface::ProcessMouseMove` (`0x100098498`) hit-tests the node under the cursor and calls
+`SetFocus` (`0x1000992E0`), which sends `Event_FocusLost` / `Event_FocusGot` (`0x12` / `0x11`,
+`Event_FocusLost::Create` `0x100094ADC` and `Event_FocusGot::Create` `0x100094AA8`) to the old and
+the new node. Exactly one node is focused, which is why `update_hover` sets all three targets from
+one hit test and why `click_scene`'s order -- the screen's buttons, then the cards, then the sneak
+tokens -- is also the hover order. The loop routes **every** screen's motion through it
+(`SDL_EVENT_MOUSE_MOTION`, and `SDL_EVENT_WINDOW_MOUSE_LEAVE` clears it), which is what makes the
+chooser's and the score panel's buttons highlight as well as the board's.
+
+The art each kind of node draws when it is focused:
+
+* a card shows `highlite_outline.xml` (`Card+0xD0`), and `card_glow.xml` (`Card+0xC8`) only while
+  it is face up -- `Card::HandleEvent`'s FocusGot case `0x10007C46F` and `Card::OnReveal`
+  `0x10007F849`. The outline's visible flag is written *only* by FocusGot and FocusLost, so the
+  outline is not a "card waiting for its partner" marker: it follows the pointer, which is also
+  why `Card::UpdateFlipForward` / `UpdateFlipBackward` / `OnReveal` / `OnHide` only rescale and
+  reposition it. The glow is additive: `Card::InitUI` sets its material to 2 at `0x10007BCE9`, and
+  `PurblePlaceUILoader::SetNodeMaterial` (`0x1000730B0`) maps `<Material>alpha</Material>` to 1 and
+  `<Material>additive</Material>` to 2 into `node+0x168` -- so `DrawItem::additive` exists for it;
+* a `NodeButton` switches to its second `<Animation>` -- `NodeButton::HandleEvent` `0x1000AAC92`.
+  That covers the menu's four buildings, the screen's `ReturnToMainMenu` (swapped in place at the
+  index `build_scene` recorded in `scene_button_at`), and the sneak peek tokens, which
+  `ConUILoader::LoadSneakPeekToken` (`0x10008C48C`) builds as buttons named "Button" with
+  `SneakPeakButton.xml`'s idle eye on `concentrationSheet29` and its hover/pressed eyes on
+  `sheet12`.
+
+The same FocusGot path is what the engine's *simple tips* hang off for two objects, and the
+reconstruction does not draw them yet: `SneakPeakArea::HandleEvent`'s MouseEnter case
+(`0x100084D3C`) shows the `SneakPeak` tip over a token and its MouseDown case shows `EmptySneak`
+over the area, and `Card::HandleEvent`'s ButtonClick case shows `BlankCard` for a matched cell.
+
 
 ## Verification and future changes
 

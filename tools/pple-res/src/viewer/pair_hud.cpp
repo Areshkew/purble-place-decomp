@@ -14,6 +14,7 @@ void App::build_pair_hud(std::string& scene_how) {
     pairs_meter.clear();
     pairs_tokens.clear();
     pairs_token_draws.clear();
+    pairs_token_hover_draws.clear();
     pairs_sneak_frame = -1.0f;
     if (loaded_scene) {
         float mx = 0.0f, my = 0.0f;
@@ -107,6 +108,27 @@ void App::build_pair_hud(std::string& scene_how) {
                 d.alpha = item.alpha;
                 pairs_tokens.push_back(d.dst);
                 pairs_token_draws.push_back(d);
+                // A token is a NodeButton (ConUILoader::LoadSneakPeekToken 0x10008C48C names it
+                // "Button" and sets the two clickable/focusable flags at node+74/+75), so its
+                // second <Animation> is the hover art -- SneakPeakButton.xml keeps the idle eye
+                // on concentrationSheet29 and the hover and pressed eyes on sheet12.
+                DrawItem hover = d;
+                const Sprite hs = resolve_sprite(bundle, item.ref, 1);
+                if (hs.ok) {
+                    std::string hover_how;
+                    const auto* hover_slot = bundle.resolve(hs.requested, hover_how);
+                    if (hover_slot != nullptr) {
+                        SDL_Texture* hover_tex =
+                            load_sheet_texture(hs.requested, hover_slot->entry->name, pairs_sheet_note);
+                        if (hover_tex != nullptr) {
+                            hover.texture = hover_tex;
+                            hover.src = SDL_FRect{hs.src.x + (hs.prepped ? 1.0f : 0.0f),
+                                                  hs.src.y + (hs.prepped ? 1.0f : 0.0f),
+                                                  hs.src.w, hs.src.h};
+                        }
+                    }
+                }
+                pairs_token_hover_draws.push_back(hover);
                 std::printf("  sneak token %zu: %.0f,%.0f %.0fx%.0f, scale %.0f%%\n",
                             pairs_tokens.size() - 1, static_cast<double>(d.dst.x),
                             static_cast<double>(d.dst.y), static_cast<double>(d.dst.w),

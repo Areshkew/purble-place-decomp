@@ -21,6 +21,7 @@ void App::release_draws() {
 // plus labels rendered through TTF.
 void App::build_scene() {
     release_draws();
+    scene_button_at.clear();
     scene_w = scene_h = 0.0f;
     if (!scene_background_xml.empty()) {
         const Sprite back = resolve_sprite(bundle, scene_background_xml, 0);
@@ -253,6 +254,10 @@ void App::build_scene() {
             const std::string& key = item.name.empty() ? item.instance : item.name;
             if (key == "JarBase") pairs_jar_base_at = static_cast<int>(scene_draws.size()) - 1;
             if (key == "JarFg") pairs_jar_front_at = static_cast<int>(scene_draws.size()) - 1;
+            // A <NodeButton> of the document, remembered by name so a hover can put its second
+            // <Animation> in this exact slot (NodeButton::HandleEvent 0x1000AAC92).
+            if (item.kind == pple::NodeKind::Button)
+                scene_button_at[key] = static_cast<int>(scene_draws.size()) - 1;
         }
         scene_w = std::max(scene_w, d.dst.x + d.dst.w);
         scene_h = std::max(scene_h, d.dst.y + d.dst.h);

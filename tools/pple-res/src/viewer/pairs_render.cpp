@@ -23,32 +23,27 @@ App::TimeBarState App::time_bar_state() const {
 void App::refresh_cards() {
     if (!pairs_ready) return;
     scene_draws.assign(pairs_scene_layer.begin(), pairs_scene_layer.end());
+    // The screen's own buttons: a hovered one draws its second <Animation> in place of the idle
+    // art scene_draws got from build_scene (the same swap build_menu does for the menu).
+    if (hover_button_at >= 0 && hover_button_at < static_cast<int>(conc_hotspots.size())) {
+        const Hotspot& spot = conc_hotspots[static_cast<std::size_t>(hover_button_at)];
+        if (spot.has_hover && spot.idle_at >= 0 &&
+            static_cast<std::size_t>(spot.idle_at) < scene_draws.size()) {
+            scene_draws[static_cast<std::size_t>(spot.idle_at)] = spot.hover_draw;
+        }
+    }
     float extent_w = scene_w, extent_h = scene_h;
     for (std::size_t i = 0; i < card_cache.size(); ++i) {
         CardCache& entry = card_cache[i];
         const bool is_highlight = (i + 1 == card_cache.size());
         if (is_highlight) {
-            const int pending = pairs_board.pending_reveal();
-            if (pending < 0 || pending >= pairs_board.cell_count()) continue;
-            if (entry.tex_face == nullptr) continue;
-            const pple::ConcentrationSlot& slot = pairs_board.slots()[pending];
-            const CardFlip& f = card_flip[pending];
-            const float sx = static_cast<float>(f.scale_x) / 100.0f;
-            const float sy = static_cast<float>(f.scale_y) / 100.0f;
-            const float base_x = pairs_origin_x + static_cast<float>(slot.x);
-            const float base_y = pairs_origin_y + static_cast<float>(slot.y);
-            DrawItem d;
-            d.texture = entry.tex_face;
-            d.src = entry.src_face;
-            d.dst = SDL_FRect{
-                base_x + static_cast<float>((100.0f - static_cast<float>(f.scale_x)) / 100.0f *
-                             static_cast<float>(slot.w) * 0.5f),
-                base_y + static_cast<float>(fabs(100.0f - static_cast<float>(f.scale_y)) / 100.0f *
-                             static_cast<float>(slot.h) * -1.0f),
-                entry.w * sx, entry.h * sy};
-            scene_draws.push_back(d);
-            extent_w = std::max(extent_w, d.dst.x + d.dst.w);
-            extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+            // The slot is only the outline art the hover below draws.  An earlier session drew
+            // highlite_outline here on the card waiting for its partner; the binary says the
+            // outline is the focus art and nothing else -- Card+0xD0's visible flag is written
+            // only by Card::HandleEvent's FocusGot (0x10007C46F sets it) and FocusLost
+            // (0x10007C413 clears it), while UpdateFlipForward / UpdateFlipBackward / OnReveal /
+            // OnHide touch only its scale (node+0x1C/+0x20) and position.  In the usual case the
+            // two agree, because the card that was just clicked is still under the pointer.
             continue;
         }
         if (entry.index < 0 || entry.index >= pairs_board.cell_count()) continue;
@@ -141,6 +136,58 @@ void App::refresh_cards() {
         extent_w = std::max(extent_w, d.dst.x + d.dst.w);
         extent_h = std::max(extent_h, d.dst.y + d.dst.h);
     }
+    // The hovered card's focus art.  Card::InitUI makes card_glow.xml (Card+0xC8) and
+    // highlite_outline.xml (Card+0xD0) children of the card's own Base, so they follow the card
+    // through a flip; Card::HandleEvent's FocusGot case (0x10007C46F) shows the outline for any
+    // hovered card and the glow only from state 1, a card that is already face up, and
+    // Card::OnReveal (0x10007F849) shows the glow for the card that was revealed with the
+    // pointer still over it.  The glow is created after FaceAnimation, so it draws over the
+    // card's face and under the outline.
+    if (hover_card >= 0 && !pairs_dealing &&
+        hover_card < static_cast<int>(card_cache.size()) - 1) {
+        const std::size_t hc = static_cast<std::size_t>(hover_card);
+        const CardCache& entry = card_cache[hc];
+        const CardFlip& f = card_flip[hc];
+        const pple::ConcentrationSlot& slot = pairs_board.slots()[hc];
+        const float sx = static_cast<float>(f.scale_x) / 100.0f;
+        const float sy = static_cast<float>(f.scale_y) / 100.0f;
+        const float cs = static_cast<float>(slot.scale_percent) / 100.0f;
+        // The engine recentres a narrowing card on the cell, not on the sprite, so the highlight
+        // rides the same offsets the card's own draw uses.
+        const float hx = entry.base_x +
+                         (100.0f - static_cast<float>(f.scale_x)) / 100.0f *
+                             static_cast<float>(slot.w) * 0.5f;
+        const float hy = entry.base_y +
+                         fabs(100.0f - static_cast<float>(f.scale_y)) / 100.0f *
+                             static_cast<float>(slot.h) * -1.0f;
+        if (pairs_glow_tex != nullptr && pairs_board.face(hover_card) == pple::CardFace::Shown) {
+            // The glow's own flag is a latch: FocusGot and OnReveal set it and only FocusLost
+            // clears it, so the original keeps it on through the take-back flip as long as the
+            // pointer stays.  Drawing it from the face state instead drops it one flip earlier.
+            DrawItem d;
+            d.texture = pairs_glow_tex;
+            d.src = pairs_glow_src;
+            // Card::InitUI puts the glow at the card's x - 4.
+            d.dst = SDL_FRect{hx - 4.0f * cs, hy, pairs_glow_w * sx, pairs_glow_h * sy};
+            d.alpha = 255;
+            // Card::InitUI sets the glow's material to 2, "additive" (0x10007BCE9, with
+            // PurblePlaceUILoader::SetNodeMaterial 0x1000730B0 reading <Material> into
+            // node+0x168); the outline keeps the default material.
+            d.additive = true;
+            scene_draws.push_back(d);
+        }
+        const CardCache& outline = card_cache.back();
+        if (outline.tex_face != nullptr) {
+            DrawItem d;
+            d.texture = outline.tex_face;
+            d.src = outline.src_face;
+            d.dst = SDL_FRect{hx, hy, outline.w * sx, outline.h * sy};
+            d.alpha = 255;
+            scene_draws.push_back(d);
+            extent_w = std::max(extent_w, d.dst.x + d.dst.w);
+            extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+        }
+    }
     // The explosion sparks.  Card::InitExplosion (0x10007E518) gives each of the four
     // Card+0x110 sparks a source at one corner of the card's cell and a destination 30 px
     // outside it, and Card::AnimateExplosion (0x10007E6D0) walks them for 30 ticks:
@@ -210,7 +257,10 @@ void App::refresh_cards() {
     }
     for (std::size_t i = 0; i < pairs_token_draws.size() &&
                             i < static_cast<std::size_t>(std::max(0, pairs_board.tokens())); ++i)
-        sneak_layer.push_back(pairs_token_draws[i]);
+        sneak_layer.push_back(i == static_cast<std::size_t>(hover_token) &&
+                                      i < pairs_token_hover_draws.size()
+                                  ? pairs_token_hover_draws[i]
+                                  : pairs_token_draws[i]);
     const std::size_t sneak_draw_count = sneak_layer.size();
     const std::size_t sneak_at = pairs_jar_base_at >= 0
         ? std::min(scene_draws.size(), static_cast<std::size_t>(pairs_jar_base_at) + card_draw_count)

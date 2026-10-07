@@ -66,6 +66,7 @@ private:
     void build_menu();
     void load_current(bool announce);
     bool click_scene(float sx, float sy, bool motion_only);
+    void update_hover(float sx, float sy);
     // ---- tips, the Professor's state machine and the in-canvas dialogs (tips.cpp,
     // professor.cpp, overlays.cpp) -------------------------------------------------------
     TTF_Font* face_font(const std::string& face, float size);
@@ -271,6 +272,29 @@ private:
     std::vector<Hotspot> conc_hotspots;
     bool menu_ready = false;
     std::string menu_hover_name;
+    // Hover.  The engine's focus follows the mouse: UserInterface::ProcessMouseMove (0x100098498)
+    // hit-tests the node under the cursor and calls SetFocus (0x1000992E0), which sends
+    // Event_FocusLost / Event_FocusGot (0x12 / 0x11, built by Event_FocusLost::Create
+    // 0x100094ADC and Event_FocusGot::Create 0x100094AA8) to the old and the new node.  Exactly
+    // one node is focused at a time, which is why these three are mutually exclusive:
+    //   * a card shows highlite_outline.xml (Card+0xD0) on FocusGot, and card_glow.xml
+    //     (Card+0xC8) only while it is face up -- Card::HandleEvent's case 0x11
+    //     (0x10007C46F) and Card::OnReveal (0x10007F849);
+    //   * a NodeButton switches to its second <Animation> -- NodeButton::HandleEvent
+    //     0x1000AAC92 (state 1 on <enter>, 0x1000AAE1C state 2 on <down>).
+    int hover_card = -1;      // index into card_cache, -1 = no card under the pointer
+    int hover_token = -1;     // index into pairs_token_draws
+    int hover_button_at = -1; // index into conc_hotspots
+    // card_glow.xml, the halo a hovered face-up card draws over itself.
+    std::string pairs_glow_xml = "UI\\Concentration\\card_glow.xml";
+    SDL_Texture* pairs_glow_tex = nullptr;
+    SDL_FRect pairs_glow_src{};
+    float pairs_glow_w = 0.0f, pairs_glow_h = 0.0f;
+    // The same tokens in their hover state, index-aligned with pairs_token_draws.
+    std::vector<DrawItem> pairs_token_hover_draws;
+    // Where each <NodeButton> of the current scene landed in scene_draws, so a hovered one can
+    // be swapped for its second <Animation> in place instead of being redrawn on top.
+    std::map<std::string, int> scene_button_at;
     // Set when build_pairs must rebuild the art for a board that already moved on: the Mixer
     // reshuffled the cards, or Board::NewLevel advanced to the next <Level>.
     bool pairs_keep_state = false;

@@ -104,6 +104,7 @@ Expected baseline:
 | Settings `consave` | XML and file both BYTE-IDENTICAL |
 | Scene-only / MCE | 14 sprites, 0 labels / 16 sprites, 3 labels |
 | Beginner playable scene | 6 static sprites (supersedes 8 after hiding the unused sneak animation template and initial sparks); token draws are separate and count-aware |
+| Hover | the engine has no separate hover: `UserInterface::ProcessMouseMove` (`0x100098498`) hit-tests the node under the cursor and `SetFocus` (`0x1000992E0`) sends `FocusGot`/`FocusLost`, so one node at a time is focused. A card shows `highlite_outline` (`Card+0xD0`) and, face up, the additive `card_glow` (`Card+0xC8`); a `NodeButton` (menu buildings, `ReturnToMainMenu`, sneak tokens) switches to `<Animation>` 1. The outline is the focus art, **not** a "waiting for its partner" marker. Motion is routed on every screen; `move:x,y` scripts one |
 | Warm performance, session 6 | full build 17.899 ms/call; card refresh 0.0835 ms/call, first 9.2018 ms |
 
 Do not reintroduce a per-tick full scene rebuild. Keep the test hooks (`--script-click`, `--pairs-solve`, `--pairs-ticks`, `--bench*`, `--shot-delay`) usable. At 5500 ticks the code selects the resource named RedTimerBar; current captured pixels look gold/yellow, so do not claim a verified red-pixel change. At 6300 ticks Intermediate loses and the bar is empty.

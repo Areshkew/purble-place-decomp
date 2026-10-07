@@ -8,8 +8,11 @@ int App::run_loop() {
     // mouse uses, so menu -> game -> menu and the flip animation can be verified without a mouse.
     // A "wait:MS" entry waits that long before the next click, which is what the Professor's
     // intro needs: his entrance plays for about a second before the first bubble appears.
+    // A "move:x,y" entry is a mouse move rather than a click, so a hover can be verified the
+    // same way.
     struct ScriptedClick {
         bool wait = false;
+        bool move = false;
         float x = 0.0f, y = 0.0f;
         int ms = 0;
     };
@@ -24,10 +27,13 @@ int App::run_loop() {
                 step.wait = true;
                 step.ms = std::atoi(item.substr(5).c_str());
             } else {
-                const std::size_t comma = item.find(',');
+                const bool move = item.rfind("move:", 0) == 0;
+                const std::string body = move ? item.substr(5) : item;
+                const std::size_t comma = body.find(',');
                 if (comma != std::string::npos) {
-                    step.x = static_cast<float>(std::atof(item.substr(0, comma).c_str()));
-                    step.y = static_cast<float>(std::atof(item.substr(comma + 1).c_str()));
+                    step.move = move;
+                    step.x = static_cast<float>(std::atof(body.substr(0, comma).c_str()));
+                    step.y = static_cast<float>(std::atof(body.substr(comma + 1).c_str()));
                 }
             }
             script_clicks.push_back(step);
@@ -66,10 +72,15 @@ int App::run_loop() {
             if (event.type == SDL_EVENT_QUIT) {
                 running = false;
             } else
-            if (event.type == SDL_EVENT_MOUSE_MOTION && screen == Screen::Menu && menu_ready &&
-                view_scale > 0.0f) {
+            if (event.type == SDL_EVENT_MOUSE_MOTION && view_scale > 0.0f) {
+                // Every screen is hoverable now, not just the menu: the difficulty chooser, the
+                // end-of-round panel and the board all take their focus from the pointer.
                 running = click_scene((event.motion.x - view_ox) / view_scale,
                                       (event.motion.y - view_oy) / view_scale, true);
+            } else
+            if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
+                // The pointer left the window, so nothing is hovered any more.
+                running = click_scene(-1.0f, -1.0f, true);
             } else
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT && view_scale > 0.0f) {
@@ -307,15 +318,21 @@ int App::run_loop() {
                     if (step.wait) {
                         SDL_Delay(static_cast<Uint32>(std::max(0, step.ms) - 150));
                     } else {
-                        std::printf("script click %zu: scene %.0f,%.0f\n", script_next - 1,
+                        std::printf("script %s %zu: scene %.0f,%.0f\n",
+                                    step.move ? "move" : "click", script_next - 1,
                                     static_cast<double>(step.x), static_cast<double>(step.y));
-                        running = click_scene(step.x, step.y, false);
+                        running = click_scene(step.x, step.y, step.move);
                     }
                 }
             }
             const auto draw_item = [&](const DrawItem& d) {
                 if (d.texture == nullptr) return;
                 SDL_SetTextureAlphaMod(d.texture, static_cast<Uint8>(std::clamp(d.alpha, 0, 255)));
+                // <Material>additive</Material> (node+0x168 == 2, PurblePlaceUILoader::
+                // SetNodeMaterial 0x1000730B0) adds the sprite to what is already there instead
+                // of blending it over.  Only Card::InitUI's glow asks for it.
+                SDL_SetTextureBlendMode(d.texture,
+                                        d.additive ? SDL_BLENDMODE_ADD : SDL_BLENDMODE_BLEND);
                 const SDL_FRect dst{
                     ox + d.dst.x * s, oy + d.dst.y * s, d.dst.w * s, d.dst.h * s
                 };
@@ -327,6 +344,7 @@ int App::run_loop() {
                     SDL_RenderTexture(renderer, d.texture, src, &dst);
                 }
                 SDL_SetTextureAlphaMod(d.texture, 255);
+                if (d.additive) SDL_SetTextureBlendMode(d.texture, SDL_BLENDMODE_BLEND);
             };
             // The menu's cloud movie sits between the Background and the Foreground, which is
             // where PurblePlaceManager::Init's own container puts it: it is created as a child of

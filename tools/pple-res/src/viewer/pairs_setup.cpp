@@ -274,6 +274,11 @@ void App::build_pairs() {
     }
     build_pair_level_art(scene_bytes, scene_how);
     const int failed = build_pair_card_assets();
+    // The board the focus was on is gone -- a new difficulty has a different cell count -- so the
+    // hover starts empty and the next mouse move sets it again.
+    hover_card = -1;
+    hover_token = -1;
+    hover_button_at = -1;
     // Card::InitUI (0x10007C0B6) puts every card in state 6 and clears Board+0x1E8, so the board
     // is inert while the cards grow in; Board::Update then calls Professor::DisplayIntro.  The
     // headless hooks take Card::InitUI's other branch -- Card+0x14 = 45, Board+0x1E8 = 1, no
@@ -307,6 +312,33 @@ void App::build_pairs() {
             spot.rect = SDL_FRect{(item.x - item.reg_x * item.scale) * item.scale,
                                   (item.y - item.reg_y * item.scale) * item.scale,
                                   item.src_w * item.scale, item.src_h * item.scale};
+            // The button's second <Animation> is its hover art (NodeButton::HandleEvent
+            // 0x1000AAC92).  ReturnToMainMenu.xml keeps the idle 95x52 in the Tips sheet at
+            // 97,180 and both the hover and pressed pairs at 0,0 and 0,108, so the swap has to
+            // replace the idle draw instead of covering it.
+            const auto idle = scene_button_at.find(key);
+            if (idle != scene_button_at.end()) spot.idle_at = idle->second;
+            const Sprite hover = resolve_sprite(bundle, item.ref, 1);
+            if (hover.ok && spot.idle_at >= 0) {
+                std::string hover_how;
+                const auto* hover_slot = bundle.resolve(hover.requested, hover_how);
+                if (hover_slot != nullptr) {
+                    SDL_Texture* hover_tex =
+                        load_sheet_texture(hover.requested, hover_slot->entry->name, pairs_sheet_note);
+                    if (hover_tex != nullptr) {
+                        spot.hover_draw.texture = hover_tex;
+                        spot.hover_draw.src = SDL_FRect{hover.src.x + (hover.prepped ? 1.0f : 0.0f),
+                                                        hover.src.y + (hover.prepped ? 1.0f : 0.0f),
+                                                        hover.src.w, hover.src.h};
+                        spot.hover_draw.dst = SDL_FRect{
+                            item.x - item.reg_x * item.scale,
+                            item.y - item.reg_y * item.scale + (mce_mode ? 51.0f : 0.0f),
+                            hover.src.w * item.scale, hover.src.h * item.scale};
+                        spot.hover_draw.alpha = item.alpha;
+                        spot.has_hover = true;
+                    }
+                }
+            }
             conc_hotspots.push_back(spot);
         }
     }

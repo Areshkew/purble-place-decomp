@@ -161,7 +161,7 @@ pple-view <pe>... [--menu] [--difficulty] [--resource NAME] [--sprite XML] [--sc
                   [--intro] [--no-intro] [--no-tips] [--deal] [--no-deal]
                   [--loading [MS]]
                   [--play NAME] [--volume N] [--mute]
-                  [--script-click "x,y;x,y;wait:MS"] [--shot-delay MS] [--bench N] [--bench-build N]
+                  [--script-click "x,y;x,y;move:x,y;wait:MS"] [--shot-delay MS] [--bench N] [--bench-build N]
                   [--list] [--shot out.ppm] [--save out.ppm] [--width N] [--height N]
                   [--font PATH] [--all]
 ```
@@ -169,7 +169,10 @@ pple-view <pe>... [--menu] [--difficulty] [--resource NAME] [--sprite XML] [--sc
 `--menu` is the real main menu and the entry point: `PurblePlaceManager.xml` (which lives in
 `PurblePlace.dll`) for the background, the `Foreground` sprite (which paints the four icons), the
 title labels and the four `<NodeButton>` hot-spots, with each button's `<Animation>` 1 as the
-hover art. Clicking the Purble Pairs hot-spot opens the in-canvas **Select Difficulty** screen
+hover art. Hover follows the pointer on every screen, not just the menu: the buildings, the
+chooser's and the score panel's buttons, the in-game `ReturnToMainMenu`, the cards and the sneak
+peek tokens all take their focus from the node under the mouse. Clicking the Purble Pairs hot-spot
+opens the in-canvas **Select Difficulty** screen
 (see below) and its three buttons start the game; the in-game `ReturnToMainMenu` button comes
 back; `ESC` goes back too, and `N`/`R` start a new round at the same difficulty.
 `--difficulty` starts on that chooser directly. `--mce` additionally draws the Media Center
@@ -235,7 +238,9 @@ Two engine rules that the layout interpreter applies because the shipped data de
   the icons painted in `PurblePlaceForeground.png`.
 
 `--script-click "x,y;x,y"` injects clicks in **scene** coordinates through the same handler the
-mouse uses, so menu → game → menu and the card flip can be verified without a mouse;
+mouse uses, so menu → game → menu and the card flip can be verified without a mouse, and a
+`move:x,y` entry is the same injection as a mouse **move**, so a hover is reachable without one
+too (the loop routes motion on every screen, and `SDL_EVENT_WINDOW_MOUSE_LEAVE` clears it);
 `--shot-delay MS` waits that long before capturing, which is what catches a flip mid-animation.
 `--pairs-solve` plays the whole round out — every `<Level>` of the difficulty — by clicking
 matchable pairs (equal `<id>`, or the Wild Card against anything) through the same handler the
@@ -402,6 +407,7 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-view --pairs "Intermediate,0" --pairs-ticks N` | 3000 ticks → 110 s left, bar half drained; 5500 → 27 s left and the `RedTimerBar` resource branch is selected (`left < 900`); the current capture looks gold/yellow, so this is not a verified red-pixel change; 6300 → `LOST`, `professor -> ProfessorLoseAnimation`, and the bar is empty. 226 segments, `TimeBarGreen`'s own `<FrameCount>`. The loss test is `Level+0x0C > 0 && Round+0x154 != 0 && Round+0x118 <= 0`, so Beginner — whose `Level+0x0C` is `30 * -1` — cannot lose. `Board::Update` (`0x10008A5C1`) stops the clock once the board is complete |
 | `pple-view --pairs` level change | `--pairs "Intermediate,0" --pairs-click <36 cells>` clears the first board through the click handler, prints `board relaid out -> level 2/2`, re-deals the second `<Level>`'s deck and back art, and the meter goes from one hollow indicator to one filled + one hollow. `Jar::StopExplosion` (`0x100083A20`) is the engine's decision point: no next `<Level>`, or `Round+0x124 >= Difficulty+0x20`, means the round is won; otherwise `Board::NewLevel`. A scripted run takes `Card::OnHide`'s end state directly — the matched cells show their BlankCard and the tray takes the fill the landings would have given it |
 | `pple-view --pairs` card flip | `--script-click "100,180;200,60" --shot-delay 60` captures the back collapsed to ~1/3 width, `--shot-delay 130` the face expanding — the two phases of `Card::UpdateFlipForward` (`0x10007EA20`) |
+| `pple-view` hover (focus follows the mouse) | `UserInterface::ProcessMouseMove` (`0x100098498`) hit-tests the node under the cursor and calls `SetFocus` (`0x1000992E0`), which sends `Event_FocusLost`/`FocusGot` (`0x12`/`0x11`). Motion is routed on **every** screen (`move:x,y` is the scripted form), and one hit test sets all three targets, so exactly one node is focused. A card shows `highlite_outline.xml` (`Card+0xD0`) and, face up, the additive `card_glow.xml` (`Card+0xC8`) — `Card::HandleEvent` FocusGot `0x10007C46F`, `Card::OnReveal` `0x10007F849`, material 2 set at `0x10007BCE9` and read as "additive" by `PurblePlaceUILoader::SetNodeMaterial` `0x1000730B0`; a `NodeButton` (the four menu buildings, `ReturnToMainMenu`, the sneak peek tokens) switches to `<Animation>` 1 (`NodeButton::HandleEvent` `0x1000AAC92`). Measured same-timing diffs, one target each: card outline `(173,25)-(261,113)` 1,287 px, additive glow `(171,25)-(262,116)` 7,533 px, token 0 `(3,448)-(48,494)` 1,586 px, `ReturnToMainMenu` `(701,441)-(795,492)` 2,148 px, chooser "Beginner" label blue, score panel "New Game" label blue, menu building `(3,74)-(213,283)`. `s25-*.png`, `s25-glow-add-zoom.png` |
 | `pple-view --mce` | 16 sprites and 3 labels instead of 14 and 0; `New Game` and `Exit Game` labels appear in the 51 px header strip and the clicks log `pairs: NewGame -> new round` and `pairs: ExitGame -> main menu`. Without `--mce` the same clicks do nothing |
 | `pple-view --bench-build 20 --pairs "Beginner,0"` | a whole scene rebuild with every sheet cached: **18.464 ms/call** (21 calls, the extra one is the priming build). `--bench 300 --script-click "180,30;264,30"` with a mismatch running: the card layer, which replaced the per-tick rebuild, is **0.0807 ms/call primed** over 33 calls — about 230x cheaper per 30 Hz tick. The first call is reported apart because it also decodes the sheets the cards need (**9.277 ms**) |
 | `pple-view --scene` container offsets | `TimeBarBkg` moves `3,21` → `63,4`, the jar to `15,315`, the peek background to `0,398` and the token rects to `3,448` / `47,448` / `93,448`, the Professor's movie anchor to `295,70`; `CONCENTRATIONGAME.XML` renders as the shipped screen (`new-conc.png` next to the game's own 256x192 thumbnail) |
@@ -508,10 +514,11 @@ features or existing known-gap fixes were included in this structural milestone.
     (`ConRoundData::ToXml` `0x10008035C`) but the document is not written, and the board
     thumbnail the game stores beside the statistics is not produced either. The statistics file
     itself **does** round-trip byte for byte (`pple-res consave`);
-  * **the rest of the card's own effects**: `card_glow.xml`, `highlite_outline.xml`,
-    `tileglow.xml`, `tilecover.xml`, the `/BonusTileAnimation` movie and `Card_shadow.xml` are
-    all created by `Card::InitUI` (`0x10007B8D8`) and none of them is drawn. The four
-    `SparkleSprite_y` sparks *are* drawn, as the match's explosion;
+  * **the rest of the card's own effects**: `tileglow.xml` (`Card+0xE8`), `tilecover.xml`
+    (`Card+0xF0`), the `/BonusTileAnimation` movie (`Card+0xD8`/`+0xE0`) and `Card_shadow.xml`
+    (`Card+0xC0`) are all created by `Card::InitUI` (`0x10007B8D8`) and none of them is drawn.
+    `card_glow.xml` and `highlite_outline.xml` **are** drawn now, as the hovered card's focus art.
+    The four `SparkleSprite_y` sparks *are* drawn, as the match's explosion;
   * **the two particle emitters** `Emitter_gold.xml` and `Emitter_white.xml`, which
     `ArcBehavior::Init` (`0x100083E48`) builds with `ParticleUpdate` (`0x100084678`) and
     `ParticlePaperCreation` (`0x100084424`) as callbacks;

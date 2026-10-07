@@ -40,6 +40,16 @@ int App::build_pair_card_assets() {
     SDL_FRect outline_src{};
     float outline_w = 0.0f, outline_h = 0.0f;
     build_card_sprite(pairs_outline, &outline_tex, outline_src, outline_w, outline_h);
+    // Card+0xC8's glow, 150x150 against the card's own 144x150, drawn over the card face
+    // (Card::InitUI creates it after FaceAnimation) at the card's x - 4.
+    SDL_Texture* glow_tex = nullptr;
+    SDL_FRect glow_src{};
+    float glow_w = 0.0f, glow_h = 0.0f;
+    build_card_sprite(pairs_glow_xml, &glow_tex, glow_src, glow_w, glow_h);
+    pairs_glow_tex = glow_tex;
+    pairs_glow_src = glow_src;
+    pairs_glow_w = glow_w * card_scale;
+    pairs_glow_h = glow_h * card_scale;
     // Card+0xB0 (the BlankCard a matched cell shows) and Card+0x110's sparks.
     build_card_sprite(pairs_blank_xml, &pairs_blank_tex, pairs_blank_src, pairs_blank_w,
                       pairs_blank_h, nullptr, &pairs_blank_reg_x, &pairs_blank_reg_y);
@@ -69,7 +79,7 @@ int App::build_pair_card_assets() {
         }
         card_cache.push_back(entry);
     }
-    card_cache.push_back(CardCache{});  // slot for the highlight, filled in by refresh_cards
+    card_cache.push_back(CardCache{});  // the outline art a hovered card draws; see refresh_cards
     card_cache.back().tex_face = outline_tex;
     card_cache.back().src_face = outline_src;
     card_cache.back().w = outline_w * card_scale;

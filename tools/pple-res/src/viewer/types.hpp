@@ -15,6 +15,10 @@ namespace pple::viewer {
         int alpha = 255;
         float rotation = 0.0f;
         // degrees clockwise, about the centre of dst
+        // NodeBase's material, which PurblePlaceUILoader::SetNodeMaterial (0x1000730B0) reads out
+        // of a node's <Material> into node+0x168: 0 default, 1 "alpha", 2 "additive".  Only
+        // Card::InitUI's glow (Card+0xC8) asks for additive in this game.
+        bool additive = false;
     };
     // The progress meter: /ProgressMeterContainer (665,40) and one indicator per <Level>, stacked
     // /ProgressMeterIndicators/yOffSet (55) apart, drawn from the CardBack <progpath> sprites.
@@ -196,5 +200,12 @@ namespace pple::viewer {
     struct Hotspot {
         std::string name;
         SDL_FRect rect{};
+        // A <NodeButton> of the scene document carries the same hot-spot states as the menu's
+        // buttons.  `idle_at` is where build_scene put its first <Animation> in scene_draws and
+        // `hover_draw` is that same node built from its second one, so a hover swaps the draw in
+        // place rather than drawing a second copy over it.
+        int idle_at = -1;
+        bool has_hover = false;
+        DrawItem hover_draw{};
     };
 } // namespace pple::viewer
