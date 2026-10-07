@@ -276,12 +276,19 @@ two before it becomes a texture, because that is the size the node rectangles ar
 `--movie` renders a `<Movie>` skeletal animation: `<Library frameCount=>` names the length,
 each `<ImageInstance name=>` is a part resolved through `<ImageDef xml=>` to an ordinary sprite
 node definition, and each `<Frame num= x= y= rotation= xscale= yscale= alpha=>` is a keyframe.
-An omitted attribute holds its previous value and a property with two or more keys is linearly
-interpolated, which is what `<Frame num="1"/>` means. `--anchor X,Y` places the movie's own
+A keyframe applies only on its own frame number and sets only the attributes it carries, so an
+omitted attribute holds its previous value and every property is a **step** function — the value
+of the last key at or before the frame being drawn. There is no interpolation
+(`PPMovieInstance::UpdateFrame`, `0x10008761C`); `<Frame num="1"/>` means "no change". Interpolating
+instead blends each part across the whole gap between two keys, which puts several *different*
+images partly opaque on top of each other — the Professor's open eye mixed with the solid blue
+closed lid, so it loses its pupil and the room tints its soft rim, and the exit's one-frame blur
+flash spread into a slow glow. `--anchor X,Y` places the movie's own
 coordinate space. In `--scene` mode every movie instance is resolved and reported, positioned
 ones are drawn, and `--movie-name NAME --anchor X,Y` draws one that the document does not place
 (the Concentration screen's nine `Professor*`/`SneakMovie`/`FireWorks` slots are all of that
-kind).
+kind). Note that `--movie-name` always draws **frame 0**; use `--movie XML --frame N` to look at
+another frame.
 
 For every sprite the scene renderer also reports **art coverage** — what fraction of the
 declared sheet rectangle is non-transparent (and, for sheets that have no alpha channel,
@@ -322,7 +329,7 @@ renders one frame into a hidden window and reads the back buffer; the read must 
   The header block is rebuilt from the fields, so a matching round trip proves nothing else is
   stored in it.
 * `movie.cpp` — `<Movie>` skeletal animations: `<ImageDef>` part resolution and per-part
-  keyframe tracks with hold and linear interpolation.
+  keyframe tracks applied as steps (a key counts only on its own frame number).
 * `wma.cpp` — WMA decoding through Media Foundation: a read-only in-memory `IStream`,
   `IMFSourceReader` to 16-bit PCM, and a RIFF/WAVE writer. SDL3_mixer has no WMA decoder, so
   this is the decoder.

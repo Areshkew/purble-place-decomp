@@ -18,9 +18,11 @@
 //
 // Each <ImageDef xml=...> points at a <Root Type="Sprite"> node definition, so a part is drawn
 // with the same frame-rectangle rule as any other sprite (including the <PreppedForFilter>
-// gutter).  A <Frame> sets only the attributes it carries; an attribute it omits keeps the
-// value from the previous key, and a property with two or more keys is linearly interpolated
-// between them.  `alpha`, `xscale` and `yscale` are percentages.
+// gutter).  A <Frame> sets only the attributes it carries, and it applies only on its own frame
+// number, so an attribute it omits keeps its previous value and every property is a step
+// function: the value of the last key at or before the frame being drawn.  There is no
+// interpolation (PPMovieInstance::UpdateFrame 0x10008761C).  `alpha`, `xscale` and `yscale` are
+// percentages.
 #pragma once
 
 #include <cstdint>

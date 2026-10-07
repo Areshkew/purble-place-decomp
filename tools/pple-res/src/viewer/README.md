@@ -71,7 +71,13 @@ textures live in `tip.owned` and the panels' in `result_draws`, so `release_over
 
 The Professor's six movies are parsed once into `prof_movie_cache` and the live one is copied
 into `professor.movie`; `professor_advance` runs from the 30 Hz tick in [loop.cpp](loop.cpp) and
-is the only place the state machine moves. Do not add movie or sheet loads to it.
+is the only place the state machine moves. Do not add movie or sheet loads to it. Movie
+keyframes are steps, not tweens: `pple::movie_evaluate` gives every part the value of the last
+`<Frame num=>` at or before the frame being drawn, because the engine applies a key only on its
+own frame number. The blink, mouth and exit-blur tracks depend on that — several copies of one
+sprite are authored to snap between alpha 0 and 100, so interpolating them mixes the open eye with
+the closed blue lid (no pupil, and the room tints the soft rim) and spreads the exit's one-frame
+blur flash over the whole movie.
 
 The deal-in runs on the same 30 Hz tick, before the board's own step: `advance_deal` moves each
 card's `Card+0x14` counter, `refresh_cards` draws a card that has not started yet as nothing and

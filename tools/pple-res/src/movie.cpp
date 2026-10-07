@@ -45,24 +45,30 @@ int attr_int(const XmlNode& node, const std::string& name, int fallback) {
     return std::atoi(text.c_str());
 }
 
-// Values of one property across its keys, plus the frames those keys sit on.
+// One property's value at `frame`: the value of the last key at or before it.  This is a step
+// function, not an interpolation.
+//
+// PPMovieInstance::UpdateFrame (0x10008761C) walks the instance's <Frame> list for a key whose
+// number is *equal* to the frame the movie is advancing to, and applies only the attributes that
+// key carries (`if (*(_DWORD *)(key + 4) == a2)`, then one `if (key->flags & bit)` per property);
+// a frame with no matching key changes nothing, and a key that omits an attribute leaves it
+// alone.  PurblePlaceMovie::Update (0x100087EF8) calls UpdateFrame once for every frame index
+// from the last applied one to the current one, which is what makes an omitted attribute hold
+// its value rather than blend towards the next key.
+//
+// Interpolating instead smears each change across the whole gap between two keys.  The
+// Professor's blink and mouth tracks are many copies of one sprite that snap between alpha 0 and
+// 100 on a single frame, so blending leaves several *different* images partly opaque on top of
+// each other: the open eye is mixed with the solid blue closed lid and loses its pupil, and the
+// exit's one-frame blur flash becomes a slow glow over a Professor who is still fading out.
 float sample(const MoviePart& part, int frame, bool MovieKey::*has, float MovieKey::*value,
              float fallback) {
-    const MovieKey* before = nullptr;
-    const MovieKey* after = nullptr;
+    const MovieKey* held = nullptr;
     for (const MovieKey& k : part.keys) {
-        if (!(k.*has)) continue;
-        if (k.frame <= frame) {
-            if (before == nullptr || k.frame >= before->frame) before = &k;
-        } else if (after == nullptr || k.frame < after->frame) {
-            after = &k;
-        }
+        if (!(k.*has) || k.frame > frame) continue;
+        if (held == nullptr || k.frame >= held->frame) held = &k;
     }
-    if (before == nullptr) return after != nullptr ? after->*value : fallback;
-    if (after == nullptr || after->frame == before->frame) return before->*value;
-    const float t = static_cast<float>(frame - before->frame) /
-                    static_cast<float>(after->frame - before->frame);
-    return before->*value + (after->*value - before->*value) * t;
+    return held != nullptr ? held->*value : fallback;
 }
 
 }  // namespace
