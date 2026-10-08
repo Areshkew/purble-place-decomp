@@ -125,6 +125,27 @@ void App::refresh_cards() {
         const float off_x = (100.0f - static_cast<float>(scale_x)) / 100.0f * entry.cell_w * 0.5f;
         const float off_y = fabs(100.0f - static_cast<float>(scale_y)) / 100.0f *
                             entry.cell_h * -1.0f;
+        // Card+0xC0, Card_shadow.xml, drawn *under* the art at the card's Base + (2,-2).  It is
+        // created at Card::InitUI 0x10007BAE9 already hidden; Card::UpdateFlipForward
+        // (0x10007EA87 sets node+0x29 = 1 before it does anything else) is what shows it, so a
+        // face-down card that has never been turned draws none and every card that has carries
+        // one through its reveal, its match and the flip-back.
+        if (pairs_shadow_tex != nullptr &&
+            (show_face || f.phase != FlipPhase::None || fx.flip > 0 || fx.blank)) {
+            const float ss = static_cast<float>(entry.w) /
+                             (pairs_shadow_w > 0.0f ? pairs_shadow_w : entry.w);
+            DrawItem s;
+            s.texture = pairs_shadow_tex;
+            s.src = pairs_shadow_src;
+            // Card::UpdateFlipForward's SetPosition for the shadow is
+            // (5 - xscale) * card.w * 0.05, (2 - yscale) * card.h * 0.2, which is 2,-2 at the
+            // resting scale of 100.
+            s.dst = SDL_FRect{entry.base_x + (5.0f - static_cast<float>(scale_x)) * entry.cell_w * 0.05f,
+                              entry.base_y + (2.0f - static_cast<float>(scale_y)) * entry.cell_h * 0.2f,
+                              pairs_shadow_w * ss, pairs_shadow_h * ss};
+            s.alpha = 255;
+            scene_draws.push_back(s);
+        }
         DrawItem d;
         d.texture = tex;
         d.src = src;
@@ -135,6 +156,63 @@ void App::refresh_cards() {
         scene_draws.push_back(d);
         extent_w = std::max(extent_w, d.dst.x + d.dst.w);
         extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+        // Card+0xE8 and Card+0xF0, the matched card's two glints, and Card+0xE0, its bonus
+        // movie.  All three are children of the card's Base created *after* the face, so they
+        // draw over it:
+        //
+        //   Card::Update's tail (0x10007DCA4) runs `if (Card+0x74 == 1)` with
+        //   `v = Card+0x14 / 90` clamped to [0,1] and shows the glow while `Card+0x1B8 < 10`,
+        //   then, from `>= 24`, drops the glow's own counter 25 at a time while it is >= 25
+        //   until it reaches 0 and hides the node (0x10007DC46);
+        //   the cover is shown only while `10 <= n <= 15` or `20 <= n <= 25` (0x10007DCAF).
+        //   `Card+0x74` is `n`, and Card::AnimateExplosion (0x10007E9DD) increments it once per
+        //   tick while `n < 30`, so both windows sit inside the 30-tick explosion.
+        if (fx.bonus_tick >= 0) {
+            const int n = fx.bonus_tick;
+            const float cs = static_cast<float>(pairs_board.slots()[static_cast<std::size_t>(
+                                                    entry.index)]
+                                                    .scale_percent) /
+                             100.0f;
+            const bool cover_on = (n >= 10 && n <= 15) || (n >= 20 && n <= 25);
+            if (n < 10 && pairs_tileglow_tex != nullptr) {
+                const float pulse = 25.0f * static_cast<float>(n);
+                const float gx = entry.cell_w > 1.0f ? -16.0f : -18.0f;
+                const float gy = entry.cell_w > 1.0f ? -10.0f : -14.0f;
+                DrawItem g;
+                g.texture = pairs_tileglow_tex;
+                g.src = pairs_tileglow_src;
+                g.dst = SDL_FRect{entry.base_x + gx * cs, entry.base_y + gy * cs,
+                                  pairs_tileglow_w * cs + pulse, pairs_tileglow_h * cs + pulse};
+                g.alpha = 255;
+                scene_draws.push_back(g);
+                extent_w = std::max(extent_w, g.dst.x + g.dst.w);
+                extent_h = std::max(extent_h, g.dst.y + g.dst.h);
+            }
+            if (cover_on && pairs_tilecover_tex != nullptr) {
+                DrawItem c;
+                c.texture = pairs_tilecover_tex;
+                c.src = pairs_tilecover_src;
+                c.dst = SDL_FRect{entry.base_x - 1.0f * cs, entry.base_y + 4.0f * cs,
+                                  pairs_tilecover_w * cs, pairs_tilecover_h * cs};
+                c.alpha = 255;
+                scene_draws.push_back(c);
+                extent_w = std::max(extent_w, c.dst.x + c.dst.w);
+                extent_h = std::max(extent_h, c.dst.y + c.dst.h);
+            }
+            // The movie's Base is the card's own size centred in the 1000x800 movie space:
+            // (card.w/2 - 500, card.h/2 - 400) at 0x10007BED2.
+            if (pairs_bonus_movie_ok && !pairs_bonus_movie.parts.empty()) {
+                const float fps =
+                    pple::movie_frame_rate(pairs_bonus_movie, pairs_bonus_movie.parts.front());
+                const int frame = (fps > 0.0f && pairs_bonus_movie.frame_count > 0)
+                                      ? n % pairs_bonus_movie.frame_count
+                                      : 0;
+                append_movie(pairs_bonus_movie, frame,
+                             entry.base_x + entry.w * 0.5f - 500.0f,
+                             entry.base_y + entry.h * 0.5f - 400.0f, scene_draws, extent_w,
+                             extent_h);
+            }
+        }
     }
     // The hovered card's focus art.  Card::InitUI makes card_glow.xml (Card+0xC8) and
     // highlite_outline.xml (Card+0xD0) children of the card's own Base, so they follow the card
@@ -348,6 +426,24 @@ void App::refresh_cards() {
         jar_layer.push_back(d);
         extent_w = std::max(extent_w, d.dst.x + d.dst.w);
         extent_h = std::max(extent_h, d.dst.y + d.dst.h);
+    }
+    // The coin's gold and white sparkles.  ArcBehavior::Init creates the two emitters as
+    // children of the coin's own base, before Jar::InitUI's tray base, so they draw in front of
+    // the coin and behind the tray; ParticleUpdate's alpha is `life * 1275` capped at 125.
+    for (const ArcSpark& s : pairs_arc_sparks) {
+        SDL_Texture* tex = s.gold ? pairs_spark_gold_tex : pairs_spark_white_tex;
+        const SDL_FRect& src = s.gold ? pairs_spark_gold_src : pairs_spark_white_src;
+        if (tex == nullptr) continue;
+        DrawItem d;
+        d.texture = tex;
+        d.src = src;
+        // NodeSprite::UpdateZero: the drawn corner is (x, y) - registration.
+        d.dst = SDL_FRect{s.x - pairs_spark_reg_x, s.y - pairs_spark_reg_y, pairs_spark_w,
+                          pairs_spark_h};
+        d.alpha = static_cast<int>(std::min(125.0f, s.life * 1275.0f));
+        // The heading is the particle's own atan(vy / vx), matching ParticleUpdate.
+        d.rotation = std::atan2(s.vy, s.vx) * 180.0f / 3.14159265f;
+        jar_layer.push_back(d);
     }
     // The jar's tray.  Jar::DoFiller (0x100083B10):
     //   want = (int)(points / Board+0x28 * Round+0x12C)

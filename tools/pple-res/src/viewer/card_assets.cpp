@@ -62,6 +62,48 @@ int App::build_pair_card_assets() {
     build_card_sprite(pairs_sneak_icon_xml, &pairs_sneak_icon_tex, pairs_sneak_icon_src,
                       pairs_sneak_icon_w, pairs_sneak_icon_h, nullptr, &pairs_sneak_icon_reg_x,
                       &pairs_sneak_icon_reg_y);
+    // Card+0xC0 / Card+0xE8 / Card+0xF0: the flip's shadow and the matched card's two glints.
+    build_card_sprite(pairs_shadow_xml, &pairs_shadow_tex, pairs_shadow_src, pairs_shadow_w,
+                      pairs_shadow_h);
+    build_card_sprite(pairs_tileglow_xml, &pairs_tileglow_tex, pairs_tileglow_src,
+                      pairs_tileglow_w, pairs_tileglow_h);
+    build_card_sprite(pairs_tilecover_xml, &pairs_tilecover_tex, pairs_tilecover_src,
+                      pairs_tilecover_w, pairs_tilecover_h);
+    // The two sprites the flying coin's emitters throw: Emitter_gold uses SparkleSprite_y and
+    // Emitter_white uses SparkleSprite (ArcBehavior::Init 0x100083F98 / 0x100083FBE).
+    build_card_sprite("UI\\Concentration\\SparkleSprite_y.xml", &pairs_spark_gold_tex,
+                      pairs_spark_gold_src, pairs_spark_w, pairs_spark_h, nullptr,
+                      &pairs_spark_reg_x, &pairs_spark_reg_y);
+    build_card_sprite("UI\\Concentration\\SparkleSprite.xml", &pairs_spark_white_tex,
+                      pairs_spark_white_src, pairs_spark_w, pairs_spark_h, nullptr,
+                      &pairs_spark_reg_x, &pairs_spark_reg_y);
+    // The bonus tile's movie.  Card::InitUI resolves the scene document's /BonusTileAnimation
+    // through ConUILoader::LoadMovie (0x10007BEF6); the document is per-screen, so it is loaded
+    // once and kept.
+    if (!pairs_bonus_movie_ok) {
+        std::string scene_how;
+        const auto* scene_slot = bundle.resolve(scene_xml, scene_how);
+        if (scene_slot != nullptr) {
+            pple::XmlNode root;
+            std::string xml_error;
+            if (pple::xml_parse(bundle.read(*scene_slot), root, xml_error)) {
+                if (const auto* node = root.find("BonusTileAnimation")) {
+                    if (const auto* desc = node->find("Desc")) {
+                        const std::string name = desc->child_text("Movie");
+                        std::vector<std::uint8_t> bytes;
+                        if (!name.empty() && fetch_resource(name, bytes)) {
+                            pairs_bonus_movie_ok = pple::movie_load(bytes, fetch_resource,
+                                                                    pairs_bonus_movie, xml_error);
+                            std::printf("  bonus tile: %s, %d frame(s), %zu part(s)%s\n",
+                                        name.c_str(), pairs_bonus_movie.frame_count,
+                                        pairs_bonus_movie.parts.size(),
+                                        pairs_bonus_movie_ok ? "" : " FAILED");
+                        }
+                    }
+                }
+            }
+        }
+    }
     for (const pple::ConcentrationSlot& slot : pairs_board.slots()) {
         const pple::CardDef* def = pairs_pools.find(slot.card_id);
         CardCache entry;
@@ -91,6 +133,15 @@ int App::build_pair_card_assets() {
     card_cache.back().src_face = outline_src;
     card_cache.back().w = outline_w * card_scale;
     card_cache.back().h = outline_h * card_scale;
+    // Which cell carries the bonus indicator: Board::SelectSneakCard (0x10008B348) sets Card+0x18
+    // on one random card, and Card::DoMatcher's `Card+0x18` branch is what plays the bonus movie
+    // and pays the extra token.  Reported because it is the only way to aim a scripted click at
+    // it: the shipped game shows it as the golden eye (Card::DoSneakIcon).
+    for (int i = 0; i < pairs_board.cell_count(); ++i) {
+        if (!pairs_board.sneak_card(i)) continue;
+        std::printf("  bonus card: cell %d\n", i);
+        break;
+    }
     // The shown-face bookkeeping starts from the board as it is now, so a scripted
     // --pairs-click run does not animate a flip for cards that were turned before the first
     // frame.

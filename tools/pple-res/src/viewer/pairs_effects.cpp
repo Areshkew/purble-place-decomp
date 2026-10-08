@@ -160,6 +160,64 @@ void App::spawn_arcs(const std::vector<int>& cells) {
     if (!pairs_arcs.empty()) pairs_jar_phase = JarPhase::Flying;
 }
 
+// ArcBehavior::Init's two emitters.  Each spawns `rate` particles a tick at the emitter's own
+// position, which is the coin base + (-10,-10) in /ArcContainer's space.
+void App::spawn_arc_sparks(const ArcCoin& coin) {
+    if (pairs_spark_gold_tex == nullptr && pairs_spark_white_tex == nullptr) return;
+    // The coin's drawn centre, which is where the emitters sit (their -10,-10 is the sprite's
+    // registration-sized default rather than the coin's own rect).
+    const double t = std::clamp(static_cast<double>(coin.tick) /
+                                    static_cast<double>(pairs_arc_frames > 0 ? pairs_arc_frames : 1),
+                                0.0, 1.0);
+    const double u = 1.0 - t;
+    const float px = static_cast<float>(u * u * coin.sx + 2.0 * u * t * coin.cx + t * t * coin.dx);
+    const float py = static_cast<float>(u * u * coin.sy + 2.0 * u * t * coin.cy + t * t * coin.dy);
+    const float base_x = px - 10.0f;
+    const float base_y = py - 10.0f;
+    for (int emitter = 0; emitter < 2; ++emitter) {
+        const bool gold = emitter == 0;
+        if (gold ? pairs_spark_gold_tex == nullptr : pairs_spark_white_tex == nullptr) continue;
+        for (int i = 0; i < 10; ++i) {  // <rate>10</rate>
+            ArcSpark s;
+            s.x = base_x;
+            s.y = base_y;
+            // ParticlePaperCreation 0x100084518 / 0x100084552:
+            //   vx = (rand()%20 - 10) / 100 + Particle+0x2C
+            //   vy = (rand()%80 - 40) / 100 + Particle+0x30
+            // and the "+ Particle+..." terms are the particle's inherited velocity, which the
+            // emitter's own (-10,-10) offset leaves at zero.
+            s.vx = static_cast<float>(std::rand() % 20 - 10) / 100.0f;
+            s.vy = static_cast<float>(std::rand() % 80 - 40) / 100.0f;
+            s.life_max = 0.25f;  // <life>.25</life>
+            s.accel = 200.0f;    // <xAccel>/<yAccel>
+            s.gold = gold;
+            pairs_arc_sparks.push_back(s);
+        }
+    }
+}
+
+// One 30 Hz step of both emitters' output.  ParticleUpdate (0x100084678) ramps the alpha from
+// `life * 1275` up to 125 once the particle is 0.2 s old and aims it along atan(vy / vx); the
+// motion itself is a plain constant-acceleration step over the particle's <life>.
+bool App::advance_arc_sparks() {
+    if (pairs_arc_sparks.empty()) return false;
+    const float dt = 1.0f / 30.0f;
+    for (std::size_t i = 0; i < pairs_arc_sparks.size();) {
+        ArcSpark& s = pairs_arc_sparks[i];
+        s.life += dt;
+        s.vx += s.accel * dt;
+        s.vy += s.accel * dt;
+        s.x += s.vx;
+        s.y += s.vy;
+        if (s.life >= s.life_max) {
+            pairs_arc_sparks.erase(pairs_arc_sparks.begin() + static_cast<std::ptrdiff_t>(i));
+            continue;
+        }
+        ++i;
+    }
+    return true;
+}
+
 // Jar::Update's landing: the tray grows to `points / Board+0x28 * Round+0x12C`.  DoFiller
 // only ever adds nodes, so the count never falls within a level.
 void App::jar_grow() {
@@ -175,6 +233,15 @@ void App::jar_grow() {
 // explosion, and mark the card doomed.  `immediate` is for the scripted hooks, which have no
 // frames to animate in, so Card::OnHide's end state is taken straight away.
 void App::arm_match_fx(const std::vector<int>& cells, bool immediate) {
+    // Card+0x18 is the flag Board::SelectSneakCard (0x10008B348) sets on one random card; it is
+    // what Card::DoMatcher's `if (*((_BYTE *)this + 24) != 0)` branch pairs with PlayBonusAnim
+    // (0x10007D6D4) -- the bonus movie, the added peak and the +20 at 0x10007D716.
+    int bonus_cell = -1;
+    for (int cell : cells) {
+        if (cell >= 0 && cell < static_cast<int>(pairs_board.cell_count()) &&
+            pairs_board.sneak_card(cell))
+            bonus_cell = cell;
+    }
     for (int cell : cells) {
         if (cell < 0 || cell >= static_cast<int>(card_fx.size())) continue;
         CardFx& fx = card_fx[static_cast<std::size_t>(cell)];
@@ -182,9 +249,13 @@ void App::arm_match_fx(const std::vector<int>& cells, bool immediate) {
         fx.countdown = 10;    // Card::DoForceMatch's `*((_DWORD *)this + 15) = 10`
         fx.spark_tick = 0;    // Card::InitExplosion
         fx.flip = 0;
+        // Card::PlayBonusAnim resets the bonus counter to 0 on the card that carried the
+        // indicator, and Card::Update's tail takes it from there.
+        fx.bonus_tick = cell == bonus_cell ? 0 : -1;
         if (immediate) {
             fx.countdown = -1;
             fx.spark_tick = -1;
+            fx.bonus_tick = -1;
             fx.blank = true;
             card_fx_pending_fly.push_back(cell);
         }
@@ -258,6 +329,23 @@ bool App::advance_card_fx() {
         if (fx.spark_tick >= 0) {
             ++fx.spark_tick;
             if (fx.spark_tick >= 30) fx.spark_tick = -1;
+            changed = true;
+        }
+        if (fx.bonus_tick >= 0) {
+            // Card::Update's tail (0x10007DC9A) is the bonus play's whole clock.  `n` is the
+            // counter Card::PlayBonusAnim zeroed:
+            //   * while the movie runs, `++n` and the glow's own counter takes `+25` per tick;
+            //   * from `n >= 24` the glow's counter drops by 25 a tick until it reaches 0 and the
+            //     node is hidden; the counter itself is left alone, and the movie stops at its
+            //     last frame (28 at 30 fps is 28 ticks, which `n` has passed by then);
+            //   * once the movie has stopped and the counter is 25 or less, Card::Update zeroes
+            //     it (0x10007DC04) and never shows either node again.
+            // The explosion's own increment (Card::AnimateExplosion 0x10007E9DD) runs only while
+            // `n < 30`, so the counter's last value is 30 and the glow's counter has been drained
+            // to 0 by then: the visible windows are n < 10 for the glow, and 10..15 or 20..25 for
+            // the cover (0x10007DCAF).
+            ++fx.bonus_tick;
+            if (fx.bonus_tick > 30) fx.bonus_tick = -1;
             changed = true;
         }
         if (fx.countdown > 0) {

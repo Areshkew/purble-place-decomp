@@ -25,6 +25,7 @@ void App::build_pair_level_art(const std::vector<std::uint8_t>& scene_bytes, std
     // already hidden the previous level's coins), and the card animation belongs to the board
     // that is being replaced.
     pairs_arcs.clear();
+    pairs_arc_sparks.clear();
     pairs_jar_fill = 0;
     pairs_jar_phase = JarPhase::Idle;
     pairs_burst_frame = 0.0f;
