@@ -13,6 +13,9 @@ public:
     App(App&&) = delete;
     App& operator=(App&&) = delete;
     int run(int argc, char** argv);
+    // Which art the sheets are loaded from: the shipped 1x resources, or the game's own
+    // double-DPI x2 resources (see the sheet-DPI block below and notes section 21).
+    enum class SheetDpi { Base, Double };
 private:
     int run_loop();
     double refresh_total_ms = 0.0;
@@ -23,6 +26,16 @@ private:
     void build_coverage(SDL_Surface* surface, std::vector<std::uint8_t>& grid,                                   bool alpha_only);
     float rect_coverage(const std::string& sheet, const SDL_FRect& src);
     SDL_Texture* load_sheet_texture(const std::string& requested, const std::string& resolved_name,                                        std::string& note);
+    // The surface a sheet request turns into, at the current DPI: the 1x pair, the x2 sibling,
+    // or the four x2 pages of a split sheet assembled into one canvas.  `src_scale` is what the
+    // caller's source rectangles have to be multiplied by.
+    SDL_Surface* load_sheet_surface(const std::string& requested, const std::string& resolved_name,
+                                    float& src_scale, bool& composed, std::string& note);
+    bool load_split_list();
+    void clear_sheet_textures();
+    void set_sheet_dpi(SheetDpi want);
+    void rebuild_current_screen();
+    float src_scale_for(SDL_Texture* tex) const;
     void release_draws();
     void build_movie();
     bool read_resource(const std::string& name, std::vector<std::uint8_t>& out);
@@ -200,6 +213,28 @@ private:
     std::map<std::string, SDL_Texture*> sheet_cache;
     std::map<std::string, std::pair<int, int>> sheet_sizes;
     std::map<std::string, std::vector<std::uint8_t>> sheet_coverage;
+    // ---- double-DPI art: the engine's g_bDoubleDPI path --------------------------------
+    // ResourceTextureD3D::SetNameForDPI (0x1000A80DC) inserts "x2" before the extension, so
+    // every image resource has a twice-size sibling (UI\PurblePlace\Loading.jpg ->
+    // Loadingx2.jpg, 800x496 -> 1600x992).  ResourceTextureD3D::GetSplitTexture (0x1000A7E40)
+    // builds `<stem>x2<page>.sht` for a sheet SplitList.xml lists, i.e. the sheet's four
+    // quadrants as 1024x1024 pages, and Material::Render (0x1000A96E0) picks the page by UV
+    // quadrant.  The x2 texture is exactly twice the 1x padded texture, so a source rectangle
+    // authored in 1x space is read at twice its offset and size; the layout, the registration
+    // and every destination rectangle are unchanged.  See notes section 21.
+    // enum class SheetDpi { Base, Double };  -- declared at the top of the class
+    SheetDpi sheet_dpi = SheetDpi::Base;
+    // 0 auto, 1 forced by --hidpi, -1 forced by --no-hidpi.  Auto uses the x2 art above
+    // `hidpi_scale`, where upscaling the 1x art would visibly soften the screen.
+    int hidpi_mode = 0;
+    float hidpi_scale = 1.5f;
+    std::vector<pple::SplitSheet> split_sheets;
+    bool split_sheets_loaded = false;
+    // Source-rect multiplier per texture/sheet: 2 for a sheet drawn from its x2 resources.
+    std::map<SDL_Texture*, float> texture_src_scale;
+    std::map<std::string, float> sheet_src_scale;
+    std::size_t hidpi_sheets = 0, hidpi_fallbacks = 0;
+    bool dpi_logged = false;
     // Resource names the last sheet load went through, for the HUD and the report.
     std::vector<std::string> named_steps;
     std::function<bool(const std::string&, std::vector<std::uint8_t>&)> fetch_resource;

@@ -5,6 +5,12 @@ namespace pple::viewer {
 
     void usage() {
         std::fprintf(stderr,                 "pple-view — SDL3 viewer for the Purble Place resource DLLs\n\n"                 "  pple-view <pe>... [options]\n\n"                 "  --resource NAME   start on this resource\n"                 "  --sprite XML      show one frame of a <Node Type=\"Sprite\"> definition\n"                 "  --scene XML       render a UI layout: every instance with its sheet frame\n"                 "  --movie XML       render a <Movie> skeletal animation at one frame\n"                 "  --movie-name NAME in --scene mode, draw this <Movie> animation slot at --anchor\n"                 "  --pairs [D,L,S]   play Purble Pairs: D = Beginner|Intermediate|Advanced, L = level, S = seed\n"                 "  --menu            start on the real main menu (UI\\PurblePlace\\PurblePlaceManager.xml); its\n"                 "                    Purble Pairs hot-spot enters the game\n"                 "  --mce             draw the Media Center build's New Game / Exit Game header buttons.\n"                 "                    The shipped executable deletes those five nodes when\n"                 "                    g_bMediaCenter == 0 (0x10008122B), so by default they are absent, as\n"                 "                    they are in this build\n"                 "  --no-container-offsets  do not apply the engine's HUD re-parenting (notes 17.7)\n"
+                 "  --hidpi           draw the menu, the loading screen and Purble Pairs from the game's own\n"
+                 "                    double-DPI art: the x2 sheets and x2 images the engine loads when\n"
+                 "                    Windows reports a high DPI (g_bDoubleDPI).  The layout is unchanged and\n"
+                 "                    every source rectangle is read at twice its offset and size.\n"
+                 "  --no-hidpi        force the 1x art; this is also the automatic choice below a 1.5x\n"
+                 "                    window scale, where the x2 art would have to be minified\n"
                  "  --difficulty      start on the in-canvas Select Difficulty screen\n"
                  "  --intro           with --pairs, also run the Professor's entrance and intro tips\n"
                  "  --no-intro        never run them (an explicit --pairs start skips them anyway)\n"
@@ -55,6 +61,8 @@ int App::run(int argc, char** argv) {
         else if (a == "--no-deal") deal_enabled = false;
         else if (a == "--no-tips") tips_enabled = false;
         else if (a == "--no-container-offsets") container_offsets = false;
+        else if (a == "--hidpi") hidpi_mode = 1;
+        else if (a == "--no-hidpi") hidpi_mode = -1;
         else if (a == "--script-click" && i + 1 < args.size()) script_click_spec = args[++i];
         else if (a == "--shot-delay" && i + 1 < args.size()) shot_delay_ms = std::atoi(args[++i].c_str());
         else if (a == "--bench" && i + 1 < args.size()) bench_frames = std::atoi(args[++i].c_str());
@@ -217,6 +225,25 @@ int App::run(int argc, char** argv) {
     }
     SDL_SetRenderVSync(renderer, bench_frames > 0 ? 0 : 1);
     std::printf("renderer: %s\n", SDL_GetRendererName(renderer));
+
+    // The starting DPI mode.  The loop re-decides on every frame -- a resize switches it -- so
+    // this only saves a rebuild on the first frame.  It has to guess the HUD strip the loop
+    // reserves before the first screen has measured it, and that strip is 63 px on the menu and
+    // 80 px on a Pairs board here, so the guess subtracts a deliberately generous 100: guessing
+    // 1x where the loop wants 2x costs one cheap rebuild, the other way round loads every x2
+    // sheet twice.
+    if (hidpi_mode > 0) {
+        sheet_dpi = SheetDpi::Double;
+    } else if (hidpi_mode < 0) {
+        sheet_dpi = SheetDpi::Base;
+    } else {
+        int out_w = width, out_h = height;
+        SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
+        const float start_scale =
+            std::min(static_cast<float>(out_w) / pple::kScreenWidth,
+                     static_cast<float>(std::max(0, out_h - 100)) / pple::kScreenHeight);
+        sheet_dpi = start_scale >= hidpi_scale ? SheetDpi::Double : SheetDpi::Base;
+    }
 
     if (TTF_Init()) {
         font = TTF_OpenFont(font_path.c_str(), 15.0f);

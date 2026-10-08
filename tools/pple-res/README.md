@@ -99,6 +99,13 @@ whole data set:
 6. A sheet listed in `SPLITLIST.XML` (11 entries, all `1024x1024`) is a **split** sheet. When
    `g_bDoubleDPI` is set it is drawn from up to four page resources named `<stem>x2<page+1>`
    (`Sheets\x.sht` -> `Sheets\x21.jpg` … `x24.jpg`); at normal DPI the plain pair is used.
+   The `SPLITLIST.XML` size is the **virtual** sheet, i.e. the padded 1x texture; a page holds one
+   UV quadrant of it at twice the pixels, so page `p` sits at `((p%2)*w, (p/2)*h)` of a canvas
+   twice the virtual size. `Material::Render` (`0x1000A96E0`) picks the page by quadrant and reads
+   it with `local UV = (u - half) * 2 * (1024 / pageDim)`, which is that placement for a full page
+   and a top-left-aligned crop for a trimmed one. Rebuilding the canvas that way and halving it
+   reproduces the 1x sheet to a mean absolute error of **1.7–3.8** on all five sheets checked
+   (`C:\re\traces\cpp\hidpi\rebuild_x2.py`), against 77–111 for the wrong quadrant.
 7. Every texture is uploaded at the **next power of two** above each dimension and the resource
    then reports *that* size: `ResourceTextureD3D::CreateTextureFromSource` (`0x1000A8F64`) runs
    `if ((w & -w) != w) { for (i = 1; i < w; i *= 2); w = i; }` on both axes and ends with
@@ -159,7 +166,7 @@ pple-view <pe>... [--menu] [--difficulty] [--resource NAME] [--sprite XML] [--sc
                   [--pairs [D,L,S]] [--pairs-reveal] [--pairs-click I,J] [--pairs-ticks N]
                   [--pairs-solve] [--pairs-save PATH] [--mce] [--no-container-offsets] [--mui PATH]
                   [--intro] [--no-intro] [--no-tips] [--deal] [--no-deal]
-                  [--loading [MS]]
+                  [--loading [MS]] [--hidpi] [--no-hidpi]
                   [--play NAME] [--volume N] [--mute]
                   [--script-click "x,y;x,y;move:x,y;wait:MS"] [--shot-delay MS] [--bench N] [--bench-build N]
                   [--list] [--shot out.ppm] [--save out.ppm] [--width N] [--height N]
@@ -300,6 +307,36 @@ Sheet handling follows the engine: a `.sht` reference is loaded as `<stem>.jpg` 
 `<PreppedForFilter>` sits one pixel inside its slot with a two-pixel stride
 (`NodeSprite::UpdateCurrentUVs`, `0x100094552`), and every surface is padded to the next power of
 two before it becomes a texture, because that is the size the node rectangles are expressed in.
+
+### The double-DPI (x2) art
+
+The game ships every image twice, and `g_bDoubleDPI` is what chooses between the two sets
+(`ResourceTextureD3D::SetNameForDPI` `0x1000A80DC`, `Recreate` `0x1000A7FEC`, and the split
+branch above). `--hidpi` draws that set instead of the 1x one, `--no-hidpi` forces 1x, and with
+neither flag the viewer picks by window scale: **x2 from 1.5x upwards**, where upscaling the 1x
+art would soften it. The default 1400x900 window is 1.688x, so it now uses the x2 art; a 1:1
+800x576 capture stays on the 1x art, which is what keeps the recorded captures comparable.
+
+Nothing about the layout changes. The x2 resource is exactly twice the padded 1x texture
+(`pot(2w) = 2*pot(w)`), so a source rectangle authored in 1x space is read at twice its offset
+and size and every destination rectangle, registration, hit test and label stays where it was.
+The frame loop prints which mode it settled on, and a teardown line counts how many sheets came
+from x2 resources:
+
+```
+hidpi: double-DPI (x2) art, window scale 1.688, threshold 1.50
+hidpi: 9 sheet(s) drawn from the x2 resources, 0 fallback(s) to 1x
+```
+
+A resource with no x2 sibling is named on its own `hidpi: no x2 resource for …` line and drawn
+from the 1x art; on the menu, the loading screen, the difficulty chooser and all three Pairs
+boards there are none — the eleven sheets the menu and Pairs use all have an x2 form, five of
+them as four split pages and six as an `…x2.jpg`/`.bmp.cab` pair.
+
+Resizing the window across the threshold switches modes mid-run: the viewer releases the draw
+lists, drops the sheet cache and rebuilds the current screen (see the
+[viewer module map](src/viewer/README.md)). While a tip or the end-of-round panel is up — both
+borrow sheet textures — the switch waits for it to close.
 
 ### Resuming a round
 
@@ -454,6 +491,9 @@ renders one frame into a hidden window and reads the back buffer; the read must 
 | `pple-view --bench-build 20 --pairs "Beginner,0"` | a whole scene rebuild with every sheet cached: **18.464 ms/call** (21 calls, the extra one is the priming build). `--bench 300 --script-click "180,30;264,30"` with a mismatch running: the card layer, which replaced the per-tick rebuild, is **0.0807 ms/call primed** over 33 calls — about 230x cheaper per 30 Hz tick. The first call is reported apart because it also decodes the sheets the cards need (**9.277 ms**) |
 | `pple-view --scene` container offsets | `TimeBarBkg` moves `3,21` → `63,4`, the jar to `15,315`, the peek background to `0,398` and the token rects to `3,448` / `47,448` / `93,448`, the Professor's movie anchor to `295,70`; `CONCENTRATIONGAME.XML` renders as the shipped screen (`new-conc.png` next to the game's own 256x192 thumbnail) |
 | `pple-view --scene` power-of-two padding | `<PlayArea>`'s `148,0 800x500` now lands on a 1024x512 texture, so the 800x496 PNG is not stretched; the blue board's right edge lands at screen x **588.9**, which is where the game's own screenshot puts it (589). The unpadded reading gives 661.6 |
+| `hidpi\rebuild_x2.py` split-page geometry | Rebuilding each split sheet from its four x2 pages (page `p` at `((p%2)*w, (p/2)*h)` of a twice-size canvas, 1:1) and halving the result reproduces the 1x sheet with a mean absolute error of **1.7–3.8** on Sheet1/2/12/13/18, quadrants included, against **77–111** for the wrong quadrant. Sheet18's 355x23 and Sheet13's 119x463 fourth pages are top-left-aligned crops of their quadrant, exactly as `Material::Render`'s `1024 / pageDim` factor reads them |
+| `pple-view --hidpi` | The whole menu, loading screen, chooser and Pairs board from the engine's `g_bDoubleDPI` resources: **212 sheet loads, 0 fallbacks** across the 21-command 2x matrix, all 66 output assertions still PASS, and the 2x logs match the 1x ones apart from the `--sprite` sheet note and the coverage diagnostic (<=6 points, one 1-px-tall rect flipping). Edge energy on the deterministic stills **x1.14–x1.28** (x0.98 for the flat `loading` photograph), worst 32x32 block difference **28/255** between 1x and 2x where a clipped or missing sprite would light one block up. Cost: peak working set 110.8 -> 151.0 MB (menu) and 117.7 -> 168.4 MB (Beginner), one frame 875 -> 883 ms and 820 -> 1101 ms, cached full build 17.842 -> 32.158 ms/call. `s28-compare.py`, `s28-compare-shots.py`, `s28-perf.ps1` |
+| `pple-view` mid-run DPI switch | `s28-switch-check.ps1`: 1200x830 guesses 1x and switches up to 2x (measured 1.512), a 1400x850 `--mce` board guesses 2x and switches down to 1x (measured 1.408, past the 1.425 hysteresis); in both directions the frame after the rebuild is **pixel-identical** to the frame a run started in that mode draws |
 
 Viewable items: `PurblePlace.dll` 211 (67 PNG + 71 CAB + 73 JPEG), `PurblePlace2.dll` 24,
 `CardGames.dll` 65 (27 + 14 + 24).
@@ -523,12 +563,60 @@ Session 9 evidence under `C:\re\traces\cpp`:
 See the [module map](src/viewer/README.md) and notes section 20.6. No gameplay
 features or existing known-gap fixes were included in this structural milestone.
 
+## Session 28: the game's own double-DPI (x2) art
+
+`--hidpi`, `--no-hidpi`, and an automatic rule (x2 from a 1.5x window scale, back to 1x below
+1.425x) draw the whole menu, the loading screen, the difficulty chooser and Purble Pairs from the
+x2 resources the engine loads when `g_bDoubleDPI` is set. The layout, the hot-spots, the hit
+tests and the destination rectangles are untouched; only the texels read change. The rule and its
+evidence are in [the double-DPI section](#the-double-dpi-x2-art).
+
+Session 28 evidence under `C:\re\traces\cpp` (the four matrices and the comparison that produced
+these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
+`s28-compare.py` and `s28-asserts.py`):
+
+- **The 1x path did not change.** A binary built from the pre-change source
+  (`build\pple-before`) and the new binary forced to 1x (`--no-hidpi`) agree in every normalised
+  log line and in all 16 captures that two runs of the same 1x binary also agree on; four
+  timed match/mismatch captures are excluded as wall-clock sensitive by that control.
+- **66 output assertions pass in all four runs** (pre-change, 1x, 1x again, 2x): geometry,
+  scores, ranks, hit tests, the sneak fixtures, the settings round trip and the level changes are
+  all mode-independent.
+- **2x keeps the same structure**: every normalised log line still agrees, apart from the
+  `--sprite` probe, which prints the sheet it drew (1024x128 1x vs 2048x256 2x), and the
+  diagnostic coverage percentages, which sample the 2x art instead and move by at most 6 points
+  on five frames (a rect 1 px tall, `TimeBarGreen`, can land inside a grid cell in one mode and
+  outside it in the other; nothing drawn changes).
+- **No fallbacks**: 212 sheet loads across the 21 2x commands, every one from its x2 resources.
+  The eleven sheets the menu and Pairs reference (Sheet1, Sheet2, Sheet21, Sheet12, Sheet13,
+  Sheet18, Sheet29, Sheet30, Sheet31, Sheet32, Sheet34) all have an x2 form — five as four split
+  pages, six as an `…x2.jpg`/`.bmp.cab` pair — and so do the images the screens draw directly
+  (`PurblePlaceBackground`, `PurblePlaceForeground`, `Loading`, `GameBoard`, `Background`,
+  `MiniStarExplosion`, the tip-style PNGs and the CardGames backgrounds).
+- **Pixels**: 26 captures are redrawn from the x2 art. On the deterministic stills the edge
+  energy rises by **x1.14 to x1.28** (`scene` x1.27, `solve-Beginner` x1.21, `mce` x1.20, `save`
+  x1.21, `menu` x1.28; the `loading` screen is a flat photograph and measures x0.98). A 32x32
+  block sweep of 1x against 2x stays at or below **28/255** where resampling alone explains it
+  (limit 40), which is what rules out a clipped, missing or displaced sprite.
+- **Switching mid-run** rebuilds the screen and lands on the exact frame a run that started in
+  that mode draws. `s28-switch-check.ps1` drives both directions on a static Beginner board:
+  1200x830 guesses 1x and switches **up** to 2x, and a 1400x850 `--mce` board (design height 547)
+  guesses 2x and switches **down** to 1x; both final frames are **pixel-identical** to the
+  from-scratch run.
+- **Cost**: peak working set 110.8 -> 151.0 MB for the menu and 117.7 -> 168.4 MB for a Beginner
+  board; one rendered frame takes 875 -> 883 ms for the menu and 820 -> 1101 ms for Pairs. With
+  every sheet already cached, a full `build_pairs` is 17.842 -> 32.158 ms/call and the primed card
+  layer 0.0801 -> 0.0863 ms/call, so the 30 Hz path is not the part that pays.
+
 ## Known gaps
 
-* The exact on-disk geometry of a split sheet's **fourth** `x2` page (SHEET18's is 355x23 where
-  the other three are ~1024x1024). The page path is only reachable with `g_bDoubleDPI` set, and
-  `Material::Render` (`0x1000A96E0`) rescales each page by `1024 / pageDim`, so the engine is
-  expected to absorb it. Not derived; not needed for the normal-DPI path.
+* ~~The exact on-disk geometry of a split sheet's **fourth** `x2` page~~ — **derived and used in
+  session 28** (see [the double-DPI section](#the-double-dpi-x2-art)): a page is a
+  top-left-aligned crop of its quadrant at 2x, so placing page `p` at `((p%2)*w, (p/2)*h)` of a
+  canvas twice the virtual size rebuilds the sheet to a mean absolute error of 1.7–3.8, including
+  the trimmed pages (SHEET18's 355x23 and SHEET13's 119x463, whose quadrants really do hold only
+  that much art). `Material::Render`'s `1024 / pageDim` factor is how the engine reads a trimmed
+  page in place rather than stretching it.
 * The generic `--movie --frame N` viewer remains a still. Menu clouds, jar burst,
   sneak peek and Professor idle/win/lose **are** free-running on their screens, at the
   movie's frame rate. Professor anchors at `/ProfessorContainer` `295,70`

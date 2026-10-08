@@ -13,7 +13,7 @@
 ## Read first, then check state
 
 1. `D:\Development\re\RE-SETUP.md`: authority for tool locations, machine rules and RE workflow.
-2. `D:\Development\re\notes\purbleplace.md`: read **section 20 first** for the latest jar/sneak fixes and corrections; section 19 covers the previous completed work. Sections 10–18 remain useful where later sections do not supersede them.
+2. `D:\Development\re\notes\purbleplace.md`: read the **highest-numbered section first** — currently section 28 (the game's own double-DPI `x2` art); section 20 holds the jar/sneak fixes and corrections, section 19 the previous completed work, and sections 10–27 remain useful where later sections do not supersede them.
 3. `tools\pple-res\README.md`: how to run, measured verification results and honest known gaps.
 4. Run `pwd`, `git status --short` and `git log -5 --oneline`. Do not infer the current directory from the DSH installation path.
 5. Read relevant source before editing it. Use DSH `read`, `glob` and `grep` for text inspection, discovery and content searches.
@@ -78,6 +78,7 @@ Use the absolute `$PWD` invocation if PowerShell does not recognize a bare relat
 - **Viewport:** Pairs design bounds are 800x496, not the accumulated extents of animated parts. Offscreen effects must not progressively shrink the scene.
 - **Capture sizing:** diagnostic HUD height depends on text/font. On this setup it is **80 px** for Pairs: `--width 800 --height 576`, crop `(0,80,800,576)` for 1:1. The older 556-height/60-pixel claim is incorrect here.
 - **Solve hooks:** `--pairs-solve` and `--pairs-click` skip jar animation. Use **normal `--script-click`** for flight/burst captures; do not fabricate burst output for a solve run.
+- **Double-DPI art:** `--hidpi` / `--no-hidpi` / automatic above a 1.5x window scale (back to 1x below 1.425x) draw every sheet from the engine's `x2` resources: a `SPLITLIST.XML` sheet becomes its four `<stem>x2<page>` pages assembled into a twice-size canvas, anything else becomes its `"x2"`-suffixed sibling (`ResourceTextureD3D::SetNameForDPI` `0x1000A80DC`, `GetSplitTexture` `0x1000A7E40`, `Recreate` `0x1000A7FEC`). A page is a top-left-aligned crop of its quadrant at 2x, so `pot(2w) = 2*pot(w)` holds and a source rect authored in 1x space is simply read at twice its offset and size; the layout, hot-spots, hit tests and destination rects must stay identical between the modes. Do not add a per-resize reload to any per-tick path.
 - Matches may exceed the pair total because completion force-matches leftover Wild Cards; Beginner 13/12 is intentional. Scoring uses constant x3 and 1/2/4 boards.
 - Media Center's 51-pixel host offset remains a **hypothesis**. The remaining spark counter's interpretation as fade is an approximation.
 
@@ -85,8 +86,9 @@ Use the absolute `$PWD` invocation if PowerShell does not recognize a bare relat
 
 Run relevant checks before and after each milestone. For the full current matrix, inspect and run:
 
-- `C:\re\traces\cpp\s7-verify.ps1`: 29 command runs, including assets, audio, rules, menu/navigation/loading, solves/loss, scene/MCE, match/mismatch, benchmarks and trace-directory save roundtrip.
-- `C:\re\traces\cpp\s7-assert-verify.py`: 62 measured-output assertions. These external scripts are not tracked in this repository; read them before relying on them. Its fixed 34-card-refresh benchmark assertion is wall-clock-dependent (the unchanged session-9 baseline measured 33); use the session-9 comparison wrapper and require a positive refresh count plus one full build instead. See section 20.6.
+- `C:\re\traces\cpp\s27-verify.ps1`: the current matrix (renamed from `s7-verify.ps1`), 29 command runs, including assets, audio, rules, menu/navigation/loading, solves/loss, scene/MCE, match/mismatch, benchmarks and trace-directory save roundtrip.
+- `C:\re\traces\cpp\s27-assert-verify.py`: **32 command logs, 66 measured-output assertions**, all PASS. These external scripts are not tracked in this repository; read them before relying on them. Its fixed 34-card-refresh benchmark assertion is wall-clock-dependent (the unchanged session-9 baseline measured 33); require a positive refresh count plus one full build instead.
+- `C:\re\traces\cpp\s28-run.ps1 -Prefix P -Extra FLAG -BuildDir D` and `s28-verify-all.ps1` run the whole matrix with `--hidpi`/`--no-hidpi` forced into **every viewer command** (the flag is injected inside `Check`, not into each argument list), and `s28-compare.py`, `s28-asserts.py`, `s28-compare-shots.py`, `s28-switch-check.ps1` and `s28-perf.ps1` check it: the 1x path against a pre-change build (`git stash` + `cmake -S tools/pple-res -B build/pple-before`), the 2x path for identical structure and sharper pixels, both switch directions, and the cost. See notes 28.6.
 - `pple-res pairs <PurblePlace2.dll> --difficulty D --sneak-check`: one-token fixture, including Advanced, checks duration, cost, repeated use, expiry and zero-clamp/loss. It does not imply Advanced starts with a token.
 - Deterministic level-change and normal-click burst commands/captures are recorded in section 20 and the `s7-*.log` trace files.
 
@@ -106,12 +108,15 @@ Expected baseline:
 | Beginner playable scene | 6 static sprites (supersedes 8 after hiding the unused sneak animation template and initial sparks); token draws are separate and count-aware |
 | Hover | the engine has no separate hover: `UserInterface::ProcessMouseMove` (`0x100098498`) hit-tests the node under the cursor and `SetFocus` (`0x1000992E0`) sends `FocusGot`/`FocusLost`, so one node at a time is focused. A card shows `highlite_outline` (`Card+0xD0`) and, face up, the additive `card_glow` (`Card+0xC8`); a `NodeButton` (menu buildings, `ReturnToMainMenu`, sneak tokens) switches to `<Animation>` 1. The outline is the focus art, **not** a "waiting for its partner" marker. Motion is routed on every screen; `move:x,y` scripts one |
 | Warm performance, session 6 | full build 17.899 ms/call; card refresh 0.0835 ms/call, first 9.2018 ms |
+| Double-DPI mode line | `hidpi: double-DPI (x2) art, window scale S, threshold 1.50` at 1400x900 and 800x556 both forced; `--hidpi` reports `212 sheet(s) drawn from the x2 resources, 0 fallback(s)` over the 21-command matrix, `--no-hidpi` reports `0` |
+| Double-DPI cost (session 28) | cached full build 17.842 -> 32.158 ms/call; primed card layer 0.0801 -> 0.0863 ms/call; peak working set 110.8 -> 151.0 MB (menu) and 117.7 -> 168.4 MB (Beginner); one frame 875 -> 883 ms and 820 -> 1101 ms |
+| Double-DPI sharpness (session 28) | edge energy on the deterministic stills x1.14–x1.28 (x0.98 for the flat `loading` photograph); worst 32x32 block difference between 1x and 2x 28/255 |
 
 Do not reintroduce a per-tick full scene rebuild. Keep the test hooks (`--script-click`, `--pairs-solve`, `--pairs-ticks`, `--bench*`, `--shot-delay`) usable. At 5500 ticks the code selects the resource named RedTimerBar; current captured pixels look gold/yellow, so do not claim a verified red-pixel change. At 6300 ticks Intermediate loses and the bar is empty.
 
 ## Next work and record maintenance
 
-Remaining gaps: Professor tips/transitions and persisted tip settings integration; remaining card/board effects; two particle emitters; resumable SaveGameState and thumbnail generation; `--native`/high-DPI split-sheet geometry; small unknowns. The behavior-preserving viewer module split is complete; module ownership and navigation are documented in `tools\pple-res\src\viewer\README.md`. See the README and section 20 before choosing a milestone.
+Remaining gaps: the **loading screen on a transition** (the shipped build calls `Engine_SetBackMode(1, Loading.xml)` from `ConcentrationGame::LoadGameUI` `0x100081008`, while `start_game`/`game_to_menu` still jump straight between screens); Professor tips/transitions and persisted tip settings integration; remaining card/board effects; resumable SaveGameState's own file name and schema; small unknowns. The double-DPI `x2` art is implemented for the menu, the loading screen, the chooser and Pairs (session 28). The behavior-preserving viewer module split is complete; module ownership and navigation are documented in `tools\pple-res\src\viewer\README.md`. See the README and section 20 before choosing a milestone.
 
 For each new result, update `D:\Development\re\notes\purbleplace.md` and the project README. Correct superseded claims explicitly rather than silently leaving contradictions. Add captures under `C:\re\traces\cpp`, and report measured numbers, not assumed old values. Notes live outside this project's Git repository and must be updated separately.
 

@@ -23,6 +23,7 @@
 #include "pple/pe_image.hpp"
 #include "pple/png.hpp"
 #include "pple/scene.hpp"
+#include "pple/split_list.hpp"
 #include "pple/xml.hpp"
 #include <functional>
 #include <optional>

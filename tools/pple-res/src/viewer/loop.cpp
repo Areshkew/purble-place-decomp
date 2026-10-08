@@ -2,6 +2,51 @@
 
 namespace pple::viewer {
 
+// Switch the whole session between the 1x and the x2 art.  Everything that borrows a sheet
+// texture belongs to the mode that loaded it: the draw lists, the Pairs scene layer, the tip
+// styles and the sheet cache itself.  The draw lists are released first, while the cache still
+// holds the textures they borrow (that is what stops release_draws freeing a borrowed sheet),
+// and only then is the cache dropped and the current screen rebuilt.
+void App::set_sheet_dpi(SheetDpi want) {
+    if (want == sheet_dpi) return;
+    sheet_dpi = want;
+    release_draws();
+    release_overlay();
+    pairs_scene_layer.clear();
+    pairs_scene_draws = 0;
+    free_direct(picker_draws);
+    clear_sheet_textures();
+    tip_styles.clear();
+    tip_styles_loaded = false;
+    rebuild_current_screen();
+}
+
+// The screen the viewer is on, rebuilt from the same entry point that built it.
+void App::rebuild_current_screen() {
+    switch (screen) {
+        case Screen::Menu:
+            build_menu();
+            break;
+        case Screen::Loading:
+            build_loading();
+            break;
+        case Screen::Difficulty:
+            build_difficulty();
+            break;
+        case Screen::Concentration:
+            if (pairs_ready) build_pairs();
+            break;
+        case Screen::Other:
+            if (!movie_xml.empty())
+                build_movie();
+            else if (!scene_xml.empty())
+                build_scene();
+            else
+                load_current(false);
+            break;
+    }
+}
+
 int App::run_loop() {
     bool running = true;
     // --script-click "x,y;x,y" injects clicks in scene coordinates through the same handler the
@@ -301,20 +346,44 @@ int App::run_loop() {
         // The difficulty chooser is a screen of its own; everything else draws the scene and
         // then whatever overlays it (the tip bubble and the end-of-round panel).
         const bool picker_screen = screen == Screen::Difficulty;
-        const std::vector<DrawItem>& base_draws = picker_screen ? picker_draws : scene_draws;
+        // The design bounds do not depend on the DPI, so the scale is measured before a switch
+        // rebuilds the draw lists.
         const float base_w = picker_screen ? picker_w : scene_w;
         const float base_h = picker_screen ? picker_h : scene_h;
+        const float area_w = static_cast<float>(out_w);
+        const float area_h = static_cast<float>(out_h - hud_strip);
+        const float sx = base_w > 0.0f ? area_w / base_w : 1.0f;
+        const float sy = base_h > 0.0f ? area_h / base_h : 1.0f;
+        float s = std::min(sx, sy);
+        // The scene is 800x496.  Flooring the ratio pinned a 1400x900 window to scale 1, so
+        // the board was drawn at its native size inside a window more than three times its
+        // area.  Fill the window by default and keep SPACE for pixel-exact integer scaling.
+        if (integer_scale && s > 1.0f) s = std::floor(s);
+        if (s <= 0.0f) s = 1.0f;
+        // --hidpi and --no-hidpi force the x2 art; by default it is used as soon as the window
+        // would upscale the 1x art.  The threshold has hysteresis -- up at 1.5x, back down at
+        // 1.425x -- because the scale itself moves when a rebuild changes the HUD strip or the
+        // design bounds, and flapping there would rebuild the screen on every frame.  A tip or
+        // the end-of-round panel borrows sheet textures, so the switch waits until neither is up.
+        if (overlay_draws.empty() && tip.draws.empty() && result_draws.empty()) {
+            const float up = hidpi_scale;
+            const float down = hidpi_scale * 0.95f;
+            const SheetDpi want =
+                hidpi_mode > 0   ? SheetDpi::Double
+                : hidpi_mode < 0 ? SheetDpi::Base
+                : (sheet_dpi == SheetDpi::Double ? (s < down ? SheetDpi::Base : SheetDpi::Double)
+                                                 : (s >= up ? SheetDpi::Double : SheetDpi::Base));
+            if (want != sheet_dpi) set_sheet_dpi(want);
+        }
+        if (!dpi_logged) {
+            dpi_logged = true;
+            std::printf("hidpi: %s, window scale %.3f, threshold %.2f%s\n",
+                        sheet_dpi == SheetDpi::Double ? "double-DPI (x2) art" : "base (1x) art",
+                        static_cast<double>(s), static_cast<double>(hidpi_scale),
+                        hidpi_mode == 0 ? "" : " (forced)");
+        }
+        const std::vector<DrawItem>& base_draws = picker_screen ? picker_draws : scene_draws;
         if (!base_draws.empty() || !overlay_draws.empty()) {
-            const float area_w = static_cast<float>(out_w);
-            const float area_h = static_cast<float>(out_h - hud_strip);
-            const float sx = base_w > 0.0f ? area_w / base_w : 1.0f;
-            const float sy = base_h > 0.0f ? area_h / base_h : 1.0f;
-            float s = std::min(sx, sy);
-            // The scene is 800x496.  Flooring the ratio pinned a 1400x900 window to scale 1, so
-            // the board was drawn at its native size inside a window more than three times its
-            // area.  Fill the window by default and keep SPACE for pixel-exact integer scaling.
-            if (integer_scale && s > 1.0f) s = std::floor(s);
-            if (s <= 0.0f) s = 1.0f;
             const float ox = (area_w - base_w * s) * 0.5f;
             const float oy = static_cast<float>(hud_strip) + (area_h - base_h * s) * 0.5f;
             view_scale = s;
@@ -348,7 +417,13 @@ int App::run_loop() {
                 const SDL_FRect dst{
                     ox + d.dst.x * s, oy + d.dst.y * s, d.dst.w * s, d.dst.h * s
                 };
-                const SDL_FRect* src = (d.src.w > 0.0f && d.src.h > 0.0f) ? &d.src : nullptr;
+                // A sheet drawn from its x2 resources is twice the size, so the source
+                // rectangle authored in 1x space is read at twice its offset and size.  The
+                // destination is untouched, which is what keeps the layout identical.
+                const float src_scale = src_scale_for(d.texture);
+                const SDL_FRect src_box{d.src.x * src_scale, d.src.y * src_scale,
+                                        d.src.w * src_scale, d.src.h * src_scale};
+                const SDL_FRect* src = (d.src.w > 0.0f && d.src.h > 0.0f) ? &src_box : nullptr;
                 if (d.rotation != 0.0f) {
                     SDL_RenderTextureRotated(renderer, d.texture, src, &dst, static_cast<double>(d.rotation),                                             nullptr, SDL_FLIP_NONE);
                 } else
@@ -413,7 +488,11 @@ int App::run_loop() {
             const SDL_FRect dst{
                 fitted.x, fitted.y + hud_strip, fitted.w, fitted.h
             };
-            SDL_RenderTexture(renderer, texture, &src_rect, &dst);
+            // One frame of a sheet: the same 2x source-rect rule as the scene's draw items.
+            const float sprite_scale = src_scale_for(texture);
+            const SDL_FRect crop{src_rect.x * sprite_scale, src_rect.y * sprite_scale,
+                                 src_rect.w * sprite_scale, src_rect.h * sprite_scale};
+            SDL_RenderTexture(renderer, texture, &crop, &dst);
         }
         if (!hud_textures.empty()) {
             SDL_SetRenderDrawColor(renderer, 0, 0, 0, 170);
@@ -461,6 +540,8 @@ int App::run_loop() {
             SDL_Delay(8);
         }
     }
+    std::printf("hidpi: %zu sheet(s) drawn from the x2 resources, %zu fallback(s) to 1x\n",
+                hidpi_sheets, hidpi_fallbacks);
     for (SDL_Texture* t : hud_textures) SDL_DestroyTexture(t);
     if (texture != nullptr) SDL_DestroyTexture(texture);
     release_overlay();

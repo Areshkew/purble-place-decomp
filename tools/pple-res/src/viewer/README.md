@@ -10,11 +10,11 @@ flags and the core library's public interfaces are unchanged.
 |---|---|
 | Process entry | [view_main.cpp](../view_main.cpp): constructs `App`, calls `run` |
 | Arguments, DLL/MUI loading, SDL setup, initial screen | [app.cpp](app.cpp): `App::run` |
-| Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown | [loop.cpp](loop.cpp): `run_loop` |
+| Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown | [loop.cpp](loop.cpp): `run_loop`, `set_sheet_dpi`, `rebuild_current_screen` |
 | Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
 | Resource resolution, image decoding, sprite XML, file/PPM I/O, localiser | [resources.hpp](resources.hpp), [resources.cpp](resources.cpp): `Bundle`, `resolve_sprite`, `decode_payload`, `capture` |
-| Sheet texture cache, colour/alpha composition, coverage | [textures.cpp](textures.cpp): `load_sheet_texture`, `read_resource` |
+| Sheet texture cache, colour/alpha composition, coverage, the double-DPI (x2) resources | [textures.cpp](textures.cpp): `load_sheet_texture`, `load_sheet_surface`, `load_split_list`, `src_scale_for`, `clear_sheet_textures` |
 | Scene XML draw list, labels, draw-list release | [scene.cpp](scene.cpp): `build_scene`, `append_label`, `release_draws` |
 | Skeletal movie evaluation and part placement | [movie.cpp](movie.cpp): `build_movie`, `append_movie` |
 | Individual image/sprite browser | [browser.cpp](browser.cpp): `load_current` |
@@ -46,6 +46,25 @@ Sheet textures belong to the session cache. Draw items only borrow them; scene
 rebuilds release directly-created label textures but preserve cached sheets.
 The immutable `pairs_scene_layer` is retained between card refreshes. Do not add
 resource/XML loads or full `build_pairs` calls to the per-tick card refresh.
+
+## The double-DPI (x2) art
+
+`App::sheet_dpi` selects which resources every sheet request is answered from: the
+shipped 1x pair, or the game's own x2 set (`--hidpi`, `--no-hidpi`, or automatic above
+a 1.5x window scale). `load_sheet_surface` is the only place that decides it — a sheet
+`SPLITLIST.XML` lists becomes its four `<stem>x2<page>` pages assembled into one canvas,
+anything else becomes its `"x2"`-suffixed sibling — and it returns the multiplier the
+caller's source rectangles need. That multiplier is what `RenderTexture` uses in the
+frame loop (`src_scale_for`), so a draw item keeps its 1x `dst` and its 1x source rect:
+only the texels read change, which is what makes the two modes lay out identically.
+
+Nothing else may hold a sheet texture across a mode change. `set_sheet_dpi`
+([loop.cpp](loop.cpp)) releases the draw lists while the cache still holds their borrowed
+textures, drops the Pairs scene layer and the tip styles, clears the cache, and rebuilds
+the current screen through `rebuild_current_screen`. The frame loop calls it only while
+no tip and no end-of-round panel is up, because those borrow sheet textures of their own.
+`texture_src_scale` and `sheet_src_scale` are the two views of the same fact, by texture
+pointer and by resolved resource name.
 
 `build_pairs` calls level-art, card-assets and Pairs-HUD setup in the original order.
 The frame loop still dispatches the same 30 Hz updates and appends jar layers in
