@@ -17,6 +17,7 @@ add_library(pple_core STATIC
   src/cab.cpp
   src/inflate.cpp
   src/png.cpp
+  src/png_write.cpp
   src/xml.cpp
   src/scene.cpp
   src/movie.cpp
@@ -104,6 +105,7 @@ if(PPLE_BUILD_VIEW)
       src/viewer/pairs_render.cpp
       src/viewer/pairs_round.cpp
       src/viewer/pairs_setup.cpp
+      src/viewer/pairs_state.cpp
       src/viewer/professor.cpp
       src/viewer/resources.cpp
       src/viewer/scene.cpp

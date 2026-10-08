@@ -355,8 +355,45 @@ void ConcentrationBoard::deal(std::size_t position, unsigned seed) {
     }
 }
 
-int ConcentrationBoard::pairs_total() const { return static_cast<int>(slots_.size()) / 2; }
+// A resumed game.  Every field here is one Card or Round field that `reset` already dealt, so
+// this only overwrites; the level layout, the pools and the constants come from `reset`.
+bool ConcentrationBoard::restore(const RestoreState& state) {
+    if (state.card_ids.size() != slots_.size() || state.faces.size() != slots_.size()) return false;
+    if (state.level_position >= levels_.size()) return false;
+    if (level_pos_ != state.level_position) {
+        level_pos_ = state.level_position;
+        slots_ = concentration_layout(levels_[level_pos_], box_.width);
+        if (slots_.size() != state.card_ids.size()) return false;
+    }
+    deck_ = state.card_ids;
+    for (std::size_t i = 0; i < slots_.size(); ++i) slots_[i].card_id = state.card_ids[i];
+    faces_ = state.faces;
+    sneak_icon_.assign(slots_.size(), false);
+    if (state.sneak_icon.size() == slots_.size())
+        sneak_icon_ = state.sneak_icon;
+    sneak_shown_.assign(slots_.size(), false);
+    reveal_.assign(slots_.size(), CardReveal{});
+    for (std::size_t i = 0; i < faces_.size(); ++i)
+        if (faces_[i] == CardFace::Shown) sneak_shown_[i] = true;
+    pending_ = state.pending;
+    if (pending_ >= 0 && pending_ < static_cast<int>(faces_.size()))
+        faces_[static_cast<std::size_t>(pending_)] = CardFace::Shown;
+    sneak_ticks_ = 0;
+    sneak_delay_ = 0;
+    score_ = state.score;
+    matches_ = state.matches;
+    cards_removed_total_ = state.cards_removed_total;
+    clicks_ = state.clicks;
+    // An untimed level's budget is 30 * -1, so "no ticks left" is only a clamp on a timed level.
+    ticks_left_ = (state.ticks_left > 0 || !levels_[level_pos_].timed()) ? state.ticks_left : 0;
+    tokens_ = state.tokens;
+    end_pending_ = false;
+    round_over_ = false;
+    ++face_revision_;
+    return true;
+}
 
+int ConcentrationBoard::pairs_total() const { return static_cast<int>(slots_.size()) / 2; }
 int ConcentrationBoard::round_pairs_total() const {
     int total = 0;
     for (const ConcentrationLevel& lv : levels_) total += lv.cell_count() / 2;

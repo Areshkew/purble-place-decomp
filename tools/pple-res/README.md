@@ -209,9 +209,32 @@ Two engine details the bubbles follow: a tip with `<NoTimeout>` waits for a clic
 with a `<Duration>` expires on its own and does not swallow clicks. `--no-tips` draws no bubbles;
 the Professor still animates and the win/lose panel still appears.
 
+A tip's panel comes from its `<Type>`, and there are **three** style documents, not one:
+`TipManager::ShowTipIfEnabledAtLocV` (`0x100092AC8`, `0x100092C06`) indexes them with the type
+`TipManager::parseXml` (`0x1000930B8`) assigns — `Intro` 0 → `Tips\Styles\White`, `Error` 1 →
+`Tips\Styles\Red`, anything else 2 → `Tips\Styles\Green` (the three `Str` globals at
+`0x1000FDBF0`, `0x1000FDC08` and `0x1000FDC20`). So the Professor's `ProIntro`/`ProWelcome` and
+the between-boards bubbles are white-framed, the one `<Type>Error</Type>` tip (`BlankCard`) is
+red-framed, and the flip and sneak bubbles are green. Each document names its own nine pieces, so
+the viewer reads the sprite paths out of the XML per style rather than rebuilding them from a
+prefix.
+
+Two of those tips are the engine's *simple* tips (`CONTipManager::ShowSimpleTip` `0x100085C8C`),
+shown straight from an object rather than through the Professor: `SneakPeak` over a sneak token
+and `BlankCard` over a matched cell, both at `615,125`. `SneakPeakArea::HandleEvent`
+(`0x100084D3C`) raises the first on **MouseEnter** and `Card::HandleEvent` (`0x10007C1F4`) the
+second on **MouseDown**; the reconstruction draws both on **hover**, deliberately, because that is
+where the player looks for them here and because a matched cell otherwise swallows the click it
+would need. They are state rather than events — a card that becomes matched under a pointer that
+has not moved still raises `BlankCard` — so `update_hover_tip` runs from the 30 Hz tick as well,
+and an expired bubble is latched until the pointer moves to another object.
+
 `--script-click` entries may be `wait:MS`, which is how the intro chain is checked without a
 mouse: `--menu --script-click "100,180;400,175;wait:1500;700,200;wait:600;700,210"` picks
-Beginner, waits for `Pro_Enter`, then clicks the two bubbles.
+Beginner, waits for `Pro_Enter`, then clicks the two bubbles. `move:x,y` is the same injection as
+a mouse move, so the hover bubbles are scriptable too:
+`--pairs "Beginner,0,0" --no-deal --script-click "move:25,470"` shows the `SneakPeak` bubble over
+the first token.
 
 `--sprite` shows one frame of a sprite node definition; `--state N` picks which `<Animation>` of
 a button node, because a button carries one per visual state (0 is what an untouched button
@@ -278,6 +301,21 @@ Sheet handling follows the engine: a `.sht` reference is loaded as `<stem>.jpg` 
 (`NodeSprite::UpdateCurrentUVs`, `0x100094552`), and every surface is padded to the next power of
 two before it becomes a texture, because that is the size the node rectangles are expressed in.
 
+### Resuming a round
+
+`--pairs-state PATH` is the resumable round. Leaving through `ReturnToMainMenu` writes it the way
+`ConcentrationGame::SaveGameState` (`0x100082B40`) does — an `RGMH` container holding a board
+thumbnail and a UTF-16LE XML payload — and when `PATH` already holds one, the start resumes it:
+with `--pairs` it goes straight to the board, and with `--menu` the menu reports
+`Saved game (<difficulty>, score N, M match(es)): press ENTER to resume`. Section 27.6 of
+`D:\Development\re\notes\purbleplace.md` has the format and its limits.
+
+The thumbnail is a 256x192 PNG written by `pple::png_write` (`src/png_write.cpp`): 8-bit RGBA in a
+single *stored* DEFLATE block, which every decoder accepts and which is why the file is ~208 KB
+rather than a few kilobytes. It is a picture of the board — each cell's face up, down or cleared,
+a colour keyed off the card id, and the golden bonus indicator — and is decoded back with the core
+`png_decode` before it is written, so a corrupt block cannot be saved silently.
+
 `--movie` renders a `<Movie>` skeletal animation: `<Library frameCount=>` names the length,
 each `<ImageInstance name=>` is a part resolved through `<ImageDef xml=>` to an ordinary sprite
 node definition, and each `<Frame num= x= y= rotation= xscale= yscale= alpha=>` is a keyframe.
@@ -320,6 +358,9 @@ renders one frame into a hidden window and reads the back buffer; the read must 
   (named UTF-16 and integer entries), CodeView PDB name.
 * `png.cpp` — PNG on top of `inflate`: non-interlaced, depths 1/2/4/8/16, colour types
   0/2/3/4/6, `PLTE`, `tRNS` palette and colour-key, all five filters, RGBA8 out.
+* `png_write.cpp` — the encoder's counterpart, used by the savegame's thumbnail: 8-bit RGBA in a
+  single *stored* DEFLATE block (no compression, so no compressor), CRC-32 per chunk and an
+  Adler-32 trailer.
 * `xml.cpp` — small XML reader (declaration, comments, nested elements, attributes, entities,
   CDATA), BOM aware for UTF-8 and UTF-16.
 * `scene.cpp` — layout loader: instance walk with container offset accumulation, node
@@ -342,13 +383,13 @@ renders one frame into a hidden window and reads the back buffer; the read must 
   `localized_default` consults before falling back to the English text in the data.
 * `sha256.cpp` — digest helper.
 * `view_main.cpp` — 8-line viewer entry point. The former 4,026-line implementation is
-  split into 21 responsibility-focused C++ translation units under `src/viewer`;
+  split into 22 responsibility-focused C++ translation units under `src/viewer`;
   the largest is 388 lines. Start with the [viewer module map](src/viewer/README.md),
   then read only the module for the feature being changed. `App` owns session state;
   the board rules remain in the SDL-free core library. `tips.cpp` owns the `TIPS.XML`
-  bubbles and their style, `professor.cpp` the Professor's state machine, and
+  bubbles and their three styles, `professor.cpp` the Professor's state machine,
   `overlays.cpp` the two screens that replace a shipped dialog (the difficulty chooser
-  and the end-of-round panel).
+  and the end-of-round panel), and `pairs_state.cpp` the resumable round.
 
 ## Verification
 
@@ -510,17 +551,19 @@ features or existing known-gap fixes were included in this structural milestone.
   coins and flying coins, the burst movie, the match animation, `CalcEndGame`'s rank and the
   settings save file are reversed; see sections 14, 17, 18, 19 and 20 of
   `D:\Development\re\notes\purbleplace.md`. Not implemented:
-  * **`ConcentrationGame::SaveGameState`** (`0x100082B40`), which writes the resumable round to
-    `Purble Pairs.PurblePairsSave-ms`. Its `<RoundData>` fields are known
-    (`ConRoundData::ToXml` `0x10008035C`) but the document is not written, and the board
-    thumbnail the game stores beside the statistics is not produced either. The statistics file
-    itself **does** round-trip byte for byte (`pple-res consave`);
-  * **the rest of the card's own effects**: `tileglow.xml` (`Card+0xE8`), `tilecover.xml`
-    (`Card+0xF0`), the `/BonusTileAnimation` movie (`Card+0xD8`/`+0xE0`) and `Card_shadow.xml`
-    (`Card+0xC0`) are all created by `Card::InitUI` (`0x10007B8D8`) and none of them is drawn.
-    `card_glow.xml` and `highlite_outline.xml` **are** drawn now, as the hovered card's focus art,
-    and so is `SneakPeakMiniIcon.xml` (`Card+0xA8`, the sneak card's eye mark).
-    The four `SparkleSprite_y` sparks *are* drawn, as the match's explosion;
+  * ~~**`ConcentrationGame::SaveGameState`** (`0x100082B40`)~~ — **done in section 27.6**:
+    `--pairs-state PATH` writes the round on `ReturnToMainMenu` (RGMH header, a 256x192 PNG
+    thumbnail, a UTF-16LE XML payload) and resumes it, thumbnail included, when the file already
+    holds one; `ConcentrationBoard::restore` puts the dealt board back. The shipped file name
+    (`Purble Pairs.PurblePairsSave-ms`) and `ConRoundData::ToXml`'s full `<RoundData>` schema are
+    still not reproduced — the payload is the reconstruction's own, with `TIPS.XML`'s element
+    names — and the statistics file itself still round-trips byte for byte (`pple-res consave`);
+  * ~~**the rest of the card's own effects**~~ — **done in section 27.4**: `Card_shadow.xml`
+    (`Card+0xC0`) under every card that has been turned, `tileglow.xml` (`Card+0xE8`) and
+    `tilecover.xml` (`Card+0xF0`) on the matched bonus tile, and the `/BonusTileAnimation` movie
+    (`Card+0xE0`) while its counter runs. `card_glow.xml` and `highlite_outline.xml` **are** drawn
+    as the hovered card's focus art, and so is `SneakPeakMiniIcon.xml` (`Card+0xA8`, the sneak
+    card's eye mark). The four `SparkleSprite_y` sparks are drawn as the match's explosion;
   * **one shipped card id has no face art in the box, and the reconstruction reproduces that**:
     `UI\CONCENTRATION\CARDS.XML`'s id 28 points at `UI\Concentration\TwoLayerRectangleFlip.xml`,
     which no resource in any of the three DLLs carries — the sprite that exists is
@@ -529,20 +572,14 @@ features or existing known-gap fixes were included in this structural milestone.
     Intermediate board draw nothing (`4 card sprite(s) did not resolve`). Filling it from
     `TWOLAYERRECTFLIP.XML` would be a deliberate deviation from the shipped data, so it is left
     as the box has it;
-  * **the two particle emitters** `Emitter_gold.xml` and `Emitter_white.xml`, which
-    `ArcBehavior::Init` (`0x100083E48`) builds with `ParticleUpdate` (`0x100084678`) and
-    `ParticlePaperCreation` (`0x100084424`) as callbacks;
-  * **the card deal-in's own shadow**: the deal is drawn (see the `--pairs` deal row), but
-    `Card_shadow.xml` (`Card+0xC0`, sized from `Card+0x30`) and `tileglow.xml` / `tilecover.xml`
-    are not, and the "IntroImage" is drawn as the card's back art at the growing scale rather
-    than through its own node. The first card of a new board also deals instantly when the board
-    is rebuilt for a new `<Level>` (`keep_state`), where the shipped `Board::NewLevel` runs
-    `Card::InitUI` again and would deal the new board in;
-  * **the tip's style selection**: `<Type>` picks one of the three style documents
-    (`TipManager::parseXml` `0x1000934C3`: `Intro` → 0, `Error` → 2, anything else → 1) and the
-    reconstruction always draws the green set, so the one `<Type>Error</Type>` tip (`BlankCard`)
-    is green rather than red. The three style documents' own names are assigned at runtime by
-    the manager, so the static image does not say which index is which set;
+  * ~~**the two particle emitters**~~ — **done in section 27.5**: `Emitter_gold.xml` and
+    `Emitter_white.xml` are emitted from each flying coin's own position, `(-10,-10)`, once per
+    tick of the flight, with `ParticlePaperCreation`'s velocities, `ParticleUpdate`'s
+    `life * 1275` alpha and both `SparkleSprite` variants;
+  * **the card deal-in's own shadow**: the "IntroImage" is drawn as the card's back art at the
+    growing scale rather than through its own node. The first card of a new board also deals
+    instantly when the board is rebuilt for a new `<Level>` (`keep_state`), where the shipped
+    `Board::NewLevel` runs `Card::InitUI` again and would deal the new board in;
   * **`<TipManager><DisabledTips>`**: `pple::ConSettings` parses and re-emits the list, but the
     viewer does not consult it — every tip is enabled, and there is no Options screen to turn one
     off. The shipped build also gates tips on `g_pPurblePlaceManager+3*8+12`;
@@ -557,9 +594,11 @@ features or existing known-gap fixes were included in this structural milestone.
     reconstruction takes every card that is left (and clears the card waiting for a partner with
     it), and `mismatch_ticks()` reports -1 during the flip-forward, before `Card::OnReveal` arms
     `Card+0x3C`;
-  * the Professor's `ProFlipNoMatchTimed` / `ProFlipMatchUntimed` tip, which `Card::DoMatcher`
-    shows on a mismatch (`0x10007D2BC..0x10007D31F` through `Professor::MoveIn`/`MoveOut`), is
-    not shown;
+  * ~~the Professor's `ProFlipNoMatchTimed` / `ProFlipMatchUntimed` tip~~ — **shown in section
+    27.3**, but as an addition rather than a recovery: `Card::DoMatcher` (`0x10007D224`) arms the
+    Professor for a *matched* pair and leaves him alone on a mismatch (sound `0x74` and a return
+    at `0x10007D28D`), and `TIPS.XML` carries no mismatch tip, so the reconstruction raises the
+    match branch's own tip at the point the wrong pair turns over;
   * `<NumCardTypes>`, which is read from the XML into `Level+8` and has no reader I could find.
     It agrees with the number of letter runs for Beginner (4) but not for Intermediate (stored 5,
     8 runs) or Advanced (`-1`, 9-12 runs);

@@ -27,6 +27,7 @@ flags and the core library's public interfaces are unchanged.
 | Cached card/effect draw lists (including the deal-in's growing cards), jar layering, timer/token/Professor draws, the hovered card's outline and glow, the sneak card's eye | [pairs_render.cpp](pairs_render.cpp): `refresh_cards`, `timed_refresh` |
 | Flips, the deal-in, match sparks, flying jar coins, burst start/cache | [pairs_effects.cpp](pairs_effects.cpp): `advance_flips`, `advance_card_fx`, `start_deal`, `advance_deal`, `finish_deal`, `spawn_arcs` |
 | Board completion, score/rank, settings save | [pairs_round.cpp](pairs_round.cpp): `finish_board_end`, `report_round_end` |
+| Resumable round: state XML, RGMH container, board thumbnail | [pairs_state.cpp](pairs_state.cpp): `read_pair_state`, `load_pair_state`, `write_pair_state`, `render_board_thumbnail` |
 | Professor state machine, tips, transitions | [professor.cpp](professor.cpp): `professor_show`, `professor_display_tip`, `professor_tip_closed`, `professor_advance`, `professor_round_end`, `professor_intro_begin`, `professor_level_tip` |
 | Tip panel: TIPS.XML, the green 9-slice, text and fonts | [tips.cpp](tips.cpp): `load_tips`, `load_tip_style`, `show_tip`, `append_panel`, `append_text`, `face_font`, `rebuild_overlay` |
 | In-canvas difficulty chooser and end-of-round panel | [overlays.cpp](overlays.cpp): `build_difficulty`, `draw_difficulty`, `append_button`, `build_result_panel`, `draw_result_panel`, `start_game`, `game_to_menu` |
@@ -148,10 +149,18 @@ white highlight, so drawing frame 0 made the whole hover look dead (`s26-hover-b
 `pairs_setup.cpp` and `menu.cpp` both go through `pple::sprite_frame_rect(geom, frames - 1)` for
 that reason.
 
-The same FocusGot path is what the engine's *simple tips* hang off for two objects, and the
-reconstruction does not draw them yet: `SneakPeakArea::HandleEvent`'s MouseEnter case
-(`0x100084D3C`) shows the `SneakPeak` tip over a token and its MouseDown case shows `EmptySneak`
-over the area, and `Card::HandleEvent`'s ButtonClick case shows `BlankCard` for a matched cell.
+The same FocusGot path carries the engine's *simple* tips for two objects, and the
+reconstruction now draws both: `SneakPeakArea::HandleEvent`'s MouseEnter case
+(`0x100084D3C`) shows `SneakPeak` over a token and `Card::HandleEvent`'s MouseDown case shows
+`BlankCard` for a matched cell, both at `615,125` from `CONTipManager::ShowSimpleTip`
+(`0x100085C8C`). `update_hover_tip` (called from `update_hover` **and** from the 30 Hz tick,
+because a match can turn the card under a still pointer into a BlankCard) owns them;
+`hover_simple_expired` latches an expired bubble so the next tick does not raise it again, and
+`professor_tip_closed` returns early for a simple tip so closing one never moves the Professor.
+
+A tip's 9-slice comes from its own `<Type>`: `tip_style_for` maps `Intro`/`Error`/everything else
+to the White/Red/Green `Tips\Styles\*` documents, and `green_style()` is what the difficulty
+chooser and the end-of-round panel keep using.
 
 
 ## Verification and future changes

@@ -336,6 +336,29 @@ public:
                const CardPools& pools, const ConcentrationConstants& constants, const CardsBox& box,
                unsigned seed);
 
+    // Everything a resumed game restores.  The deck is stored as dealt rather than re-shuffled:
+    // Board::ShuffleCards consumes the level's own rand() stream, so replaying it would have to
+    // reproduce that stream exactly, while a stored deck makes the board identical by
+    // construction.  `card_ids` and `faces` are `slots().size()` entries; `sneak_icon` is the
+    // same length or empty.
+    struct RestoreState {
+        std::vector<int> card_ids;
+        std::vector<CardFace> faces;
+        std::vector<bool> sneak_icon;
+        std::size_t level_position = 0;
+        int score = 0;
+        int matches = 0;
+        int cards_removed_total = 0;
+        int clicks = 0;
+        int ticks_left = 0;
+        int tokens = 0;
+        int pending = -1;
+    };
+    // Rebuilds the board the state was taken from.  `reset` must have run first with the same
+    // levels, pools and constants: this only overwrites the dealt state.  False when the state
+    // does not match the board's shape.
+    bool restore(const RestoreState& state);
+
     const ConcentrationLevel& level() const { return levels_[level_pos_]; }
     const std::vector<ConcentrationSlot>& slots() const { return slots_; }
     const std::vector<int>& deck() const { return deck_; }

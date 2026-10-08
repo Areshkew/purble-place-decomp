@@ -135,6 +135,10 @@ void App::build_pairs() {
         // Reveal the whole deck, for inspecting the card art of every level.
         pairs_board.reveal_all();
     }
+    // A resumed round: --pairs-state loads the board the previous run saved, on top of the
+    // reset above (the level list, the pools and the constants come from the scene documents,
+    // the dealt cards and the face state from the file).
+    if (!keep_state && !pairs_state_path.empty()) load_pair_state(pairs_state_path);
     // --pairs-solve clicks every matchable pair through the same handler, so the win state,
     // the score and the Professor's win movie can be reached without a mouse.  The rule is
     // Card::DoMatcher's: equal <id>, or either card is the Wild Card.  The wild is matched
