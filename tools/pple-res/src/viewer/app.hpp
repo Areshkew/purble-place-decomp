@@ -35,6 +35,8 @@ private:
                                   std::vector<DrawItem>& out, float& extent_w,
                                   float& extent_h);
     void spawn_arcs(const std::vector<int>& cells);
+    void spawn_arc_sparks(const ArcCoin& coin);
+    bool advance_arc_sparks();
     void jar_grow();
     void arm_match_fx(const std::vector<int>& cells, bool immediate);
     void start_deal();
@@ -76,10 +78,18 @@ private:
     void append_text(std::vector<DrawItem>& out, const std::string& face, float size,
                      std::uint32_t colour, const std::string& text, float x, float y, float wrap);
     void load_tips();
-    bool load_tip_style();
+    bool load_tip_style(TipStyle& style, const std::string& name);
+    void load_tip_styles();
+    const TipStyle& tip_style_for(const TipDef& def);
+    const TipStyle& green_style();
     bool load_tip_slice(TipSlice& slice, const std::string& xml_name, int state);
     const TipDef* find_tip(const std::string& id) const;
     void show_tip(const std::string& id, float x, float y);
+    void show_tip_def(const TipDef* def, const std::string& id, float x, float y);
+    void show_simple_tip(const std::string& id, float x, float y);
+    void update_simple_tip(const std::string& id, float x, float y);
+    void update_hover_tip();    void append_panel(std::vector<DrawItem>& out, const TipStyle& style, float x, float y, float w,
+                      float h);
     void append_panel(std::vector<DrawItem>& out, float x, float y, float w, float h);
     void append_button(std::vector<DrawItem>& out, const UiButton& button, float label_size);
     void hide_tip();
@@ -96,6 +106,25 @@ private:
     void professor_intro_begin();
     void build_result_panel(bool won);
     void draw_result_panel();
+    // ---- the resumable savegame (pairs_state.cpp) -------------------------------------
+    // ConcentrationGame::SaveGameState (0x100082B40) writes the round's XML through
+    // XmlStash::SaveXMLFile into the same RGMH container as the settings, with a thumbnail of
+    // the board ahead of it; LoadGameState reads it back and purges the menu's "saved game"
+    // entry.  The viewer keeps that shape, with TIPS.XML's own element names for the round.
+    std::string pairs_state_payload() const;
+    bool write_pair_state(const std::string& path);
+    bool load_pair_state(const std::string& path);
+    std::vector<std::uint8_t> render_board_thumbnail(int width, int height) const;
+    // The saved round itself, read once so the board and the resume screen's thumbnail come from
+    // the same decode: `resume_state_valid` says the file held one.
+    bool read_pair_state(const std::string& path);
+    pple::ConcentrationBoard::RestoreState resume_state;
+    bool resume_state_valid = false;
+    std::vector<std::uint8_t> resume_thumbnail;
+    std::string resume_summary;
+    // The difficulty the saved round was played at, from its own XML; the board restores onto a
+    // board dealt for it.
+    std::string resume_difficulty;
     void build_difficulty();
     void draw_difficulty();
     void start_game(const std::string& difficulty, bool intro);
@@ -138,6 +167,10 @@ private:
     int loading_ms = 1200;
     Uint64 loading_start = 0;
     std::string pairs_save_path;
+    // --pairs-state PATH saves the round at the end of a run and resumes it when the file
+    // already holds one, which is the viewer's stand-in for the shipped game's own
+    // ConcentrationStateSave.xml.
+    std::string pairs_state_path;
     // Load the .mui first (if asked), so every label resolved afterwards uses it.
     pple::MuiStrings mui_strings;
     Bundle bundle;
@@ -211,6 +244,12 @@ private:
     SDL_FRect pairs_coin_src{};
     float pairs_coin_w = 0.0f, pairs_coin_h = 0.0f, pairs_coin_reg_x = 0.0f, pairs_coin_reg_y = 0.0f;
     std::vector<ArcCoin> pairs_arcs;
+    // The two sparkle sprites the flying coins emit, and the live particles.
+    SDL_Texture* pairs_spark_gold_tex = nullptr;
+    SDL_FRect pairs_spark_gold_src{};
+    SDL_Texture* pairs_spark_white_tex = nullptr;
+    SDL_FRect pairs_spark_white_src{};
+    std::vector<ArcSpark> pairs_arc_sparks;
     int pairs_arc_frames = 25;
     float pairs_arc_lid = -15.0f;
     float pairs_curjar_w = 112.0f, pairs_curjar_h = 112.0f;
@@ -253,6 +292,30 @@ private:
     SDL_FRect pairs_sneak_icon_src{};
     float pairs_sneak_icon_w = 0.0f, pairs_sneak_icon_h = 0.0f;
     float pairs_sneak_icon_reg_x = 0.0f, pairs_sneak_icon_reg_y = 0.0f;
+    // Card::InitUI's remaining nodes, all children of the card's own Base:
+    //   Card+0xC0  Card_shadow.xml        placed at (2,-2) (0x10007BB09)
+    //   Card+0xE8  tileglow.xml           placed at (-18,-14), or (-16,-10) when the cell is
+    //                                     wider than one (0x10007BF97)
+    //   Card+0xF0  tilecover.xml          placed at (-1, 4) (0x10007C009)
+    // and the BonusTileAnimation movie (Card+0xE0), built from the scene document's
+    // /BonusTileAnimation by ConUILoader::LoadMovie with its Base at
+    // (card.w/2 - 500, card.h/2 - 400) (0x10007BED2).  Only Card::PlayBonusAnim
+    // (0x10007FA7C) touches the movie and the glow, and the tile cover belongs to
+    // Card::Update's counter at 0x10007DC9A.
+    std::string pairs_shadow_xml = "UI\\Concentration\\Card_shadow.xml";
+    std::string pairs_tileglow_xml = "UI\\Concentration\\tileglow.xml";
+    std::string pairs_tilecover_xml = "UI\\Concentration\\tilecover.xml";
+    SDL_Texture* pairs_shadow_tex = nullptr;
+    SDL_FRect pairs_shadow_src{};
+    float pairs_shadow_w = 0.0f, pairs_shadow_h = 0.0f;
+    SDL_Texture* pairs_tileglow_tex = nullptr;
+    SDL_FRect pairs_tileglow_src{};
+    float pairs_tileglow_w = 0.0f, pairs_tileglow_h = 0.0f;
+    SDL_Texture* pairs_tilecover_tex = nullptr;
+    SDL_FRect pairs_tilecover_src{};
+    float pairs_tilecover_w = 0.0f, pairs_tilecover_h = 0.0f;
+    pple::Movie pairs_bonus_movie;
+    bool pairs_bonus_movie_ok = false;
     std::vector<CardCache> card_cache;
     // How many draws belong to the scene; everything past this is the card layer.
     std::size_t pairs_scene_draws = 0;
@@ -335,12 +398,22 @@ private:
     std::size_t menu_cloud_at = 0;
     Uint64 menu_cloud_start = 0;
     // ---- tips, transitions and the in-canvas dialogs ---------------------------------
-    // UI\Concentration\TIPS.XML, TipManager::parseXml (0x1000930B8), and the green style the
-    // Concentration tips use (TipManager tipInfo+108 selects the style).
+    // UI\Concentration\TIPS.XML, TipManager::parseXml (0x1000930B8), and the three style
+    // documents TipManager keeps -- one per <Type>; ShowTipIfEnabledAtLocV indexes them with
+    // `tipInfo + 108` (`this + 3 * type + 8`, 0x100092C06).
     std::vector<TipDef> tip_defs;
     bool tips_loaded = false;
-    TipStyle tip_style;
+    std::map<std::string, TipStyle> tip_styles;
+    bool tip_styles_loaded = false;
     TipView tip;
+    // The simple, object-owned tips (CONTipManager::ShowSimpleTip 0x100085C8C) follow the hover,
+    // and their state has to be re-derived rather than driven by the mouse-motion event: a card
+    // that becomes matched while the pointer is already over it must still raise `BlankCard`.
+    // `hover_simple_shown` is the id that is up (or empty), and `hover_simple_expired` is the id
+    // whose <Duration> has just run out while the pointer stayed put, so it is not re-shown until
+    // the pointer leaves that object.
+    std::string hover_simple_shown;
+    std::string hover_simple_expired;
     std::map<std::string, TTF_Font*> face_fonts;
     // The Professor's six movies, loaded once and kept across board rebuilds.
     std::map<std::string, pple::Movie> prof_movie_cache;

@@ -102,7 +102,11 @@ void App::professor_display_tip() {
 // 150 then 120, and Pro_Idle afterwards).
 void App::professor_tip_closed() {
     const std::string closed = tip.id;
+    const bool was_simple = tip.simple;
     hide_tip();
+    // A simple tip (the hover bubbles) is not part of the Professor's sequence, so closing one
+    // -- by its own <Duration> or by the pointer leaving -- must not move him.
+    if (was_simple) return;
     if (professor.phase != ProfPhase::Talking) {
         // A win or a loss: the movie finishes first, then the exit animation runs (checked
         // every tick in professor_advance).
@@ -161,7 +165,13 @@ void App::professor_advance() {
     if (tip.visible) {
         if (!tip.wait_click) {
             tip.seconds_left -= 1.0f / 30.0f;
-            if (tip.seconds_left <= 0.0f) professor_tip_closed();
+            if (tip.seconds_left <= 0.0f) {
+                // A hover bubble that expires with the pointer still on its object must not be
+                // raised straight back up by the next tick's update_hover_tip: latch its id until
+                // the pointer moves to another object.
+                if (tip.simple) hover_simple_expired = tip.id;
+                professor_tip_closed();
+            }
         }
     }
     if (!professor.ok || professor.movie.parts.empty()) return;

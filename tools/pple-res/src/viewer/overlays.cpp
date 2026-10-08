@@ -79,14 +79,14 @@ std::string fill_count(const std::string& text, int value) {
 // description was drawn on the green edge.
 void App::append_button(std::vector<DrawItem>& out, const UiButton& button, float label_size) {
     append_panel(out, button.rect.x, button.rect.y, button.rect.w, button.rect.h);
-    const std::uint32_t label_colour = button.hover ? tip_style.title_colour : 0x00494A4Du;
+    const std::uint32_t label_colour = button.hover ? green_style().title_colour : 0x00494A4Du;
     int label_w = 0, label_h = 0;
     measure_text("Segoe UI", label_size, button.label, 0.0f, label_w, label_h);
     int detail_w = 0, detail_h = 0;
     if (!button.detail.empty())
         measure_text("Segoe UI", 8.0f, button.detail, 0.0f, detail_w, detail_h);
-    const float face_top = button.rect.y + tip_style.top.h;
-    const float face_h = button.rect.h - tip_style.top.h - tip_style.bottom.h;
+    const float face_top = button.rect.y + green_style().top.h;
+    const float face_h = button.rect.h - green_style().top.h - green_style().bottom.h;
     const float block_h = static_cast<float>(label_h) +
                           (button.detail.empty() ? 0.0f : 2.0f + static_cast<float>(detail_h));
     const float centre_y = face_top + (face_h - block_h) * 0.5f;
@@ -177,17 +177,18 @@ void App::draw_difficulty() {
         float extent_w = 0.0f, extent_h = 0.0f;
         append_movie(idle, mframe, 295.0f, 70.0f, picker_draws, extent_w, extent_h);
     }
-    if (load_tip_style()) {
+    load_tip_styles();
+    {
         append_panel(picker_draws, 180.0f, 36.0f, 440.0f, 320.0f);
         const std::string title = mui_text(kSelectDifficulty.id);
         const std::string question = mui_text(kDifficultyQuestion.id);
         const std::string note = mui_text(kDifficultyNote.id);
-        append_text(picker_draws, tip_style.title_face, 14.0f, tip_style.title_colour,
+        append_text(picker_draws, green_style().title_face, 14.0f, green_style().title_colour,
                     title.empty() ? kSelectDifficulty.english : title, 194.0f, 52.0f, 0.0f);
-        append_text(picker_draws, tip_style.body_face, 10.0f, 0x00303030u,
+        append_text(picker_draws, green_style().body_face, 10.0f, 0x00303030u,
                     question.empty() ? kDifficultyQuestion.english : question, 194.0f, 78.0f,
                     412.0f);
-        append_text(picker_draws, tip_style.body_face, 8.0f, 0x00606060u,
+        append_text(picker_draws, green_style().body_face, 8.0f, 0x00606060u,
                     note.empty() ? kDifficultyNote.english : note, 194.0f, 100.0f, 412.0f);
     }
     for (const UiButton& button : picker_buttons) append_button(picker_draws, button, 12.0f);
@@ -198,7 +199,7 @@ void App::draw_difficulty() {
 // The buttons are built once and the draws rebuilt separately, so moving the mouse over them
 // can redraw the panel without losing their labels or reprinting the summary line.
 void App::build_result_panel(bool won) {
-    load_tip_style();
+    load_tip_styles();
     load_tips();
     result_shown = true;
     result_won = won;
@@ -227,7 +228,7 @@ void App::build_result_panel(bool won) {
 }
 
 void App::draw_result_panel() {
-    load_tip_style();
+    load_tip_styles();
     load_tips();
     free_direct(result_draws);
     const float panel_x = 200.0f, panel_y = 80.0f, panel_w = 400.0f, panel_h = 336.0f;
@@ -236,13 +237,13 @@ void App::draw_result_panel() {
     const TipDef* title_tip = find_tip(result_won ? "ProWin1" : "ProLose1");
     const std::string title = title_tip != nullptr ? title_tip->title
                              : (result_won ? std::string("You Won!") : std::string("Lost Game"));
-    append_text(result_draws, tip_style.title_face, 16.0f, tip_style.title_colour, title,
+    append_text(result_draws, green_style().title_face, 16.0f, green_style().title_colour, title,
                 panel_x + 16.0f, panel_y + 14.0f, 0.0f);
 
     float y = panel_y + 46.0f;
     const auto line = [&](const DialogString& source, int value) {
         const std::string text = mui_text(source.id);
-        append_text(result_draws, tip_style.body_face, 11.0f, 0x00303030u,
+        append_text(result_draws, green_style().body_face, 11.0f, 0x00303030u,
                     fill_count(text.empty() ? source.english : text, value), panel_x + 16.0f, y,
                     0.0f);
         y += 20.0f;
@@ -250,11 +251,11 @@ void App::draw_result_panel() {
     line(kGamePoints, pairs_board.score());
     if (result_won && last_end_ok) {
         line(kFinalScore, last_end.total);
-        append_text(result_draws, tip_style.body_face, 11.0f, tip_style.title_colour, last_end.title,
+        append_text(result_draws, green_style().body_face, 11.0f, green_style().title_colour, last_end.title,
                     panel_x + 16.0f, y, 0.0f);
         y += 20.0f;
     } else if (!result_won) {
-        append_text(result_draws, tip_style.body_face, 9.0f, 0x00606060u,
+        append_text(result_draws, green_style().body_face, 9.0f, 0x00606060u,
                     "Try again, or pick another difficulty.", panel_x + 16.0f, y, 0.0f);
         y += 20.0f;
     }
@@ -289,6 +290,10 @@ void App::start_game(const std::string& difficulty, bool intro) {
 }
 
 void App::game_to_menu() {
+    // The shipped ReturnToMainMenu saves statistics and the game state before it leaves
+    // (SaveGameStats 0x100082C70 / SaveGameState 0x100082B40); ConcentrationGame's state file is
+    // what the menu's "saved game" entry resumes from.
+    if (!pairs_state_path.empty() && pairs_ready) write_pair_state(pairs_state_path);
     hide_tip();
     free_direct(result_draws);
     result_buttons.clear();

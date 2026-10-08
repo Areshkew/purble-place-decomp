@@ -28,6 +28,26 @@ namespace pple::viewer {
         SDL_FRect src_lit{};
         SDL_FRect dst{};
     };
+    // The flying coin's two particle emitters.  ArcBehavior::Init (0x100083E48) creates
+    // "UI\Concentration\Emitter_gold.xml" and "Emitter_white.xml" as children of the coin's own
+    // base inside /ArcContainer, puts both at (-10,-10) and points them at
+    // ParticlePaperCreation (0x100084424) and ParticleUpdate (0x100084678):
+    //
+    //   Emitter_gold.xml   life .25, rate 10, xAccel 200, yAccel 200, SparkleSprite_y.xml (gold)
+    //   Emitter_white.xml  life .25, rate 10, xAccel 200, yAccel 200, SparkleSprite.xml (white)
+    //
+    // and each emits `rate` particles a tick with
+    //   vx = (rand()%20 - 10) / 100 + base, vy = (rand()%80 - 40) / 100 + base
+    // whose alpha ramps 0 -> 125 over the first 0.2 s of their 0.25 s life and whose heading is
+    // atan(vy / vx) while they live.
+    struct ArcSpark {
+        float x = 0.0f, y = 0.0f;
+        float vx = 0.0f, vy = 0.0f;
+        float life = 0.0f;
+        float life_max = 0.25f;
+        float accel = 200.0f;
+        bool gold = true;
+    };
     // The jar's tray: one coin sprite per <Level> (`CardBacks.xml`'s /imagepath, drawn at the 38
     // percent scale Jar::DoFiller sets) placed at that level's *_Points.xml coordinates.
     struct JarCoin {
@@ -102,6 +122,10 @@ namespace pple::viewer {
         int countdown = -1;    // Card+0x3C; -1 when no match is pending
         int spark_tick = -1;   // Card+0x118; -1 when there is no explosion
         int flip = 0;          // the flip-back's own tick, 0 when it has not started
+        // Card+0x74, the bonus play's own counter: Card::Update's tail (0x10007DC9A) drives it
+        // while the BonusTileAnimation movie is running, and both the glow's and the cover's
+        // visible frame test its value.  -1 when this card is not playing the bonus.
+        int bonus_tick = -1;
         bool doomed = false;   // Card+0x4C
         bool blank = false;    // state 2: the art is gone and the BlankCard shows
     };
@@ -189,6 +213,9 @@ namespace pple::viewer {
         // TIPS.XML's <CaptureGlobalClick> defaults to true, which is what makes the intro
         // bubbles go away on the first click anywhere.
         bool captures = true;
+        // A simple tip (CONTipManager::ShowSimpleTip 0x100085C8C): one shown straight from an
+        // object's own hover, outside the Professor's sequence, so closing it must not move him.
+        bool simple = false;
     };
     // An in-canvas button.  Both the difficulty chooser and the end-of-round panel replace a
     // Win32 dialog (DialogHelper::DialogBoxMCE 0x1000B7C08): a web or mobile build has no

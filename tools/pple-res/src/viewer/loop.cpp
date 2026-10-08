@@ -100,6 +100,11 @@ int App::run_loop() {
                         running = false;
                     }
                 } else
+                if (key == SDLK_RETURN && screen == Screen::Menu && resume_state_valid) {
+                    // The menu's "saved game" entry: resume the round the state file holds.
+                    std::printf("menu: resuming the saved %s round\n", resume_difficulty.c_str());
+                    start_game(resume_difficulty, false);
+                } else
                 if ((key == SDLK_R || key == SDLK_N) && pairs_ready) {
                     ++seed_for_pairs;
                     start_game(picker_choice, true);
@@ -200,6 +205,9 @@ int App::run_loop() {
                 // Professor::Update (0x10008C088): the movie clock, the entrance -> tip
                 // transition, the tip's own timer and the win/lose exit.
                 professor_advance();
+                // The hover bubbles are state, not events: a card that becomes matched under a
+                // still pointer has to raise `BlankCard` on the tick its state reaches 2.
+                update_hover_tip();
                 if (pairs_sneak_movie_ok && pairs_sneak_frame >= 0.0f) {
                     const float fps = pairs_sneak_movie.parts.empty() ? pairs_sneak_movie.fps
                         : pple::movie_frame_rate(pairs_sneak_movie, pairs_sneak_movie.parts.front());
@@ -214,6 +222,9 @@ int App::run_loop() {
                 if (pairs_jar_phase == JarPhase::Flying) {
                     bool landed = false;
                     for (std::size_t i = 0; i < pairs_arcs.size();) {
+                        // ArcBehavior::Init's emitters throw particles from the coin's own
+                        // position every tick it is in flight.
+                        spawn_arc_sparks(pairs_arcs[i]);
                         if (++pairs_arcs[i].tick >= pairs_arc_frames) {
                             pairs_arcs.erase(pairs_arcs.begin() + static_cast<std::ptrdiff_t>(i));
                             landed = true;
@@ -228,6 +239,7 @@ int App::run_loop() {
                         jar_begin_burst();
                     }
                 }
+                if (advance_arc_sparks()) flipped = true;
                 if (pairs_jar_phase == JarPhase::Burst) {
                     // The engine's default is 30 fps when the library carries no FPS attribute,
                     // and one tick is 1/30 s, so the movie advances one frame per tick.

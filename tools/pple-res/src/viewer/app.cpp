@@ -13,6 +13,8 @@ namespace pple::viewer {
                  "  --play NAME       decode and play an AUDIO.XML event key or a resource name\n"
                  "  --volume N        playback volume, 0..100 (default 100)\n"
                  "  --mute            silence the Purble Pairs sound effects\n"
+                 "  --pairs-state PATH  save the round when the player returns to the menu, and\n"
+                 "                      resume it (with its board thumbnail) when the file holds one\n"
                  "  --pairs-click I,J  flip these cell indices, through the mouse handler\n"                 "  --frame N         frame index within the sprite (default 0)\n"                 "  --state N         which <Animation> of a Button node to show (default 0;\n"                 "                     the engine starts at 0 and moves to 1 on <enter>, 2 on <down>)\n"                 "  --list            list viewable resources and exit\n"                 "  --shot FILE.ppm   render one frame offscreen, write it, exit\n"                 "  --width N --height N   window size (default 1400x900)\n"                 "  --font PATH       TTF for the HUD (default C:\\Windows\\Fonts\\arial.ttf)\n"                 "  --all             include resources this viewer cannot decode\n\n"                 "  keys: LEFT/RIGHT or PGUP/PGDN navigate, SPACE toggles integer scaling,\n"                 "        in --menu/--pairs: click a hot-spot, N new game, R reshuffle, ESC quits\n"                 "        (ESC in the Concentration screen returns to the menu)\n");
     }
     std::size_t parse_index(const char* text) {
@@ -65,6 +67,7 @@ int App::run(int argc, char** argv) {
         else if (a == "--mute") mute = true;
         else if (a == "--pairs-click" && i + 1 < args.size()) pairs_click = args[++i];
         else if (a == "--pairs-save" && i + 1 < args.size()) pairs_save_path = args[++i];
+        else if (a == "--pairs-state" && i + 1 < args.size()) pairs_state_path = args[++i];
         else if (a == "--anchor" && i + 1 < args.size()) {
             const std::string v = args[++i];
             const std::size_t comma = v.find(',');
@@ -230,6 +233,10 @@ int App::run(int argc, char** argv) {
 
     // --menu needs the Concentration document as well, because its Purble Pairs hot-spot enters
     // the game: the menu is the entry point, not a separate mode.
+    // A saved round from a previous run.  ConcentrationGame::LoadGameState (the shipped game's
+    // own resume path) puts a "saved game" entry on the menu; here the file is read once and the
+    // menu offers to resume it.
+    if (!pairs_state_path.empty() && pairs_spec.empty()) read_pair_state(pairs_state_path);
     if (menu_mode && scene_xml.empty())
         scene_xml = "UI\\CONCENTRATION\\CONCENTRATIONGAME.XML";
     if (!pairs_spec.empty()) {

@@ -51,6 +51,9 @@ void App::update_hover(float sx, float sy) {
     std::printf("  hover: %s\n", what.empty() ? "nothing" : what.c_str());
     // The old target's art has to come off and the new one's has to go on, so both changes
     // rebuild the same layer: the scene layer holds the buttons, the cards and the tokens.
+    // Two of those targets also own a simple tip (the sneak token's "SneakPeak" and a matched
+    // cell's "BlankCard"); it follows the same hit test.
+    update_hover_tip();
     timed_refresh();
 }
 
@@ -267,6 +270,16 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         return true;
     }
     play_click_sfx(clicked);
+    // The mismatch pair's own bubble.  Card::DoMatcher (0x10007D224) arms the Professor for the
+    // *matched* pair -- `ProFlipNoMatchTimed` while the level is timed and `ProFlipMatchUntimed`
+    // when it is untimed, both with +0x48 = 150 and a MoveIn (0x10007D2CE / 0x10007D2E2) -- and
+    // leaves him alone on a mismatch (`Con_TileFlip_Incorrect` at 0x10007D298 and a return), so
+    // the bubble below is the reconstruction's own: the same tip, shown at the point the wrong
+    // pair turns over, because the owner reads the silence as a missing cue.  A tip that is up
+    // already -- the intro's, a win's -- keeps the screen.
+    if (clicked.mismatch && (!tip.visible || tip.simple) && professor.anim_kind == 0)
+        show_simple_tip(pairs_board.timed() ? "ProFlipNoMatchTimed" : "ProFlipMatchUntimed",
+                        615.0f, 150.0f);
     // Card::DoForceMatch per matched card.  A completed board does not end the round here:
     // the jar's own state machine runs the flight and the burst and then calls
     // Jar::StopExplosion (finish_board_end).

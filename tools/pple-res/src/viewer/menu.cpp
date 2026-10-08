@@ -197,6 +197,10 @@ void App::build_menu() {
                     static_cast<double>(spot.rect.w), static_cast<double>(spot.rect.h));
     hud_lines = {menu_xml, std::to_string(drawn) + " items drawn",
                  menu_hover_name.empty() ? std::string("click a building") : menu_hover_name};
+    // ConcentrationGame::LoadGameState leaves a "saved game" entry on the menu; this is the
+    // equivalent hint, so the resume is discoverable.
+    if (resume_state_valid)
+        hud_lines.push_back("Saved game (" + resume_summary + "): press ENTER to resume");
     rebuild_hud();
 }
 

@@ -158,57 +158,109 @@ bool App::load_tip_slice(TipSlice& slice, const std::string& xml_name, int state
     return true;
 }
 
-// Tips\Styles\Green\TipStyle.xml names the nine panel pieces and the two fonts; the layout
+// Tips\Styles\<name>\TipStyle.xml names the nine panel pieces and the fonts; the layout
 // offsets default to TitleOffset 5,0, BodyOffset 5,0, CloseButtonOffset 6,6 (Tip::Initialize
 // 0x1000A6458..0x1000A64CB).
-bool App::load_tip_style() {
-    if (tip_style.ok) return true;
-    const auto* slot = bundle.find("TIPS\\STYLES\\GREEN\\TIPSTYLE.XML");
+//
+// The nine piece paths are read out of the document rather than rebuilt from a fixed prefix:
+// the engine keeps three separate style pointers, one per <Type>, and the viewer has to do the
+// same -- a <Type>Error</Type> tip is the Red panel, not a green one (see load_tip_styles).
+bool App::load_tip_style(TipStyle& style, const std::string& name) {
+    if (style.ok) return true;
+    const std::string doc = "TIPS\\STYLES\\" + name + "\\TIPSTYLE.XML";
+    const auto* slot = bundle.find(doc);
     if (slot == nullptr) {
-        std::printf("  tip style: TIPS\\STYLES\\GREEN\\TIPSTYLE.XML not found\n");
+        std::printf("  tip style %s: %s not found\n", name.c_str(), doc.c_str());
         return false;
     }
     const std::vector<std::uint8_t> data = bundle.read(*slot);
     pple::XmlNode root;
     std::string error;
     if (!pple::xml_parse(data, root, error)) {
-        std::printf("  tip style: %s\n", error.c_str());
+        std::printf("  tip style %s: %s\n", name.c_str(), error.c_str());
         return false;
     }
-    const std::string prefix = "TIPS\\STYLES\\GREEN\\";
+    const auto piece = [&](TipSlice& slice, const char* element) {
+        return load_tip_slice(slice, pple::localized_default(root.child_text(element)), 0);
+    };
     bool ok = true;
-    ok &= load_tip_slice(tip_style.back, prefix + "BACKSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.left, prefix + "LEFTBORDERSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.right, prefix + "RIGHTBORDERSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.top, prefix + "TOPBORDERSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.bottom, prefix + "BOTTOMBORDERSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.ul, prefix + "ULSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.ur, prefix + "URSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.ll, prefix + "LLSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.lr, prefix + "LRSPRITE.XML", 0);
-    ok &= load_tip_slice(tip_style.close, prefix + "CLOSEBUTTON.XML", 0);
-    load_tip_slice(tip_style.info, prefix + "INFOSPRITE.XML", 0);  // optional
+    ok &= piece(style.back, "Back");
+    ok &= piece(style.left, "LeftBorder");
+    ok &= piece(style.right, "RightBorder");
+    ok &= piece(style.top, "TopBorder");
+    ok &= piece(style.bottom, "BottomBorder");
+    ok &= piece(style.ul, "ULCorner");
+    ok &= piece(style.ur, "URCorner");
+    ok &= piece(style.ll, "LLCorner");
+    ok &= piece(style.lr, "LRCorner");
+    ok &= piece(style.close, "CloseButton");
+    piece(style.info, "InfoSprite");  // optional
     // Every style value may be a localisation reference ("|49820|Tips|8//..."), which is how
     // NodeLabel::Load (0x1000A09F0) treats <FontName>/<FontSize> too, so each one goes through
     // the same localiser before it is used.
-    const auto value = [&](const char* name) { return pple::localized_default(root.child_text(name)); };
-    tip_style.title_face = value("TitleFontFace");
-    tip_style.body_face = value("BodyFontFace");
-    if (tip_style.title_face.empty()) tip_style.title_face = "Segoe UI";
-    if (tip_style.body_face.empty()) tip_style.body_face = "Segoe UI";
+    const auto value = [&](const char* element) {
+        return pple::localized_default(root.child_text(element));
+    };
+    style.title_face = value("TitleFontFace");
+    style.body_face = value("BodyFontFace");
+    if (style.title_face.empty()) style.title_face = "Segoe UI";
+    if (style.body_face.empty()) style.body_face = "Segoe UI";
     const std::string title_size = value("TitleFontSize");
     const std::string body_size = value("BodyFontSize");
-    if (!title_size.empty()) tip_style.title_size = static_cast<float>(std::atof(title_size.c_str()));
-    if (!body_size.empty()) tip_style.body_size = static_cast<float>(std::atof(body_size.c_str()));
+    if (!title_size.empty()) style.title_size = static_cast<float>(std::atof(title_size.c_str()));
+    if (!body_size.empty()) style.body_size = static_cast<float>(std::atof(body_size.c_str()));
     const std::string title_colour = value("TitleFontColor");
     const std::string body_colour = value("BodyFontColor");
     if (!title_colour.empty())
-        tip_style.title_colour = static_cast<std::uint32_t>(std::strtoul(title_colour.c_str(), nullptr, 16));
+        style.title_colour = static_cast<std::uint32_t>(std::strtoul(title_colour.c_str(), nullptr, 16));
     if (!body_colour.empty())
-        tip_style.body_colour = static_cast<std::uint32_t>(std::strtoul(body_colour.c_str(), nullptr, 16));
-    tip_style.ok = ok;
-    if (!tip_style.ok) std::printf("  tip style: one or more pieces did not load\n");
-    return tip_style.ok;
+        style.body_colour = static_cast<std::uint32_t>(std::strtoul(body_colour.c_str(), nullptr, 16));
+    style.ok = ok;
+    if (!style.ok)
+        std::printf("  tip style %s: one or more pieces did not load\n", name.c_str());
+    return style.ok;
+}
+
+// TipManager keeps one parsed style document per <Type>, at `this + 3 * type + 8` with the type
+// index TipManager::parseXml (0x1000930B8) assigns: Intro 0, anything else Help 1, Error 2.  The
+// three document paths are fixed in the image and each names its own pieces:
+//
+//   0x1000FDBF0  TIP_STYLE_INTRO_XML_FILE   Tips\Styles\White\TipStyle.xml
+//   0x1000FDC08  TIP_STYLE_ERROR_XML_FILE   Tips\Styles\Red\TipStyle.xml
+//   0x1000FDC20  TIP_STYLE_HELP_XML_FILE     Tips\Styles\Green\TipStyle.xml
+//
+// so a <Type>Intro</Type> bubble is the White frame, <Type>Error</Type> the Red one, and
+// everything else -- 25 of the shipped 28 tips -- the Green one.  Only the White and Red styles
+// frame a Concentration tip: TIPS.XML's only <Type>Intro</Type> entries are the Professor's and
+// its only <Type>Error</Type> entry is BlankCard, while every flip, sneak, jar and level-change
+// tip is <Type>Intro</Type> by omission (parseXml defaults <Type> to 1, "Help").
+void App::load_tip_styles() {
+    if (tip_styles_loaded) return;
+    tip_styles_loaded = true;
+    load_tip_style(tip_styles["White"], "White");
+    load_tip_style(tip_styles["Red"], "Red");
+    load_tip_style(tip_styles["Green"], "Green");
+    std::printf("  tip styles: White %s, Red %s, Green %s\n",
+                tip_styles["White"].ok ? "ok" : "MISSING",
+                tip_styles["Red"].ok ? "ok" : "MISSING",
+                tip_styles["Green"].ok ? "ok" : "MISSING");
+}
+
+// The <Type> of one <Tip> to the style document it selects.  parseXml compares <Type> against
+// "Intro" then "Error" and leaves 1 for everything else, and ShowTipIfEnabledAtLocV indexes the
+// style table with that number (0x100092C06), so the mapping is by *name*, not by the numeric
+// index the parse produces.
+const TipStyle& App::tip_style_for(const TipDef& def) {
+    load_tip_styles();
+    if (def.type == "Error") return tip_styles["Red"];
+    if (def.type == "Intro") return tip_styles["White"];
+    return tip_styles["Green"];
+}
+
+// The green set, which frames the two in-canvas dialogs as well as every "Help"-type tip.
+const TipStyle& App::green_style() {
+    load_tip_styles();
+    return tip_styles["Green"];
 }
 
 const TipDef* App::find_tip(const std::string& id) const {
@@ -219,7 +271,8 @@ const TipDef* App::find_tip(const std::string& id) const {
 
 // The style's own 9-slice: back, the four stretched edges, then the four corners.  The same
 // pieces frame a tip bubble, a choice panel and the end-of-round summary.
-void App::append_panel(std::vector<DrawItem>& out, float px, float py, float width, float height) {
+void App::append_panel(std::vector<DrawItem>& out, const TipStyle& style, float px, float py,
+                       float width, float height) {
     const auto piece = [&](const TipSlice& slice, float dx, float dy, float dw, float dh) {
         if (slice.tex == nullptr || dw <= 0.0f || dh <= 0.0f) return;
         DrawItem d;
@@ -236,22 +289,27 @@ void App::append_panel(std::vector<DrawItem>& out, float px, float py, float wid
     // start at ULCorner.w - 1, which is 12 px against a 3 px left border -- leaves a strip of
     // whatever is behind the panel showing, which is the seam the chooser and the tip bubbles
     // used to have.
-    piece(tip_style.back, tip_style.left.w, tip_style.top.h,
-          width - tip_style.left.w - tip_style.right.w,
-          height - tip_style.top.h - tip_style.bottom.h);
-    piece(tip_style.left, 0.0f, tip_style.ul.h, tip_style.left.w,
-          height - tip_style.ul.h - tip_style.ll.h);
-    piece(tip_style.right, width - tip_style.right.w, tip_style.ur.h, tip_style.right.w,
-          height - tip_style.ur.h - tip_style.lr.h);
-    piece(tip_style.top, tip_style.ul.w, 0.0f, width - tip_style.ul.w - tip_style.ur.w,
-          tip_style.top.h);
-    piece(tip_style.bottom, tip_style.ll.w, height - tip_style.bottom.h,
-          width - tip_style.ll.w - tip_style.lr.w, tip_style.bottom.h);
-    piece(tip_style.ul, 0.0f, 0.0f, tip_style.ul.w, tip_style.ul.h);
-    piece(tip_style.ur, width - tip_style.ur.w, 0.0f, tip_style.ur.w, tip_style.ur.h);
-    piece(tip_style.ll, 0.0f, height - tip_style.ll.h, tip_style.ll.w, tip_style.ll.h);
-    piece(tip_style.lr, width - tip_style.lr.w, height - tip_style.lr.h, tip_style.lr.w,
-          tip_style.lr.h);
+    piece(style.back, style.left.w, style.top.h,
+          width - style.left.w - style.right.w,
+          height - style.top.h - style.bottom.h);
+    piece(style.left, 0.0f, style.ul.h, style.left.w,
+          height - style.ul.h - style.ll.h);
+    piece(style.right, width - style.right.w, style.ur.h, style.right.w,
+          height - style.ur.h - style.lr.h);
+    piece(style.top, style.ul.w, 0.0f, width - style.ul.w - style.ur.w,
+          style.top.h);
+    piece(style.bottom, style.ll.w, height - style.bottom.h,
+          width - style.ll.w - style.lr.w, style.bottom.h);
+    piece(style.ul, 0.0f, 0.0f, style.ul.w, style.ul.h);
+    piece(style.ur, width - style.ur.w, 0.0f, style.ur.w, style.ur.h);
+    piece(style.ll, 0.0f, height - style.ll.h, style.ll.w, style.ll.h);
+    piece(style.lr, width - style.lr.w, height - style.lr.h, style.lr.w,
+          style.lr.h);
+}
+
+void App::append_panel(std::vector<DrawItem>& out, float px, float py, float width, float height) {
+    load_tip_styles();
+    append_panel(out, tip_styles["Green"], px, py, width, height);
 }
 
 void App::hide_tip() {
@@ -261,6 +319,7 @@ void App::hide_tip() {
     tip.visible = false;
     tip.id.clear();
     tip.wait_click = false;
+    tip.simple = false;
     tip.seconds_left = 0.0f;
     rebuild_overlay();
 }
@@ -274,14 +333,24 @@ void App::hide_tip() {
 // and the pieces are placed on those edges.  A position outside the scene is pulled back inside
 // it, so a long localised tip cannot draw off-screen.
 void App::show_tip(const std::string& id, float x, float y) {
-    if (!tips_enabled) return;
-    load_tips();
-    if (!load_tip_style()) return;
     const TipDef* def = find_tip(id);
     if (def == nullptr) {
-        std::printf("  tip %s: not in TIPS.XML\n", id.c_str());
-        return;
+        load_tips();
+        def = find_tip(id);
     }
+    show_tip_def(def, id, x, y);
+}
+
+// The body of show_tip, split out so show_simple_tip can use a definition it already has.
+void App::show_tip_def(const TipDef* def, const std::string& id, float x, float y) {
+    if (!tips_enabled) return;
+    if (def == nullptr) return;
+    load_tip_styles();
+    // TipManager picks the panel from the <Type> (ShowTipIfEnabledAtLocV's `this + 3 * type + 8`
+    // at 0x100092C06), so an <Type>Error</Type> tip is framed in red, an <Type>Intro</Type> one in
+    // white and every other one in the green set.
+    const TipStyle& style = tip_style_for(*def);
+    if (!style.ok) return;
     if (g_mui_for_labels == nullptr && def->title.empty() && def->message.empty()) return;
     hide_tip();
     tip.id = id;
@@ -292,7 +361,7 @@ void App::show_tip(const std::string& id, float x, float y) {
     // wrapped-size query under-reports a long paragraph's height, and the panel has to fit the
     // text this drawer is about to put in it.
     std::vector<DrawItem> scratch;
-    append_text(scratch, tip_style.title_face, tip_style.title_size, tip_style.title_colour,
+    append_text(scratch, style.title_face, style.title_size, style.title_colour,
                 def->title, 0.0f, 0.0f, 0.0f);
     const float title_w = scratch.empty() ? 0.0f : scratch.front().dst.w;
     const float title_h = scratch.empty() ? 0.0f : scratch.front().dst.h;
@@ -300,21 +369,21 @@ void App::show_tip(const std::string& id, float x, float y) {
     const float min_width = def->min_width > 0 ? static_cast<float>(def->min_width) : 220.0f;
     const float max_width = def->max_width > 0 ? static_cast<float>(def->max_width)
                                                : static_cast<float>(pple::kScreenWidth);
-    float width = title_w + tip_style.left.w + tip_style.right.w + title_offset_x * 2.0f;
+    float width = title_w + style.left.w + style.right.w + title_offset_x * 2.0f;
     width = std::max(width, min_width);
     width = std::min(width, max_width);
-    const float text_width = std::max(40.0f, width - tip_style.left.w - tip_style.right.w -
+    const float text_width = std::max(40.0f, width - style.left.w - style.right.w -
                                                 body_offset_x * 2.0f);
     std::vector<DrawItem> body;
-    append_text(body, tip_style.body_face, tip_style.body_size, tip_style.body_colour,
+    append_text(body, style.body_face, style.body_size, style.body_colour,
                 def->message, 0.0f, 0.0f, text_width);
     const float body_w = body.empty() ? 0.0f : body.front().dst.w;
     const float body_h = body.empty() ? 0.0f : body.front().dst.h;
     // Tip::Arrange widens the box when the wrapped body needs more room than the title did.
     if (body_w > text_width)
-        width = std::min(body_w + tip_style.left.w + tip_style.right.w + body_offset_x * 2.0f,
+        width = std::min(body_w + style.left.w + style.right.w + body_offset_x * 2.0f,
                          max_width);
-    float height = title_h + title_offset_y + tip_style.top.h + tip_style.bottom.h +
+    float height = title_h + title_offset_y + style.top.h + style.bottom.h +
                    body_offset_y * 2.0f + body_h;
     const float max_height = def->max_height > 0 ? static_cast<float>(def->max_height) : 350.0f;
     height = std::min(height, max_height);
@@ -323,26 +392,26 @@ void App::show_tip(const std::string& id, float x, float y) {
     px = std::clamp(px, 4.0f, std::max(4.0f, static_cast<float>(pple::kScreenWidth) - width - 4.0f));
     py = std::clamp(py, 4.0f, std::max(4.0f, static_cast<float>(pple::kScreenHeight) - height - 4.0f));
     tip.rect = SDL_FRect{px, py, width, height};
-    append_panel(tip.draws, px, py, width, height);
+    append_panel(tip.draws, style, px, py, width, height);
 
     // The title sits on the top edge inset by TitleOffset, the body under it at BodyOffset.
     for (DrawItem& d : scratch) {
-        d.dst.x = px + tip_style.left.w + title_offset_x;
-        d.dst.y = py + tip_style.top.h + title_offset_y;
+        d.dst.x = px + style.left.w + title_offset_x;
+        d.dst.y = py + style.top.h + title_offset_y;
         tip.owned.push_back(d);
     }
     for (DrawItem& d : body) {
-        d.dst.x = px + tip_style.left.w + body_offset_x;
-        d.dst.y = py + tip_style.top.h + title_offset_y + title_h + body_offset_y;
+        d.dst.x = px + style.left.w + body_offset_x;
+        d.dst.y = py + style.top.h + title_offset_y + title_h + body_offset_y;
         tip.owned.push_back(d);
     }
     // The close button, top right at CloseButtonOffset (6,6).
-    if (tip_style.close.tex != nullptr) {
+    if (style.close.tex != nullptr) {
         DrawItem d;
-        d.texture = tip_style.close.tex;
-        d.src = tip_style.close.src;
-        d.dst = SDL_FRect{px + width - tip_style.close.w - 6.0f, py + 6.0f, tip_style.close.w,
-                          tip_style.close.h};
+        d.texture = style.close.tex;
+        d.src = style.close.src;
+        d.dst = SDL_FRect{px + width - style.close.w - 6.0f, py + 6.0f, style.close.w,
+                          style.close.h};
         d.alpha = 255;
         tip.draws.push_back(d);
         tip.close = d.dst;
@@ -355,11 +424,80 @@ void App::show_tip(const std::string& id, float x, float y) {
     tip.captures = def->capture_click && def->no_timeout;
     tip.seconds_left = def->duration;
     rebuild_overlay();
-    std::printf("  tip %s: \"%s\" at %.0f,%.0f %.0fx%.0f (body %.0fx%.0f of %zu chars)%s\n",
+    std::printf("  tip %s: \"%s\" at %.0f,%.0f %.0fx%.0f (%s body %.0fx%.0f of %zu chars)%s\n",
                 id.c_str(), def->title.c_str(), static_cast<double>(px), static_cast<double>(py),
-                static_cast<double>(width), static_cast<double>(height),
+                static_cast<double>(width), static_cast<double>(height), def->type.c_str(),
                 static_cast<double>(body_w), static_cast<double>(body_h), def->message.size(),
                 def->no_timeout ? ", waits for a click" : "");
+}
+
+// The engine's second family of tips: mui-less bubbles shown straight from a node's own
+// FocusGot/click art -- `CONTipManager::ShowSimpleTip` (0x100085C8C) calls
+// `TipManager::ShowTipIfEnabledAtLoc(tip, x, y)` with no arguments.  It reuses the same panel,
+// but it is not part of the Professor's state machine, so closing one must not move him.
+void App::show_simple_tip(const std::string& id, float x, float y) {
+    if (!tips_enabled) return;
+    load_tips();
+    const TipDef* def = find_tip(id);
+    if (def == nullptr) {
+        std::printf("  tip %s: not in TIPS.XML\n", id.c_str());
+        return;
+    }
+    show_tip_def(def, id, x, y);
+    tip.simple = true;
+}
+
+// A hover bubble: shown while the pointer stays on its object, hidden when it leaves.  This is
+// called every tick as well as on motion, so it converges instead of rebuilding: the wanted id
+// is compared with the one that is up, and a bubble whose <Duration> has already expired with the
+// pointer still on the object is not raised again until that object loses the pointer.
+void App::update_simple_tip(const std::string& id, float x, float y) {
+    if (tip.simple && !tip.visible) hover_simple_shown.clear();  // it timed out or was closed
+    // The steady state: nothing is wanted and nothing is up.
+    if (id.empty() && hover_simple_shown.empty() && !(tip.visible && tip.simple)) return;
+    if (id == hover_simple_shown) return;
+    if (tip.visible && tip.wait_click) return;  // a "click to carry on" bubble owns the screen
+    if (!id.empty() && id == hover_simple_expired) return;
+    hover_simple_shown = id;
+    if (id.empty()) {
+        if (tip.visible && tip.simple) hide_tip();
+        return;
+    }
+    // Moving onto another object clears the expiry latch for the one just left.
+    if (!id.empty()) hover_simple_expired.clear();
+    show_simple_tip(id, x, y);
+}
+
+// The hover bubbles, keyed off the same hit test click_scene uses.  The engine's own handlers for
+// these two objects are:
+//
+//   SneakPeakArea::HandleEvent  0x100084D3C  MouseEnter over a token (event type 2, whose only
+//                                            non-PeakArea child node is a SneakPeakToken button)
+//                                            shows the "SneakPeak" tip at 615,125; the PeakArea
+//                                            background itself returns before the tip
+//   Card::HandleEvent           0x10007C1F4  a MouseDown (case 1) on a matched cell, whose node
+//                                            is "BlankCard" or "FaceAnimation" in state 4, shows
+//                                            the "BlankCard" tip at 615,125
+//
+// The reconstruction draws both keys on focus, i.e. on hover, because that is where the player
+// looks for them here; see the viewer README's Hover section.  It runs on every 30 Hz tick as
+// well as on motion, because a match can turn the card under a still pointer into a BlankCard.
+void App::update_hover_tip() {
+    if (!pairs_ready || result_shown || screen != Screen::Concentration) {
+        update_simple_tip(std::string{}, 0.0f, 0.0f);
+        return;
+    }
+    if (tip.visible && tip.wait_click) return;
+    if (hover_token >= 0 && hover_token < static_cast<int>(pairs_board.tokens())) {
+        update_simple_tip("SneakPeak", 615.0f, 125.0f);
+        return;
+    }
+    if (hover_card >= 0 && hover_card < static_cast<int>(card_fx.size()) &&
+        card_fx[static_cast<std::size_t>(hover_card)].blank) {
+        update_simple_tip("BlankCard", 615.0f, 125.0f);
+        return;
+    }
+    update_simple_tip(std::string{}, 0.0f, 0.0f);
 }
 
 // A draw item's label texture is created here and is not in sheet_cache, so it has to be freed
