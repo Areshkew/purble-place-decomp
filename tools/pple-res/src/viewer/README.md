@@ -22,9 +22,9 @@ flags and the core library's public interfaces are unchanged.
 | Fonts and diagnostic HUD | [hud.cpp](hud.cpp): `font_for`, `rebuild_hud`, `refresh_hud` |
 | Pairs setup orchestration, deal/reset, solve/click hooks, scene visibility | [pairs_setup.cpp](pairs_setup.cpp): `build_pairs` |
 | Per-level card back, jar points/coins, arc and burst configuration, animation reset | [level_art.cpp](level_art.cpp): `build_pair_level_art` |
-| Card face/back/outline/blank/spark/glow cache and time-bar assets | [card_assets.cpp](card_assets.cpp): `build_pair_card_assets` |
+| Card face/back/outline/blank/spark/glow/sneak-icon cache and time-bar assets | [card_assets.cpp](card_assets.cpp): `build_pair_card_assets` |
 | Progress indicators, count-aware sneak tokens, sneak movie loading | [pair_hud.cpp](pair_hud.cpp): `build_pair_hud` |
-| Cached card/effect draw lists (including the deal-in's growing cards), jar layering, timer/token/Professor draws, the hovered card's outline and glow | [pairs_render.cpp](pairs_render.cpp): `refresh_cards`, `timed_refresh` |
+| Cached card/effect draw lists (including the deal-in's growing cards), jar layering, timer/token/Professor draws, the hovered card's outline and glow, the sneak card's eye | [pairs_render.cpp](pairs_render.cpp): `refresh_cards`, `timed_refresh` |
 | Flips, the deal-in, match sparks, flying jar coins, burst start/cache | [pairs_effects.cpp](pairs_effects.cpp): `advance_flips`, `advance_card_fx`, `start_deal`, `advance_deal`, `finish_deal`, `spawn_arcs` |
 | Board completion, score/rank, settings save | [pairs_round.cpp](pairs_round.cpp): `finish_board_end`, `report_round_end` |
 | Professor state machine, tips, transitions | [professor.cpp](professor.cpp): `professor_show`, `professor_display_tip`, `professor_tip_closed`, `professor_advance`, `professor_round_end`, `professor_intro_begin`, `professor_level_tip` |
@@ -94,7 +94,19 @@ otherwise passes the reveal on. Mismatch timing belongs to the rules, not here: 
 lockout value, and a pair that is already counting down is not postponed by a newer one. The time bar
 is part of the same draw list and is built from the board's clock, so `App::time_bar_state()`
 ([pairs_render.cpp](pairs_render.cpp)) is what says whether a tick moved it -- the segment index and
-the 900-tick red threshold -- and `refresh_cards` draws from that one function.
+the 900-tick red threshold -- and `refresh_cards` draws from that one function. Slice `i` is drawn
+with frame `i` of its own template: `ConUILoader::CreateTimeSlice` (`0x10008C640`) stores the slice
+index in the sprite's frame field (`[r9+180h]`), and the template's 226 one-pixel frames are the
+bar's vertical profile, so one frame for every slice turns the tube into a flat slab
+(`s26-timer-compare.png`).
+
+The sneak bonus's mark is a card node, not a screen one: `Card::InitUI` (`0x10007BDFA`) builds
+`Card+0xA8` ("SneakIcon") from `SneakPeakMiniIcon.xml` as a child of the card's Base, so it
+inherits the card's scale, and `Card::DoSneakIcon` (`0x10007DE60`) shows it while `Card+0x18` --
+set on one random card by `Board::SelectSneakCard` (`0x10008B348`, exposed as
+`ConcentrationBoard::sneak_card`) -- is set and `Card+0x568` is below 2. It is the golden eye the
+shipped game puts on that card, drawn at the card's Base + `(1, 6) * scale` from the sprite's
+`(-1,-6)` registration.
 
 ## Hover
 
@@ -124,6 +136,17 @@ The art each kind of node draws when it is focused:
   `ConUILoader::LoadSneakPeekToken` (`0x10008C48C`) builds as buttons named "Button" with
   `SneakPeakButton.xml`'s idle eye on `concentrationSheet29` and its hover/pressed eyes on
   `sheet12`.
+
+The hover art is the animation's **last frame**, not its first. `NodeButton::Load`
+(`0x1000AAFF0`) builds a frame animation for the second and third `<Animation>` of a three-source
+button -- `Animator_LinearAbsolute` from frame 0 to `<FrameCount>-1`, whose duration
+`Animator_LinearAbsolute::GetPercentChange` (`0x1000A3204`) scales by 30 ticks a second off
+`/ButtonFPS` (default 30) -- and `NodeButton::HandleEvent`'s FocusGot case (`0x1000AA985`) resumes
+it, so a focused button settles on the last frame. `ReturnToMainMenu.xml` is the only one of these
+buttons with a multi-frame hover art: frame 0 is a near-copy of the idle art and frame 1 is the
+white highlight, so drawing frame 0 made the whole hover look dead (`s26-hover-btn-2way.png`).
+`pairs_setup.cpp` and `menu.cpp` both go through `pple::sprite_frame_rect(geom, frames - 1)` for
+that reason.
 
 The same FocusGot path is what the engine's *simple tips* hang off for two objects, and the
 reconstruction does not draw them yet: `SneakPeakArea::HandleEvent`'s MouseEnter case
