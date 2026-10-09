@@ -13,7 +13,8 @@ flags and the core library's public interfaces are unchanged.
 | Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown | [loop.cpp](loop.cpp): `run_loop`, `set_sheet_dpi`, `rebuild_current_screen` |
 | Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
-| Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append` |
+| Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append`, `start_cakes`, `cakes_dump_draws` |
+| Comfy Cakes: the round's state over the SDL-free model | [cakes_play.cpp](cakes_play.cpp): `cakes_new_game`, `cakes_use_tool`, `cakes_slide_left`, `cakes_judge`, `cakes_compute_score`, `cakes_draw_cake`, `cakes_refresh` |
 | Resource resolution, image decoding, sprite XML, file/PPM I/O, localiser | [resources.hpp](resources.hpp), [resources.cpp](resources.cpp): `Bundle`, `resolve_sprite`, `decode_payload`, `capture` |
 | Sheet texture cache, colour/alpha composition, coverage, the double-DPI (x2) resources | [textures.cpp](textures.cpp): `load_sheet_texture`, `load_sheet_surface`, `load_split_list`, `src_scale_for`, `clear_sheet_textures` |
 | Scene XML draw list, labels, draw-list release | [scene.cpp](scene.cpp): `build_scene`, `append_label`, `release_draws` |
@@ -213,6 +214,13 @@ exactly as the Pairs board's offscreen parts are.
 
 The game rules (cake generation, the belt, judging, scoring) are **not** in this milestone; the
 screen is reachable, drawn and hoverable, and a tool or belt click is reported.
+
+The game rules live in `pple::CakeModel` (`src/cakes.cpp`), not here: the viewer only moves its
+state and logs what happened.  `build_cakes` resolves the room and records each tool button's
+`<Type>` (a LAYERS.xml entry) by name; `cakes_play.cpp` turns a click on one of them into
+`use_tool`, turns an arrow click into `slide_left` / `slide_right`, and judges the cake that
+leaves slot 0 with `App::cakes_judge`.  A hover rebuilds the whole screen exactly as the menu
+does, so the draw dump (`cakes_dump_draws`) only runs for a `--shot` capture.
 
 
 ## Verification and future changes

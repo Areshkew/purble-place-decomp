@@ -1,5 +1,6 @@
 #pragma once
 #include "types.hpp"
+#include "pple/cakes.hpp"
 
 namespace pple::viewer {
 
@@ -148,9 +149,27 @@ private:
     // scene-load plus the engine's own draw order and the few nodes it clones by count.
     void build_cakes();
     void draw_cakes();
+    // Enter the room and start a round at a difficulty.
+    void start_cakes(int difficulty);
     // Resolves one resolved scene item into a draw and, for a button, a hot-spot.  Shared with
     // build_cakes so the draw maths lives in one place.
     bool cakes_append(const pple::SceneItem& item, int state = 0);
+    // ---- Comfy Cakes: the rules --------------------------------------------------------
+    // The SDL-free model lives in pple::CakeModel (src/cakes.cpp); these methods only move its
+    // state and log what happened.
+    void cakes_load_model();
+    void cakes_new_game(int difficulty);
+    void cakes_use_tool(int station, int index);
+    void cakes_slide_left();
+    void cakes_slide_right();
+    void cakes_judge();
+    void cakes_compute_score();
+    void cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y);
+    void cakes_refresh();
+    // The draw list with the cakes' layers included, for a capture run.
+    void cakes_dump_draws();
+    // The station (0..5) a tool button belongs to, from the tool document's <Station>.
+    int cakes_tool_station(const std::string& button_name) const;
 
     std::vector<std::string> modules;
     std::string want_resource;
@@ -178,6 +197,8 @@ private:
     bool mce_mode = false;
     bool difficulty_mode = false;
     bool cakes_mode = false;
+    // 0 Beginner, 1 Intermediate, 2 Advanced, for --cakes' optional difficulty.
+    int cakes_difficulty_choice = 0;
     bool tips_enabled = true;
     bool container_offsets = true;
     std::string script_click_spec;
@@ -394,6 +415,9 @@ private:
     std::vector<Hotspot> cakes_hotspots;
     // The engine's draw order, one name per scene_draws entry, so the list can be read back.
     std::vector<std::string> cakes_draw_names;
+    // A tool button's <Type> (a LAYERS.xml entry) by its element name, so a click can name the
+    // layer it applies: "CakePanRoundButton" -> 3, "BatterChocolateButton" -> 0.
+    std::map<std::string, int> cakes_button_type;
     // UI\COMFYCAKES\COMFYCAKESGAME.XML, the Comfy Cakes room document.
     const std::string cakes_xml = "UI\\COMFYCAKES\\COMFYCAKESGAME.XML";
     bool cakes_ready = false;
@@ -401,6 +425,20 @@ private:
     // node (UserInterface::ProcessMouseMove 0x100098498 -> SetFocus 0x1000992E0), and this room
     // rebuilds on a change exactly as the menu does.
     std::string cakes_hover_name;
+    // The Comfy Cakes play state.  The model's data (LAYERS.XML, COMFYCAKESVARS.XML) is loaded
+    // once; the round's own state is rebuilt by cakes_new_game.
+    pple::CakeModel cakes_model;
+    bool cakes_model_tried = false;
+    int cakes_difficulty = 0;
+    // The belt, one entry per ConveyorBelt slot (nine), plus whether that slot holds a cake.
+    std::vector<pple::Cake> cakes_belt;
+    std::vector<bool> cakes_belt_present;
+    // The slot the tools work on: position 3 on Beginner, 2 otherwise.
+    int cakes_current_slot = 3;
+    pple::Cake cakes_target;
+    int cakes_correct = 0, cakes_missed = 0, cakes_moves = 0, cakes_slides = 0;
+    int cakes_score = 0, cakes_bonus = 0, cakes_final = 0;
+    bool cakes_over = false, cakes_won = false, cakes_matched_seen = false;
     bool menu_ready = false;
     std::string menu_hover_name;
     // Hover.  The engine's focus follows the mouse: UserInterface::ProcessMouseMove (0x100098498)

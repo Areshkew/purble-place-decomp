@@ -226,6 +226,40 @@ places the widget at the outer X/Y, which is what the core loader now does for e
 The rules — cake generation, the belt, judging, the score — are the next milestone.  A tool or
 belt click is reported and nothing more.
 
+### Comfy Cakes: the round
+
+`--cakes [Beginner|Intermediate|Advanced]` starts a round; the menu's Comfy Cakes house starts a
+Beginner one, and `ReturnToMainMenu` and **ESC** leave.  `src/viewer/cakes_play.cpp` owns the play
+state over the SDL-free model in `src/cakes.cpp`:
+
+| Piece | Engine | Model |
+|---|---|---|
+| the difficulty variables | `COMFYCAKESVARS.XML`, bound by `TweakVars::Bind` in `ComfyCakesGame::Init` (`0x100059F9C`) | `CakeModel::load_vars` |
+| the layer table | `UI\ComfyCakes\Layers.xml`, read through `ComfyCakesGame::GetGlazeXML` (`0x10005CAA8`) | `CakeModel::load_layers` |
+| the tool stations | each tool document's `<Station>`: CakePan 1, Batter 0, Decoration 2, Filling 3, FinalTouch 4, Icing 5 | `App::cakes_tool_station` |
+| what a button does | `Tool::UseTool` (`0x1000751CC`) → `Cake::CanAddLayer` / `CanRemoveAndAddLayer` / `AddLayer` | `CakeModel::use_tool` |
+| the target | `ComfyCakesGame::GenerateCorrectCake` (`0x100060460`) | `CakeModel::generate_correct` |
+| judging | `ComfyCakesGame::OnCakeDone` (`0x10005C120`) + `CheckEndCondition` (`0x10005C7E8`) | `App::cakes_judge` |
+| the score | `ComfyCakesGame::ComputeScore` (`0x10005CC4C`) | `App::cakes_compute_score` |
+| the belt | `ConveyorBelt::SetCakePosition` (`0x100063074`), nine slots | `CakeModel::belt_position` |
+
+Measured on a Beginner round: the target generates 4 layers (batter, filling, icing, decoration),
+the five clicks that build it are each accepted, the cake reports "matches the order", and sliding
+the belt left judges it `correct (1/5), +10 point(s)`.  Intermediate generates 7 layers and
+Advanced 10, matching their `MinLayers` of 2 and 3.
+
+The operation matrix is the one part that is **not** fully settled.  `LayerOperations::
+GetLayerOperation` (`0x10006F1F0`) indexes a 6x6 table at `0x100014430`, and the row is the top
+layer's class rather than its tool station: `Cake::CanAddLayer`'s own illegal-move tips prove
+class 0 is a batter (`IllegalMoveBatterOnBatter` fires when the top layer is class 0) and class 1
+a pan (`IllegalMoveFillingOnPanOrEmpty` when it is class 1), while `Cake::Compare`'s decoration
+branch tests class 2 and its final-touch branch 4.  Filling therefore shares the batter's class 0,
+which is why icing sits on a filling, and class 3 is unreachable.  One consequence is still open:
+with that reading, putting batter on a pan is operation 2, which **replaces** the pan, so a
+generated target never contains a pan layer.  The transposed reading (row = the tool) would keep
+it.  Both the generator and the player go through the same table, so the round stays playable and
+self-consistent either way; which one the shipped build uses is the next RE item.
+
 ### The Professor, his tips, and the two dialogs drawn inside the game
 
 The shipped screen is not just a board. The Professor animates through a six-state machine and

@@ -22,6 +22,7 @@ add_library(pple_core STATIC
   src/scene.cpp
   src/movie.cpp
   src/concentration.cpp
+  src/cakes.cpp
   src/mui.cpp
   src/split_list.cpp
   src/rgmh.cpp
@@ -94,6 +95,7 @@ if(PPLE_BUILD_VIEW)
       src/viewer/audio.cpp
       src/viewer/browser.cpp
       src/viewer/cakes_screen.cpp
+      src/viewer/cakes_play.cpp
       src/viewer/card_assets.cpp
       src/viewer/hud.cpp
       src/viewer/input.cpp

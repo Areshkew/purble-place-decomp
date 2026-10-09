@@ -45,6 +45,10 @@ struct SceneItem {
     // separate document, and SetWidgetPos 0x100072F20 places the widget at the outer X/Y).
     // Comfy Cakes' PurbleChef, CakeScreen, ConveyorBelt and Tool are all of this kind.
     bool widget = false;
+    // A <ButtonTool>'s <Type>, which is the LAYERS.xml entry the button names
+    // (CakePanToolRoundButton 3, BatterToolChocolateButton 0, IcingToolLemonButton 17).
+    // -1 for anything that is not a tool button.
+    int tool_type = -1;
     // The widget an item belongs to, as "<widget element>/" -- "ConveyorBelt/MainBeltSprite".
     // The engine looks each of those up on its own widget object, so the qualified name is what
     // identifies them; an item outside any widget leaves this empty.

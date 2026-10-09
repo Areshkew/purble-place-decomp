@@ -34,7 +34,7 @@ void App::rebuild_current_screen() {
             build_difficulty();
             break;
         case Screen::ComfyCakes:
-            if (cakes_ready) build_cakes();
+            if (cakes_ready) cakes_refresh();
             break;
         case Screen::Concentration:
             if (pairs_ready) build_pairs();

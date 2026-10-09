@@ -56,7 +56,14 @@ int App::run(int argc, char** argv) {
         }
         else if (a == "--mce") mce_mode = true;
         else if (a == "--difficulty") difficulty_mode = true;
-        else if (a == "--cakes") cakes_mode = true;
+        else if (a == "--cakes") {
+            cakes_mode = true;
+            // An optional difficulty, the way --pairs takes one.
+            if (i + 1 < args.size() && args[i + 1][0] != '-') {
+                const std::string d = args[++i];
+                cakes_difficulty_choice = d == "Intermediate" ? 1 : (d == "Advanced" ? 2 : 0);
+            }
+        }
         else if (a == "--intro") intro_wanted = true;
         else if (a == "--no-intro") intro_wanted = false;
         else if (a == "--deal") deal_enabled = true;
@@ -279,8 +286,7 @@ int App::run(int argc, char** argv) {
         // The in-canvas "Select Difficulty" screen on its own, for a capture or a manual run.
         build_difficulty();
     } else if (cakes_mode) {
-        screen = Screen::ComfyCakes;
-        build_cakes();
+        start_cakes(cakes_difficulty_choice);
     } else if (menu_mode) {
         if (loading_mode) {
             screen = Screen::Loading;

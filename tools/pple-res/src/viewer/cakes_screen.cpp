@@ -270,6 +270,7 @@ void App::build_cakes() {
     // and this build's executable deletes the matching five nodes of its own game when it is 0
     // (0x10008122B), so they are absent by default here too; --mce keeps them.
     std::size_t sprites = 0, unresolved = 0;
+    cakes_button_type.clear();
     for (const CakesEntry& entry : entries) {
         const pple::SceneItem& item = entry.item;
         const std::string& key = item.name.empty() ? item.instance : item.name;
@@ -282,6 +283,10 @@ void App::build_cakes() {
         // Comfy Cakes room is a sprite or a button.
         if (item.kind == pple::NodeKind::Label) continue;
         if (item.kind == pple::NodeKind::Movie) continue;
+        // A tool button names the LAYERS.xml entry it applies in its <Desc><Type>, which the
+        // core loader reads for every <ButtonTool>.
+        if (item.kind == pple::NodeKind::Button && item.tool_type >= 0)
+            cakes_button_type[key] = item.tool_type;
         if (cakes_append(item, entry.state)) ++sprites;
         else ++unresolved;
     }
@@ -309,20 +314,33 @@ void App::build_cakes() {
         std::printf("  hot-spot %-26s %.0f,%.0f %.0fx%.0f\n", spot.name.c_str(),
                     static_cast<double>(spot.rect.x), static_cast<double>(spot.rect.y),
                     static_cast<double>(spot.rect.w), static_cast<double>(spot.rect.h));
-    // The full draw list, in the order it is drawn.  A capture run prints it, so the frame can be
-    // checked against the background photograph block by block (cakes_compare.py); an
-    // interactive run stays quiet, because a hover rebuilds this screen on every focus change.
-    if (offscreen) {
-        for (std::size_t i = 0; i < scene_draws.size() && i < cakes_draw_names.size(); ++i) {
-            const DrawItem& d = scene_draws[i];
-            std::printf("  draw %-28s %.0f,%.0f %.0fx%.0f\n", cakes_draw_names[i].c_str(),
-                        static_cast<double>(d.dst.x), static_cast<double>(d.dst.y),
-                        static_cast<double>(d.dst.w), static_cast<double>(d.dst.h));
-        }
-    }
     hud_lines = {cakes_xml, std::to_string(sprites) + " sprites, " +
                                  std::to_string(cakes_hotspots.size()) + " hot-spots"};
     rebuild_hud();
+}
+
+// One line per draw with the layer rects included, so a capture can be checked against the
+// background photograph block by block (cakes_compare.py).
+void App::cakes_dump_draws() {
+    if (!offscreen) return;
+    for (std::size_t i = 0; i < scene_draws.size() && i < cakes_draw_names.size(); ++i) {
+        const DrawItem& d = scene_draws[i];
+        std::printf("  draw %-28s %.0f,%.0f %.0fx%.0f\n", cakes_draw_names[i].c_str(),
+                    static_cast<double>(d.dst.x), static_cast<double>(d.dst.y),
+                    static_cast<double>(d.dst.w), static_cast<double>(d.dst.h));
+    }
+}
+
+// Entering the room starts a round.  ComfyCakesGame::NewGame is what PurblePlaceManager's
+// Show path calls, and --cakes-difficulty picks the difficulty the way the chooser does.
+void App::start_cakes(int difficulty) {
+    picker_choice = difficulty == 0 ? "Beginner" : (difficulty == 1 ? "Intermediate" : "Advanced");
+    screen = Screen::ComfyCakes;
+    menu_ready = false;
+    cakes_ready = false;
+    cakes_new_game(difficulty);
+    build_cakes();
+    cakes_refresh();
 }
 
 }  // namespace pple::viewer

@@ -107,9 +107,7 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             // PurblePlaceManager::Init sets its state to 2 for this house (0x100071A00 /
             // 0x100071A1A), which is what starts ComfyCakesGame::LoadGameUI.
             std::printf("menu: ComfyCakesButton -> Comfy Cakes\n");
-            cakes_ready = false;
-            screen = Screen::ComfyCakes;
-            build_cakes();
+            start_cakes(0);
         } else if (hit->name == "ExitButton") {
             std::printf("menu: ExitButton clicked - exiting, as the game does\n");
             return false;
@@ -148,7 +146,25 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             build_menu();
             return true;
         }
-        std::printf("cakes: %s clicked\n", hit->name.c_str());
+        if (hit->name == "SlideLeftButton") {
+            cakes_slide_left();
+            cakes_refresh();
+            return true;
+        }
+        if (hit->name == "SlideRightButton") {
+            cakes_slide_right();
+            cakes_refresh();
+            return true;
+        }
+        // A tool button.  Tool::UseTool takes the button's <Type> and applies it to the cake at
+        // the tool's own station.
+        const std::map<std::string, int>::const_iterator type = cakes_button_type.find(hit->name);
+        if (type == cakes_button_type.end()) {
+            std::printf("cakes: %s clicked (no layer type)\n", hit->name.c_str());
+            return true;
+        }
+        cakes_use_tool(cakes_tool_station(hit->name), type->second);
+        cakes_refresh();
         return true;
     }
     if (!pairs_ready) return true;
