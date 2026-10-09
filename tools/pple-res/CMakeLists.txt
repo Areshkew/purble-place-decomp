@@ -93,6 +93,7 @@ if(PPLE_BUILD_VIEW)
       src/viewer/app.cpp
       src/viewer/audio.cpp
       src/viewer/browser.cpp
+      src/viewer/cakes_screen.cpp
       src/viewer/card_assets.cpp
       src/viewer/hud.cpp
       src/viewer/input.cpp

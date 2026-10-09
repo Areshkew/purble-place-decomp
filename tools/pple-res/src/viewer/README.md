@@ -13,6 +13,7 @@ flags and the core library's public interfaces are unchanged.
 | Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown | [loop.cpp](loop.cpp): `run_loop`, `set_sheet_dpi`, `rebuild_current_screen` |
 | Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
+| Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append` |
 | Resource resolution, image decoding, sprite XML, file/PPM I/O, localiser | [resources.hpp](resources.hpp), [resources.cpp](resources.cpp): `Bundle`, `resolve_sprite`, `decode_payload`, `capture` |
 | Sheet texture cache, colour/alpha composition, coverage, the double-DPI (x2) resources | [textures.cpp](textures.cpp): `load_sheet_texture`, `load_sheet_surface`, `load_split_list`, `src_scale_for`, `clear_sheet_textures` |
 | Scene XML draw list, labels, draw-list release | [scene.cpp](scene.cpp): `build_scene`, `append_label`, `release_draws` |
@@ -180,6 +181,38 @@ because a match can turn the card under a still pointer into a BlankCard) owns t
 A tip's 9-slice comes from its own `<Type>`: `tip_style_for` maps `Intro`/`Error`/everything else
 to the White/Red/Green `Tips\Styles\*` documents, and `green_style()` is what the difficulty
 chooser and the end-of-round panel keep using.
+
+
+## Comfy Cakes
+
+`cakes_screen.cpp` owns the second game's room.  Its document is not a pure layout document:
+`ComfyCakesGame::InitGameUI` (`0x10005D018`) looks each element up by name and creates the node
+itself, so the module carries the engine's **creation order** as its draw order and adds the few
+nodes the engine clones by count:
+
+| Engine | Draw order | Module |
+|---|---|---|
+| `ConveyorBelt::Init` (`0x1000623A0`) | `/LeftBeltSprite`, **seven** `/MainBeltSprite` copies 99 px apart (the seventh switched to the belt's second `<Animation>` at `0x100062543`), `/BackWall` | belt tiles |
+| `InitGameUI` (`0x10005DE17`) | `/ScreenSlot` **eight** times, four across at 20 px then a second row 30 px down | screen slots |
+| `InitGameUI` (`0x10005DB51` / `0x10005DBAE`) | `TimerBackSprite` at (-10,325) and `TimerBarSprite` at (12,346), built by name rather than by the document | timer sprites |
+| `InitGameUI` (`0x10005E0DB`) | the two Media Center header buttons and labels, only when `g_bMediaCenter == 1` | `--mce` keeps them, as on the Pairs screen |
+
+The core loader resolves the rest.  A `<Desc>` that carries no node reference of its own is a
+**widget**: `PurblePlaceUILoader::GetDescNode` (`0x100072E80`) follows a `<Desc>` whose text names
+another document, and `SetWidgetPos` (`0x100072F20`) places the widget at the outer X/Y.  Comfy
+Cakes' PurbleChef, CakeScreen, ConveyorBelt and the six Tools are all of that kind, and
+`scene_load` qualifies every item a widget produces with `<widget element>/`, so
+`ConveyorBelt/MainBeltSprite` is the name the engine itself uses.  `CakeScreen`'s
+`<BackgroundSprite>` is a plain resource name inside the widget's `<Desc>`, which the generic
+`<Background>` shorthand never reaches, so `walk_widget` emits it at the widget's own origin the
+way `CakeScreen::Init` (`0x1000578DB`) does.
+
+The viewport is the room's 800x496 design bounds, never the sprites' extents: the DroppingBox's
+150x270 frame reaches x = 825 and the Media Center art starts at negative y, so both are clipped
+exactly as the Pairs board's offscreen parts are.
+
+The game rules (cake generation, the belt, judging, scoring) are **not** in this milestone; the
+screen is reachable, drawn and hoverable, and a tool or belt click is reported.
 
 
 ## Verification and future changes

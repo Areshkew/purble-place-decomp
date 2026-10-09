@@ -48,9 +48,19 @@ void read_animation(const XmlNode& animation, SceneItem& item) {
     const std::string prepped = child_text_ci(animation, "PreppedForFilter");
     item.prepped = !prepped.empty() && to_float(prepped) > 0.0f;
 }
-void walk(const XmlNode& node, float offset_x, float offset_y, float scale, Scene& scene);
 
-void emit_instance(const XmlNode& node, const XmlNode& desc, float x, float y, float scale, Scene& scene) {
+// How deep a <Desc> chain may be chased.  The Comfy Cakes chain is scene document -> the tool's
+// own document -> its <Array> -> its <ButtonTool>, so the limit has to reach that fourth level.
+constexpr int kMaxWidgetDepth = 6;
+
+void walk(const XmlNode& node, float offset_x, float offset_y, float scale, Scene& scene,
+          const std::function<bool(const std::string&, std::vector<std::uint8_t>&)>& fetch,
+          int depth);
+
+// True when the description produced a drawable instance.  False means it is a widget: it has no
+// node reference of its own, only positioned children.
+bool emit_instance(const XmlNode& node, const XmlNode& desc, float x, float y, float scale,
+                   Scene& scene) {
     SceneItem item;
     item.instance = node.name;
     item.name = node.attr("Name");
@@ -80,12 +90,9 @@ void emit_instance(const XmlNode& node, const XmlNode& desc, float x, float y, f
         item.colour = parse_colour(child_text_ci(desc, "Color"), 0xFFFFFFFFu);
         item.justify = static_cast<int>(to_float(child_text_ci(desc, "Justify")));
         scene.items.push_back(std::move(item));
-        return;
+        return true;
     } else {
-        item.kind = NodeKind::Unknown;
-        item.ref = "(desc with no known reference)";
-        scene.items.push_back(std::move(item));
-        return;
+        return false;
     }
 
     // Sprite/Button/Movie: pull the sheet and frame rectangle out of the referenced node
@@ -93,12 +100,89 @@ void emit_instance(const XmlNode& node, const XmlNode& desc, float x, float y, f
     if (item.kind == NodeKind::Movie) {
         item.sheet.clear();
         scene.items.push_back(std::move(item));
-        return;
+        return true;
     }
     scene.items.push_back(std::move(item));
+    return true;
 }
 
-void walk(const XmlNode& node, float offset_x, float offset_y, float scale, Scene& scene) {
+// The widget branch of walk().  PurblePlaceUILoader::GetDescNode returns the referenced document
+// when the <Desc>'s text names one, so the widget's own children are laid out inside it; an inline
+// <Desc> holds the children directly.  Either way the widget itself sits at the outer (x, y),
+// because SetWidgetPos reads X/Y off the element that carries the <Desc>.
+void walk_widget(const XmlNode& node, const XmlNode& desc, float x, float y, float scale,
+                 Scene& scene,
+                 const std::function<bool(const std::string&, std::vector<std::uint8_t>&)>& fetch,
+                 int depth) {
+    SceneItem widget;
+    widget.instance = node.name;
+    widget.name = node.attr("Name");
+    widget.x = x;
+    widget.y = y;
+    widget.scale = scale;
+    widget.w = to_float(child_text_ci(node, "W"));
+    widget.h = to_float(child_text_ci(node, "H"));
+    widget.has_position = child_ci(node, "X") != nullptr || child_ci(node, "x") != nullptr ||
+                          child_ci(node, "Y") != nullptr || child_ci(node, "y") != nullptr;
+    widget.widget = true;
+    scene.containers.push_back(widget);
+
+    const std::string doc = desc.text;
+    const bool looks_like_document = doc.find(".xml") != std::string::npos;
+    const std::string prefix = node.name + "/";
+    const std::size_t first_item = scene.items.size();
+    const std::size_t first_container = scene.containers.size();
+    // CakeScreen::Init reads its /BackgroundSprite as a plain resource name and creates it at the
+    // widget's own origin (0x1000578DB -> NodeBase::CreateFromXmlNode), not at a child position.
+    // It is a child of the widget's <Desc>, so the shorthand below never sees it.
+    for (const XmlNode& child : desc.children) {
+        if (child.name != "BackgroundSprite") continue;
+        if (child.text.empty() || child.text.find(".xml") == std::string::npos) continue;
+        SceneItem item;
+        item.instance = node.name + "/BackgroundSprite";
+        item.kind = NodeKind::Sprite;
+        item.ref = child.text;
+        item.x = x;
+        item.y = y;
+        item.scale = scale;
+        item.has_position = true;
+        scene.items.push_back(std::move(item));
+    }
+    for (std::size_t i = first_item; i < scene.items.size(); ++i)
+        scene.items[i].widget_path = prefix;
+    const std::size_t first_after_background = scene.items.size();
+    if (looks_like_document && fetch) {
+        std::vector<std::uint8_t> data;
+        if (fetch(doc, data)) {
+            XmlNode root;
+            std::string error;
+            if (xml_parse(data, root, error)) {
+                for (const XmlNode& child : root.children)
+                    walk(child, x, y, scale, scene, fetch, depth + 1);
+                // Everything the widget's own document produced belongs to it, so the
+                // qualified name the engine uses becomes part of the item's identity.
+                for (std::size_t i = first_after_background; i < scene.items.size(); ++i)
+                    scene.items[i].widget_path = prefix;
+                for (std::size_t i = first_container; i < scene.containers.size(); ++i)
+                    scene.containers[i].widget_path = prefix;
+                return;
+            }
+            scene.problems.push_back(doc + ": " + error);
+            return;
+        }
+        scene.problems.push_back("missing widget description: " + doc);
+        return;
+    }
+    for (const XmlNode& child : desc.children) walk(child, x, y, scale, scene, fetch, depth + 1);
+    for (std::size_t i = first_after_background; i < scene.items.size(); ++i)
+        scene.items[i].widget_path = prefix;
+    for (std::size_t i = first_container; i < scene.containers.size(); ++i)
+        scene.containers[i].widget_path = prefix;
+}
+
+void walk(const XmlNode& node, float offset_x, float offset_y, float scale, Scene& scene,
+          const std::function<bool(const std::string&, std::vector<std::uint8_t>&)>& fetch,
+          int depth) {
     float x = offset_x + to_float(child_text_ci(node, "X")) + to_float(child_text_ci(node, "x"));
     // Guard against both spellings being present at once.
     if (child_ci(node, "X") != nullptr && child_ci(node, "x") != nullptr)
@@ -113,7 +197,8 @@ void walk(const XmlNode& node, float offset_x, float offset_y, float scale, Scen
 
     const XmlNode* desc = child_ci(node, "Desc");
     if (desc != nullptr) {
-        emit_instance(node, *desc, x, y, local_scale, scene);
+        if (depth < kMaxWidgetDepth && !emit_instance(node, *desc, x, y, local_scale, scene))
+            walk_widget(node, *desc, x, y, local_scale, scene, fetch, depth);
         return;  // a described instance does not also contain instances
     }
 
@@ -131,6 +216,7 @@ void walk(const XmlNode& node, float offset_x, float offset_y, float scale, Scen
 
     // <Background>path</Background> is shorthand for a sprite instance with no Desc.  It is
     // a sibling of the other instances, so emit it and keep walking rather than returning.
+    // Comfy Cakes' CakeScreen spells the same thing <BackgroundSprite>.
     if (const XmlNode* background = child_ci(node, "Background")) {
         if (!background->text.empty() && background->text.find(".xml") != std::string::npos) {
             SceneItem item;
@@ -143,8 +229,21 @@ void walk(const XmlNode& node, float offset_x, float offset_y, float scale, Scen
             scene.items.push_back(std::move(item));
         }
     }
+    if (const XmlNode* background = child_ci(node, "BackgroundSprite")) {
+        if (!background->text.empty() && background->text.find(".xml") != std::string::npos) {
+            SceneItem item;
+            item.instance = node.name + "/BackgroundSprite";
+            item.kind = NodeKind::Sprite;
+            item.ref = background->text;
+            item.x = x;
+            item.y = y;
+            item.scale = local_scale;
+            scene.items.push_back(std::move(item));
+        }
+    }
 
-    for (const XmlNode& child : node.children) walk(child, x, y, local_scale, scene);
+    for (const XmlNode& child : node.children)
+        walk(child, x, y, local_scale, scene, fetch, depth + 1);
 }
 
 }  // namespace
@@ -235,7 +334,7 @@ bool scene_load(std::span<const std::uint8_t> data,
     XmlNode root;
     if (!xml_parse(data, root, error)) return false;
     scene.name = root.attr("Name");
-    walk(root, 0.0f, 0.0f, 1.0f, scene);
+    walk(root, 0.0f, 0.0f, 1.0f, scene, fetch, 0);
 
     // Resolve every referenced node definition now, so the caller only has to deal with
     // sheets.
@@ -258,14 +357,20 @@ bool scene_load(std::span<const std::uint8_t> data,
         const float x = item.x, y = item.y, scale = item.scale;
         const int alpha = item.alpha;
         const bool has_position = item.has_position;
+        const bool widget = item.widget;
         const std::string instance = item.instance, name = item.name;
-        const std::string ref = item.ref;
+        const std::string ref = item.ref, widget_path = item.widget_path;
+        const float w = item.w, h = item.h;
         item = resolved;
         item.x = x;
         item.y = y;
         item.scale = scale;
         item.alpha = alpha;
         item.has_position = has_position;
+        item.widget = widget;
+        item.widget_path = widget_path;
+        item.w = w;
+        item.h = h;
         item.instance = instance;
         item.name = name;
         item.ref = ref;

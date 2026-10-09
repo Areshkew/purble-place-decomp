@@ -40,6 +40,15 @@ struct SceneItem {
     // ProfessorIdleAnimation next to ProfessorContainer at 295,70), not something the scene
     // document places.
     bool has_position = false;
+    // A widget instance: its <Desc> carries no node reference of its own but holds positioned
+    // children (PurblePlaceUILoader::GetDescNode 0x100072E80 resolves a <Desc> that names a
+    // separate document, and SetWidgetPos 0x100072F20 places the widget at the outer X/Y).
+    // Comfy Cakes' PurbleChef, CakeScreen, ConveyorBelt and Tool are all of this kind.
+    bool widget = false;
+    // The widget an item belongs to, as "<widget element>/" -- "ConveyorBelt/MainBeltSprite".
+    // The engine looks each of those up on its own widget object, so the qualified name is what
+    // identifies them; an item outside any widget leaves this empty.
+    std::string widget_path;
 
     // Sprite/Button
     std::string ref;        // value of <Sprite>/<Button>/<Movie>

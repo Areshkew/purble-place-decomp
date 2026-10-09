@@ -103,13 +103,52 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             // this opens the in-canvas chooser instead.
             std::printf("menu: ConcentrationButton -> Purble Pairs difficulty chooser\n");
             build_difficulty();
+        } else if (hit->name == "ComfyCakesButton") {
+            // PurblePlaceManager::Init sets its state to 2 for this house (0x100071A00 /
+            // 0x100071A1A), which is what starts ComfyCakesGame::LoadGameUI.
+            std::printf("menu: ComfyCakesButton -> Comfy Cakes\n");
+            cakes_ready = false;
+            screen = Screen::ComfyCakes;
+            build_cakes();
         } else if (hit->name == "ExitButton") {
             std::printf("menu: ExitButton clicked - exiting, as the game does\n");
             return false;
         } else {
             std::printf("menu: %s is not implemented in this reconstruction "
-                        "(only Purble Pairs is)\n", hit->name.c_str());
+                        "(only Purble Pairs and Comfy Cakes are)\n",
+                        hit->name.c_str());
         }
+        return true;
+    }
+    // Comfy Cakes: the room's own buttons.  ReturnToMainMenu leaves; the two belt arrows and the
+    // tool buttons pick an action, which is the next milestone, so for now a click is reported.
+    if (screen == Screen::ComfyCakes) {
+        const Hotspot* hit = nullptr;
+        for (const Hotspot& spot : cakes_hotspots) {
+            const SDL_FRect& r = spot.rect;
+            if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
+                hit = &spot;
+                break;
+            }
+        }
+        if (motion_only) {
+            const std::string want = hit == nullptr ? std::string{} : hit->name;
+            if (want == cakes_hover_name) return true;
+            cakes_hover_name = want;
+            std::printf("  hover: %s\n", want.empty() ? "nothing" : want.c_str());
+            build_cakes();
+            return true;
+        }
+        if (hit == nullptr) return true;
+        if (hit->name == "ReturnToMainMenu") {
+            std::printf("cakes: ReturnToMainMenu -> main menu\n");
+            cakes_ready = false;
+            screen = Screen::Menu;
+            menu_hover_name.clear();
+            build_menu();
+            return true;
+        }
+        std::printf("cakes: %s clicked\n", hit->name.c_str());
         return true;
     }
     if (!pairs_ready) return true;

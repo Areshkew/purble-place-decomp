@@ -33,6 +33,9 @@ void App::rebuild_current_screen() {
         case Screen::Difficulty:
             build_difficulty();
             break;
+        case Screen::ComfyCakes:
+            if (cakes_ready) build_cakes();
+            break;
         case Screen::Concentration:
             if (pairs_ready) build_pairs();
             break;
@@ -141,6 +144,14 @@ int App::run_loop() {
                         game_to_menu();
                     } else if (screen == Screen::Difficulty) {
                         game_to_menu();
+                    } else if (screen == Screen::ComfyCakes) {
+                        // ComfyCakesGame::ReturnToMainMenu (0x10005F150) saves the game state
+                        // and sets the manager's state back to the menu.
+                        std::printf("cakes: ESC -> main menu\n");
+                        cakes_ready = false;
+                        screen = Screen::Menu;
+                        menu_hover_name.clear();
+                        build_menu();
                     } else {
                         running = false;
                     }
@@ -377,10 +388,10 @@ int App::run_loop() {
         }
         if (!dpi_logged) {
             dpi_logged = true;
-            std::printf("hidpi: %s, window scale %.3f, threshold %.2f%s\n",
+            std::printf("hidpi: %s, window scale %.3f, threshold %.2f%s, HUD strip %d px\n",
                         sheet_dpi == SheetDpi::Double ? "double-DPI (x2) art" : "base (1x) art",
                         static_cast<double>(s), static_cast<double>(hidpi_scale),
-                        hidpi_mode == 0 ? "" : " (forced)");
+                        hidpi_mode == 0 ? "" : " (forced)", hud_strip);
         }
         const std::vector<DrawItem>& base_draws = picker_screen ? picker_draws : scene_draws;
         if (!base_draws.empty() || !overlay_draws.empty()) {

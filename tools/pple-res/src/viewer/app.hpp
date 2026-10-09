@@ -142,6 +142,15 @@ private:
     void draw_difficulty();
     void start_game(const std::string& difficulty, bool intro);
     void game_to_menu();
+    // ---- Comfy Cakes -----------------------------------------------------------------
+    // The second of the three games.  ComfyCakesGame::InitGameUI (0x10005D018) walks
+    // COMFYCAKESGAME.XML by element name and creates every node itself, so the screen is a
+    // scene-load plus the engine's own draw order and the few nodes it clones by count.
+    void build_cakes();
+    void draw_cakes();
+    // Resolves one resolved scene item into a draw and, for a button, a hot-spot.  Shared with
+    // build_cakes so the draw maths lives in one place.
+    bool cakes_append(const pple::SceneItem& item, int state = 0);
 
     std::vector<std::string> modules;
     std::string want_resource;
@@ -168,6 +177,7 @@ private:
     bool menu_mode = false;
     bool mce_mode = false;
     bool difficulty_mode = false;
+    bool cakes_mode = false;
     bool tips_enabled = true;
     bool container_offsets = true;
     std::string script_click_spec;
@@ -378,6 +388,19 @@ private:
     Screen screen = Screen::Other;
     std::vector<Hotspot> menu_hotspots;
     std::vector<Hotspot> conc_hotspots;
+    // Comfy Cakes: the screen's own buttons.  ReturnToMainMenu, the two belt-arrow buttons and
+    // each tool's flavour buttons all take their focus from the pointer, exactly as
+    // UserInterface::ProcessMouseMove -> SetFocus does on every screen.
+    std::vector<Hotspot> cakes_hotspots;
+    // The engine's draw order, one name per scene_draws entry, so the list can be read back.
+    std::vector<std::string> cakes_draw_names;
+    // UI\COMFYCAKES\COMFYCAKESGAME.XML, the Comfy Cakes room document.
+    const std::string cakes_xml = "UI\\COMFYCAKES\\COMFYCAKESGAME.XML";
+    bool cakes_ready = false;
+    // The hot-spot the pointer is over on the Comfy Cakes screen.  The engine's focus is one
+    // node (UserInterface::ProcessMouseMove 0x100098498 -> SetFocus 0x1000992E0), and this room
+    // rebuilds on a change exactly as the menu does.
+    std::string cakes_hover_name;
     bool menu_ready = false;
     std::string menu_hover_name;
     // Hover.  The engine's focus follows the mouse: UserInterface::ProcessMouseMove (0x100098498)

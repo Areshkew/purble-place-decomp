@@ -35,6 +35,9 @@ $game = @("$d\PurblePlace.dll", "$d\PurblePlace2.dll", "$d\CardGames.dll")
 
 # Intermediate is the first timed difficulty, so it is the one that shows the time bar.
 .\build\pple-res\pple-view.exe @game --scene "UI\CONCENTRATION\CONCENTRATIONGAME.XML" --pairs "Intermediate,0" --mui $m
+
+# The second game: the Comfy Cakes room, also reachable from the menu's Comfy Cakes house.
+.\build\pple-res\pple-view.exe @game --cakes --mui $m
 ```
 
 Controls: **left click** a card to flip it, or a choice button to pick a difficulty and start the
@@ -47,6 +50,11 @@ is optional; without it the labels fall back to the English text embedded in the
 the title then renders in Comic Sans MS rather than Segoe UI. The difficulty chooser and the
 end-of-round panel keep working without it: they carry the shipped `.mui` wording as their
 fallback.
+
+On the Comfy Cakes screen: **left click** `ReturnToMainMenu` (or **ESC**) leaves, a **tool button**
+or a **belt arrow** reports what was hit, and the pointer's focus follows the mouse exactly as it
+does on the Pairs board. The room's own rules are not in yet; see section 29 of
+`D:\Development\re\notes\purbleplace.md`.
 
 Headless equivalents that need no window (useful for checking a change):
 
@@ -161,7 +169,7 @@ and example values, and — with `--refs` — how every resource reference resol
 ## pple-view
 
 ```
-pple-view <pe>... [--menu] [--difficulty] [--resource NAME] [--sprite XML] [--scene XML] [--movie XML]
+pple-view <pe>... [--menu] [--difficulty] [--cakes] [--resource NAME] [--sprite XML] [--scene XML] [--movie XML]
                   [--movie-name NAME] [--anchor X,Y] [--frame N] [--state N]
                   [--pairs [D,L,S]] [--pairs-reveal] [--pairs-click I,J] [--pairs-ticks N]
                   [--pairs-solve] [--pairs-save PATH] [--mce] [--no-container-offsets] [--mui PATH]
@@ -187,6 +195,36 @@ build's `New Game` / `Exit Game` header buttons — the shipped executable *dele
 nodes when `g_bMediaCenter == 0` (`ConcentrationGame::LoadGameUI` `0x10008122B`), so they are
 absent by default, as they are in this build.  `--no-container-offsets` turns off the engine's
 HUD re-parenting described below.
+
+### Comfy Cakes
+
+`--cakes` starts the second game on `UI\COMFYCAKES\COMFYCAKESGAME.XML`, and the menu's Comfy Cakes
+house reaches it the same way the shipped build does (`PurblePlaceManager::Init` sets its state to
+2 at `0x100071A00` / `0x100071A1A`).  `ReturnToMainMenu` and `ESC` come back to the menu.
+
+The room is a scene load plus the engine's own draw order.  `ComfyCakesGame::InitGameUI`
+(`0x10005D018`) creates every node itself rather than walking the document, so
+[cakes_screen.cpp](src/viewer/cakes_screen.cpp) carries that order:
+
+| Order | Nodes |
+|---|---|
+| 1-3 | `/Background`, `/RightBelt` + anim, `/ConveyorPlatform` + anim |
+| 4 | `/ConveyorBelt`: `LeftBeltSprite`, **7 x** `MainBeltSprite` 99 px apart (the seventh on the belt's second `<Animation>`), `BackWall` — `ConveyorBelt::Init` `0x1000623A0` |
+| 5 | `/CakeScreen`: `BackgroundSprite`, `ScreenSprite` (0,20), `GlassSprite`, `HighlightSprite` — `CakeScreen::Init` `0x1000577FC` |
+| 6-13 | the two slide buttons and their highlights, `/RedLight`, `/CakeBox`, `/TrashCan`, `/ReturnToMainMenu` |
+| 14 | `/Tools`, one per `<Tool>`: `HighlightSprite`, its `<ButtonTool>`s, then the subclass's own sprites |
+| 15 | `TimerBackSprite` (-10,325) and `TimerBarSprite` (12,346), built by name at `0x10005DB51` / `0x10005DBAE` |
+| 16-19 | `/ShippingSignBackground`, `/ShippingSign`, **8 x** `/ScreenSlot` (four across at 20 px, second row 30 px down), `/DroppingBox` |
+| 20-21 | `/PurbleChef`, then the two Media Center header buttons and labels, which `--mce` keeps |
+
+Measured: **78 sprites, 0 unresolved**, 21 hot-spots (18 tool buttons, the two belt arrows and
+`ReturnToMainMenu`), in a 800x496 viewport of a 802x496 sprite extent.  A `<Desc>` with no node
+reference of its own — PurbleChef, CakeScreen, ConveyorBelt and each Tool — is a **widget**:
+`GetDescNode` (`0x100072E80`) follows the document it names and `SetWidgetPos` (`0x100072F20`)
+places the widget at the outer X/Y, which is what the core loader now does for every scene.
+
+The rules — cake generation, the belt, judging, the score — are the next milestone.  A tool or
+belt click is reported and nothing more.
 
 ### The Professor, his tips, and the two dialogs drawn inside the game
 
@@ -632,8 +670,10 @@ these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
   limit is ignored, and `<Music>` is empty in both manifests.
 * PNG interlacing (Adam7) is rejected with a clear error; no shipped asset is interlaced.
 * The three games: Purble Pairs is **playable** (`pple-view --menu`, or headless with
-  `pple-res pairs --autoplay`). Comfy Cakes and Purble Shop are not started; their menu
-  hot-spots are drawn and clickable and say so when clicked. The card deck, board geometry,
+  `pple-res pairs --autoplay`). Comfy Cakes is **reachable and drawn** (`--cakes`, or the menu's
+  Comfy Cakes house): the whole room, its engine draw order and its hover, but not yet its rules.
+  Purble Shop is not started; its menu hot-spot is drawn and clickable and says so when clicked.
+  The card deck, board geometry,
   match rule, scoring, placement, container parenting, flip animation, sound map, progress
   meter, multi-level rounds, special cards, sneak peek, per-level card back, the jar's tray
   coins and flying coins, the burst movie, the match animation, `CalcEndGame`'s rank and the

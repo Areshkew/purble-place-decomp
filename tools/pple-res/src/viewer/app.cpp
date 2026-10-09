@@ -12,6 +12,7 @@ namespace pple::viewer {
                  "  --no-hidpi        force the 1x art; this is also the automatic choice below a 1.5x\n"
                  "                    window scale, where the x2 art would have to be minified\n"
                  "  --difficulty      start on the in-canvas Select Difficulty screen\n"
+        "  --cakes           start on the Comfy Cakes screen (UI\\COMFYCAKES\\COMFYCAKESGAME.XML)\n"
                  "  --intro           with --pairs, also run the Professor's entrance and intro tips\n"
                  "  --no-intro        never run them (an explicit --pairs start skips them anyway)\n"
                  "  --no-tips         do not draw the Professor's TIPS.XML speech bubbles\n"
@@ -55,6 +56,7 @@ int App::run(int argc, char** argv) {
         }
         else if (a == "--mce") mce_mode = true;
         else if (a == "--difficulty") difficulty_mode = true;
+        else if (a == "--cakes") cakes_mode = true;
         else if (a == "--intro") intro_wanted = true;
         else if (a == "--no-intro") intro_wanted = false;
         else if (a == "--deal") deal_enabled = true;
@@ -276,6 +278,9 @@ int App::run(int argc, char** argv) {
     } else if (difficulty_mode) {
         // The in-canvas "Select Difficulty" screen on its own, for a capture or a manual run.
         build_difficulty();
+    } else if (cakes_mode) {
+        screen = Screen::ComfyCakes;
+        build_cakes();
     } else if (menu_mode) {
         if (loading_mode) {
             screen = Screen::Loading;
