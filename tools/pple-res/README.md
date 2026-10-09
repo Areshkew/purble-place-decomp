@@ -242,6 +242,18 @@ state over the SDL-free model in `src/cakes.cpp`:
 | judging | `ComfyCakesGame::OnCakeDone` (`0x10005C120`) + `CheckEndCondition` (`0x10005C7E8`) | `App::cakes_judge` |
 | the score | `ComfyCakesGame::ComputeScore` (`0x10005CC4C`) | `App::cakes_compute_score` |
 | the belt | `ConveyorBelt::SetCakePosition` (`0x100063074`), nine slots | `CakeModel::belt_position` |
+| the Chef | `PurbleChef::Show` (`0x10006FD1C`), `OnEnterState` (`0x10006FFEC`), `Init` (`0x10006F7DC`) | [cakes_chef.cpp](src/viewer/cakes_chef.cpp): `cakes_chef_show`, `cakes_chef_advance`, `cakes_draw_chef` |
+
+`--cakes-solve` plays a whole round out through the same click path the mouse uses, the way
+`--pairs-solve` does for Purble Pairs.  Measured: **Beginner 5 correct, 30 moves, final 950**;
+**Intermediate 5 correct, 50 moves, 1750**; **Advanced 6 correct, 90 moves, 2600** — all WON, and
+the lose path reaches `LOST after 3 mistake(s)` on Intermediate with 1850.
+
+The Chef's states are 0 hidden, 1 idle, 2 entering, 3 leaving, 4 talking, 5 win, 6 lose; his six
+movies are `Chef{Idle,Enter,Leave,Talk,Win,Lose}Movie.xml`, and his bubbles are his own
+`COMFYCAKESTIPS.XML` (38 tips) in the same White/Red/Green styles the Pairs tips use.  He is
+anchored at the room origin, not at the document's `<PurbleChef>` 900,400: his idle movie's first
+frame already places his parts at x 643..690, y 401..442.
 
 Measured on a Beginner round: the target generates 4 layers (batter, filling, icing, decoration),
 the five clicks that build it are each accepted, the cake reports "matches the order", and sliding

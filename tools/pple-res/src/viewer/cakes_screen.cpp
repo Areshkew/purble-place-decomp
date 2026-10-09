@@ -341,6 +341,7 @@ void App::start_cakes(int difficulty) {
     cakes_new_game(difficulty);
     build_cakes();
     cakes_refresh();
+    if (cakes_solve_hook) cakes_solve();
 }
 
 }  // namespace pple::viewer

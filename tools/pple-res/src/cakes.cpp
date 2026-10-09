@@ -154,6 +154,10 @@ Cake CakeModel::generate_correct(int difficulty, const std::function<int()>& rng
     // it is also why the player can always build the target the same way.
     const auto put = [&](int station, int index) {
         CakeLayer added;
+        CakeLayer step;
+        step.station = station;
+        step.index = index;
+        cake.moves.push_back(step);
         use_tool(cake, station, index, added, rng);
     };
     for (int i = 0; i < layer_count; ++i) {

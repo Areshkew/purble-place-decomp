@@ -73,6 +73,12 @@ struct Cake {
     // replace path passes the removed layer's shape (Cake+0x28) on to the new one, so the pan
     // sets the shape and the batter that replaces it inherits it.
     int shape = -1;
+    // The raw sequence of tool uses that produced this cake, which is exactly what a player has
+    // to replay.  ComfyCakesGame::GenerateCorrectCake calls Cake::AddLayer and ignores its return
+    // value, so a refused layer is absent from `layers` but still a step in the sequence: the
+    // pan before a second layer's batter is one of those, and without it a multi-layer cake
+    // cannot be rebuilt.
+    std::vector<CakeLayer> moves;
     // Engine flags the reconstruction needs for the round flow.
     bool wrong = false;     // Cake+0x10, set by ComfyCakesGame::OnToolUsed (0x10005C6F5)
     bool matched = false;   // Cake+0x11

@@ -91,7 +91,8 @@ private:
                       int& w, int& h);
     void append_text(std::vector<DrawItem>& out, const std::string& face, float size,
                      std::uint32_t colour, const std::string& text, float x, float y, float wrap);
-    void load_tips();
+    // The bubble document: TIPS.XML for Purble Pairs, COMFYCAKESTIPS.XML for Comfy Cakes.
+    void load_tips(const std::string& xml_name = "UI\\CONCENTRATION\\TIPS.XML");
     bool load_tip_style(TipStyle& style, const std::string& name);
     void load_tip_styles();
     const TipStyle& tip_style_for(const TipDef& def);
@@ -163,11 +164,20 @@ private:
     void cakes_slide_left();
     void cakes_slide_right();
     void cakes_judge();
+    // Build the current target through the click path and slide it down the line.  --cakes-solve.
+    void cakes_solve();
     void cakes_compute_score();
     void cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y);
     void cakes_refresh();
     // The draw list with the cakes' layers included, for a capture run.
     void cakes_dump_draws();
+    // ---- Comfy Cakes: the Purble Chef -----------------------------------------------
+    void cakes_load_chef();
+    void cakes_chef_show(int state, const std::string& tip_id);
+    void cakes_chef_enter();
+    const pple::Movie* cakes_chef_movie(const char* which) const;
+    void cakes_chef_advance();
+    void cakes_draw_chef();
     // The station (0..5) a tool button belongs to, from the tool document's <Station>.
     int cakes_tool_station(const std::string& button_name) const;
 
@@ -199,6 +209,8 @@ private:
     bool cakes_mode = false;
     // 0 Beginner, 1 Intermediate, 2 Advanced, for --cakes' optional difficulty.
     int cakes_difficulty_choice = 0;
+    // --cakes-solve plays a whole round out through the click path (the verification hook).
+    bool cakes_solve_hook = false;
     bool tips_enabled = true;
     bool container_offsets = true;
     std::string script_click_spec;
@@ -439,6 +451,14 @@ private:
     int cakes_correct = 0, cakes_missed = 0, cakes_moves = 0, cakes_slides = 0;
     int cakes_score = 0, cakes_bonus = 0, cakes_final = 0;
     bool cakes_over = false, cakes_won = false, cakes_matched_seen = false;
+    // The Purble Chef: 0 hidden, 1 idle, 2 entering, 3 leaving, 4 talking, 5 win, 6 lose.
+    int cakes_chef_state = 0;
+    int cakes_chef_pending = -1;
+    std::string cakes_chef_pending_tip;
+    float cakes_chef_frame = -1.0f;
+    float cakes_chef_fps = 12.0f;
+    bool cakes_chef_loaded = false;
+    std::map<std::string, pple::Movie> cakes_chef_movies;
     bool menu_ready = false;
     std::string menu_hover_name;
     // Hover.  The engine's focus follows the mouse: UserInterface::ProcessMouseMove (0x100098498)
@@ -499,6 +519,8 @@ private:
     // `tipInfo + 108` (`this + 3 * type + 8`, 0x100092C06).
     std::vector<TipDef> tip_defs;
     bool tips_loaded = false;
+    // Which bubble documents have been parsed, so the Comfy Cakes one does not re-read TIPS.XML.
+    std::set<std::string> tips_loaded_documents;
     std::map<std::string, TipStyle> tip_styles;
     bool tip_styles_loaded = false;
     TipView tip;

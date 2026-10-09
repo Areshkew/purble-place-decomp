@@ -135,6 +135,12 @@ void App::cakes_new_game(int difficulty) {
     cakes_over = false;
     cakes_won = false;
     cakes_matched_seen = false;
+    // NewGame (0x10005B564) arms a one-second timer and CCTipManager::ChooseStartGameTip picks
+    // the opening bubble; the Chef himself walks in with it.
+    cakes_load_chef();
+    cakes_chef_show(0, "");
+    if (difficulty == 0) cakes_chef_show(4, "GameStartFirstA");
+    else cakes_chef_show(4, "GameStartFirstB");
     const pple::CakeVars& v = cakes_model.vars(difficulty);
     std::printf("cakes: new %s game - %d layer(s), %d topping(s), %d cake(s) needed, %d missed "
                 "allowed, time attack %s\n",
@@ -142,6 +148,9 @@ void App::cakes_new_game(int difficulty) {
                                 : (difficulty == 1 ? "Intermediate" : "Expert"),
                 v.min_layers, v.max_toppings, v.cakes_needed, v.missed_cakes_allowed,
                 v.time_attack_allowed ? "on" : "off");
+    // ComfyCakesGame::NewGame's NewGame(false) branch queues the "Start Here" tip behind the
+    // opening bubble, which is what first teaches the player to lay down a pan.
+    if (difficulty == 0) cakes_chef_show(4, "GameStartFirstA");
     std::printf("cakes: target cake, %zu layer(s), first cake at belt slot %d\n",
                 cakes_target.layers.size(), cakes_current_slot);
     for (const pple::CakeLayer& layer : cakes_target.layers)
@@ -188,6 +197,9 @@ void App::cakes_use_tool(int station, int index) {
         }
     } else if (cmp == pple::CakeCompare::Exact && !cakes_matched_seen) {
         cakes_matched_seen = true;
+        // ComfyCakesGame::OnToolUsed's second block: the Chef says so, unless the difficulty is
+        // Expert and he has not said it already.
+        if (cakes_difficulty != 2) cakes_chef_show(4, "CakeMatchedOrder");
         std::printf("cakes: the cake matches the order\n");
     }
 }
@@ -197,7 +209,10 @@ void App::cakes_use_tool(int station, int index) {
 void App::cakes_slide_left() {
     if (cakes_over) return;
     bool moved = false;
-    for (std::size_t p = cakes_belt.size(); p-- > 1;) {
+    // Ascending, exactly as ConveyorBelt::SlideLeft's `for (v4 = 1; v4 < v3; ++v4)` loop does:
+    // slot p-1 is filled only after it has already been tested, so each cake moves exactly one
+    // slot per slide instead of cascading to the end of the line.
+    for (std::size_t p = 1; p < cakes_belt.size(); ++p) {
         if (cakes_belt_present[p] && !cakes_belt_present[p - 1]) {
             cakes_belt[p - 1] = cakes_belt[p];
             cakes_belt[p - 1].station = static_cast<int>(p - 1);
@@ -220,7 +235,9 @@ void App::cakes_slide_left() {
 void App::cakes_slide_right() {
     if (cakes_over) return;
     bool moved = false;
-    for (std::size_t p = 1; p < cakes_belt.size(); ++p) {
+    // Descending, the mirror of the left slide: slot p is filled only after it has been tested,
+    // so each cake moves exactly one slot per slide.
+    for (std::size_t p = cakes_belt.size(); p-- > 1;) {
         if (cakes_belt_present[p - 1] && !cakes_belt_present[p]) {
             cakes_belt[p] = cakes_belt[p - 1];
             cakes_belt[p].station = static_cast<int>(p);
@@ -235,6 +252,35 @@ void App::cakes_slide_right() {
     }
     ++cakes_slides;
     std::printf("cakes: the belt slid right (%d slide(s))\n", cakes_slides);
+}
+
+// Play a whole round out: build the current target through the same click path the mouse uses,
+// then slide it down the line to be judged.  --cakes-solve runs this, the way --pairs-solve does
+// for Purble Pairs, and it is the hook that verifies the whole loop headlessly.
+void App::cakes_solve() {
+    if (!cakes_model.layers_ok()) return;
+    const pple::CakeVars& v = cakes_model.vars(cakes_difficulty);
+    std::printf("cakes solve: %s, %d cake(s) needed\n",
+                cakes_difficulty == 0 ? "Beginner"
+                                      : (cakes_difficulty == 1 ? "Intermediate" : "Expert"),
+                v.cakes_needed);
+    int guard = 0;
+    while (!cakes_over && guard++ < 200) {
+        // Replay the generator's own tool uses.  That is the sequence a player has to follow, and
+        // it includes the pans that Cake::AddLayer's replace operation removes again.
+        for (const pple::CakeLayer& step : cakes_target.moves) {
+            cakes_use_tool(step.station, step.index);
+            if (cakes_over) break;
+        }
+        // Slide the finished cake down the line.  The working slot is `cakes_current_slot`, so
+        // that many slides take it to slot 0, where cakes_judge collects it.
+        for (int slide = 0; slide < cakes_current_slot; ++slide) {
+            if (cakes_over) break;
+            cakes_slide_left();
+        }
+    }
+    std::printf("cakes solve: finished, %s, score %d, %d correct, %d missed, %d move(s)\n",
+                cakes_won ? "WON" : "LOST", cakes_score, cakes_correct, cakes_missed, cakes_moves);
 }
 
 // ComfyCakesGame::OnCakeDone (0x10005C120) and CheckEndCondition (0x10005C7E8).  A cake that
@@ -260,23 +306,31 @@ void App::cakes_judge() {
     cakes_belt_present.front() = false;
     cakes_belt.front() = pple::Cake {};
     // ConveyorBelt::AddCake brings a new cake down the chute while the round is still running.
+    // The engine's chute is the off-belt position (66,-115) and its slide animations carry the
+    // cake to the station; the reconstruction has no belt animation, so the replacement arrives
+    // at the station the tools work on, which is the only slot a click can reach.
     if (cakes_correct < v.cakes_needed) {
-        const std::size_t last = cakes_belt.size() - 1;
-        if (!cakes_belt_present[last]) {
-            cakes_belt_present[last] = true;
-            cakes_belt[last] = pple::Cake {};
-            cakes_belt[last].station = static_cast<int>(last);
+        const std::size_t slot = static_cast<std::size_t>(cakes_current_slot);
+        if (slot < cakes_belt_present.size() && !cakes_belt_present[slot]) {
+            cakes_belt_present[slot] = true;
+            cakes_belt[slot] = pple::Cake {};
+            cakes_belt[slot].station = cakes_current_slot;
         }
     }
     if (cakes_correct >= v.cakes_needed) {
         cakes_over = true;
         cakes_won = true;
         cakes_compute_score();
+        // ComfyCakesGame::OnEnterState(2), the win: a random GameWin* bubble and state 2 of the
+        // Chef's own machine.
+        cakes_chef_show(4, "GameWinNextA1");
         std::printf("cakes: WON after %d cake(s), final score %d\n", cakes_correct, cakes_final);
     } else if (cakes_difficulty != 0 && cakes_missed >= v.missed_cakes_allowed) {
         cakes_over = true;
         cakes_won = false;
         cakes_compute_score();
+        // CheckEndCondition's GameLoseTooMany: the Chef's lose movie and state 6.
+        cakes_chef_show(6, "GameLoseTooMany");
         std::printf("cakes: LOST after %d mistake(s), final score %d\n", cakes_missed,
                     cakes_final);
     }
@@ -358,6 +412,7 @@ void App::cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y) {
 void App::cakes_refresh() {
     if (!cakes_ready) return;
     build_cakes();
+    cakes_draw_chef();
     cakes_draw_cake(cakes_target, 65.0f, 104.0f);
     for (std::size_t p = 0; p < cakes_belt.size(); ++p) {
         if (p >= cakes_belt_present.size() || !cakes_belt_present[p]) continue;

@@ -223,6 +223,10 @@ int App::run_loop() {
                 draw_difficulty();
             }
         }
+        // Comfy Cakes: the Chef's own movie clock, on the same 30 Hz step as everything else.
+        if (screen == Screen::ComfyCakes) {
+            cakes_chef_advance();
+        }
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {
             const Uint64 now = SDL_GetTicks();

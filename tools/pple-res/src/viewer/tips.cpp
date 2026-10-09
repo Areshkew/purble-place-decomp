@@ -101,21 +101,25 @@ void App::append_text(std::vector<DrawItem>& out, const std::string& face, float
 // UI\Concentration\TIPS.XML, once per process.  The titles and messages are localisation
 // references ("|42881|CON_Tip_GamePlay|Hello! ..."), so every one goes through the same
 // localiser the scene labels use, which is the .mui when --mui was given.
-void App::load_tips() {
-    if (tips_loaded) return;
-    tips_loaded = true;
-    const auto* slot = bundle.find("UI\\CONCENTRATION\\TIPS.XML");
+// The Purble Pairs bubbles.  Comfy Cakes has its own document (COMFYCAKESTIPS.XML) with the same
+// shape, so the same loader serves both; `tips_loaded` is per document, keyed by the resource.
+void App::load_tips(const std::string& xml_name) {
+    const std::string wanted = lower(xml_name);
+    if (tips_loaded_documents.count(wanted) != 0) return;
+    tips_loaded_documents.insert(wanted);
+    const auto* slot = bundle.find(xml_name);
     if (slot == nullptr) {
-        std::printf("  tips: UI\\Concentration\\TIPS.XML not found\n");
+        std::printf("  tips: %s not found\n", xml_name.c_str());
         return;
     }
     const std::vector<std::uint8_t> data = bundle.read(*slot);
     pple::XmlNode root;
     std::string error;
     if (!pple::xml_parse(data, root, error)) {
-        std::printf("  tips: TIPS.XML: %s\n", error.c_str());
+        std::printf("  tips: %s: %s\n", xml_name.c_str(), error.c_str());
         return;
     }
+    std::size_t added = 0;
     for (const pple::XmlNode& node : root.children) {
         if (lower(node.name) != "tip") continue;
         // A <Tip>'s values are localisation references; the numeric and boolean ones are plain
@@ -135,9 +139,12 @@ void App::load_tips() {
         def.min_height = std::atoi(value("MinHeight").c_str());
         def.max_width = std::atoi(value("MaxWidth").c_str());
         def.max_height = std::atoi(value("MaxHeight").c_str());
-        if (!def.id.empty()) tip_defs.push_back(std::move(def));
+        if (!def.id.empty()) {
+            tip_defs.push_back(std::move(def));
+            ++added;
+        }
     }
-    std::printf("  tips: UI\\Concentration\\TIPS.XML, %zu tip(s)\n", tip_defs.size());
+    std::printf("  tips: %s, %zu tip(s)\n", xml_name.c_str(), added);
 }
 
 bool App::load_tip_slice(TipSlice& slice, const std::string& xml_name, int state) {

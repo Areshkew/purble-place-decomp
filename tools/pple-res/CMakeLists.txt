@@ -95,6 +95,7 @@ if(PPLE_BUILD_VIEW)
       src/viewer/audio.cpp
       src/viewer/browser.cpp
       src/viewer/cakes_screen.cpp
+      src/viewer/cakes_chef.cpp
       src/viewer/cakes_play.cpp
       src/viewer/card_assets.cpp
       src/viewer/hud.cpp

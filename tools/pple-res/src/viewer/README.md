@@ -14,7 +14,8 @@ flags and the core library's public interfaces are unchanged.
 | Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
 | Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append`, `start_cakes`, `cakes_dump_draws` |
-| Comfy Cakes: the round's state over the SDL-free model | [cakes_play.cpp](cakes_play.cpp): `cakes_new_game`, `cakes_use_tool`, `cakes_slide_left`, `cakes_judge`, `cakes_compute_score`, `cakes_draw_cake`, `cakes_refresh` |
+| Comfy Cakes: the round's state over the SDL-free model | [cakes_play.cpp](cakes_play.cpp): `cakes_new_game`, `cakes_use_tool`, `cakes_slide_left`, `cakes_judge`, `cakes_compute_score`, `cakes_draw_cake`, `cakes_refresh`, `cakes_solve` |
+| Comfy Cakes: the Purble Chef's states, movies and tips | [cakes_chef.cpp](cakes_chef.cpp): `cakes_load_chef`, `cakes_chef_show`, `cakes_chef_advance`, `cakes_draw_chef` |
 | Resource resolution, image decoding, sprite XML, file/PPM I/O, localiser | [resources.hpp](resources.hpp), [resources.cpp](resources.cpp): `Bundle`, `resolve_sprite`, `decode_payload`, `capture` |
 | Sheet texture cache, colour/alpha composition, coverage, the double-DPI (x2) resources | [textures.cpp](textures.cpp): `load_sheet_texture`, `load_sheet_surface`, `load_split_list`, `src_scale_for`, `clear_sheet_textures` |
 | Scene XML draw list, labels, draw-list release | [scene.cpp](scene.cpp): `build_scene`, `append_label`, `release_draws` |
@@ -221,6 +222,18 @@ state and logs what happened.  `build_cakes` resolves the room and records each 
 `use_tool`, turns an arrow click into `slide_left` / `slide_right`, and judges the cake that
 leaves slot 0 with `App::cakes_judge`.  A hover rebuilds the whole screen exactly as the menu
 does, so the draw dump (`cakes_dump_draws`) only runs for a `--shot` capture.
+
+Both slides move each cake exactly one slot: left ascends, right descends, which is
+`ConveyorBelt::SlideLeft`'s own `for (v4 = 1; v4 < v3; ++v4)` order.  Ascending on the left slide
+matters because slot `p-1` is filled only after it has already been tested — the other way round a
+cake cascades to the end of the line in one slide.
+
+`cakes_chef.cpp` owns the Purble Chef.  His six movies are parsed once and keyed by state, and
+`cakes_chef_show` pushes a state plus its tip onto a one-deep queue, entering him first when he is
+hidden — which is `PurbleChef::Show`'s own `OnEnterState(2)` branch.  `cakes_chef_advance` runs on
+the same 30 Hz tick as the deal-in and the jar, and falls back to the looping Idle when a one-shot
+movie ends.  His tips come from `COMFYCAKESTIPS.XML`, which `load_tips` merges into `tip_defs`
+beside `TIPS.XML`; it takes the document as an argument and remembers which documents it has read.
 
 
 ## Verification and future changes
