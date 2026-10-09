@@ -134,7 +134,11 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             if (want == cakes_hover_name) return true;
             cakes_hover_name = want;
             std::printf("  hover: %s\n", want.empty() ? "nothing" : want.c_str());
-            build_cakes();
+            // The whole refresh, not just build_cakes: the rebuild drops the draw list, so the
+            // TV's target cake and the belt's cakes have to be appended again or the room shows
+            // the background alone until the next click (cakes_refresh re-adds them, and the
+            // menu's hover path is the same rebuild-and-redraw pattern).
+            cakes_refresh();
             return true;
         }
         if (hit == nullptr) return true;

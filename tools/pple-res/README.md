@@ -52,9 +52,11 @@ end-of-round panel keep working without it: they carry the shipped `.mui` wordin
 fallback.
 
 On the Comfy Cakes screen: **left click** `ReturnToMainMenu` (or **ESC**) leaves, a **tool button**
-or a **belt arrow** reports what was hit, and the pointer's focus follows the mouse exactly as it
-does on the Pairs board. The room's own rules are not in yet; see section 29 of
-`D:\Development\re\notes\purbleplace.md`.
+or a **belt arrow** builds the cake or slides the belt, and the pointer's focus follows the mouse
+exactly as it does on the Pairs board — a focused tool or arrow draws its highlight, and the target
+cake on the TV and the cake on the belt stay on screen while the pointer moves. The rules, the
+Chef and the score are in; see section 32 of `D:\Development\re\notes\purbleplace.md` for what the
+room checks and what it still does not do.
 
 Headless equivalents that need no window (useful for checking a change):
 

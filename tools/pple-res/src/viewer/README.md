@@ -221,7 +221,16 @@ state and logs what happened.  `build_cakes` resolves the room and records each 
 `<Type>` (a LAYERS.xml entry) by name; `cakes_play.cpp` turns a click on one of them into
 `use_tool`, turns an arrow click into `slide_left` / `slide_right`, and judges the cake that
 leaves slot 0 with `App::cakes_judge`.  A hover rebuilds the whole screen exactly as the menu
-does, so the draw dump (`cakes_dump_draws`) only runs for a `--shot` capture.
+does — but through `cakes_refresh`, so the rebuild re-appends the Chef, the TV's target cake and
+the belt cakes and they survive the pointer moving over the room; the draw dump
+(`cakes_dump_draws`) only runs for a `--shot` capture.
+
+The room's `/HighlightSprite`s are **focus art**: the engine creates each one hidden and shows it
+while the button it belongs to has the focus (`InitGameUI` `0x10005D449`/`0x10005D5D5`,
+`Tool::Init` `0x100074EDD`, `CakeScreen::Init` `0x100057A9C` all clear the node's visible flag at
++64 and stop the 0.25 s `HighlightAnim` fade-in), so `build_cakes` draws one only for the control
+under the pointer — a tool's for its own buttons, the slide highlight for its own button, and the
+TV's never at rest.
 
 Both slides move each cake exactly one slot: left ascends, right descends, which is
 `ConveyorBelt::SlideLeft`'s own `for (v4 = 1; v4 < v3; ++v4)` order.  Ascending on the left slide

@@ -266,14 +266,65 @@ void App::build_cakes() {
     std::stable_sort(entries.begin(), entries.end(),
                      [](const CakesEntry& a, const CakesEntry& b) { return a.rank < b.rank; });
 
+    // The six tools, in x order, each with the prefix its buttons share.  A <Tool> element's own
+    // Name is "CakePanTool" and so on; its buttons are the CakePan*/Batter*/... ones, the same
+    // prefixes cakes_tool_station uses.  The pairings let a tool's highlight know which hovered
+    // button belongs to it.
+    static const struct {
+        const char* tool;
+        const char* prefix;
+    } kToolPrefix[] = {
+        {"CakePanTool", "CakePan"},       {"BatterTool", "Batter"},
+        {"FillingTool", "Filling"},       {"IcingTool", "Icing"},
+        {"DecorationTool", "Decoration"}, {"FinalTouchTool", "Final"},
+    };
+    std::vector<std::pair<float, std::string>> tools;
+    for (const pple::SceneItem& container : scene.containers) {
+        if (!container.widget || container.instance != "Tool") continue;
+        for (const auto& entry : kToolPrefix)
+            if (container.name == entry.tool) {
+                tools.push_back({container.x, entry.prefix});
+                break;
+            }
+    }
+    std::sort(tools.begin(), tools.end());
+
+    // The engine creates every /HighlightSprite hidden and shows it while the button it belongs
+    // to has the focus: ComfyCakesGame::InitGameUI clears the slide highlights' visible flag at
+    // node+64 (0x10005D449 / 0x10005D5D5), Tool::Init the tool one (0x100074EDD) and
+    // CakeScreen::Init the TV one (0x100057A9C), each also stopping its HighlightAnim's 0.25 s
+    // alpha fade-in.  So a highlight is drawn only for the hovered control, and the TV's never
+    // at rest -- the game raises it on its own events, which this reconstruction does not model.
+    // The six tool highlights are the rank-200 group; in x order they pair with the tools.
+    std::vector<std::size_t> tool_highlight_entries;
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const pple::SceneItem& item = entries[i].item;
+        const std::string& key = item.name.empty() ? item.instance : item.name;
+        const std::string full = item.widget_path.empty() ? key : item.widget_path + key;
+        if (entries[i].rank == 200 && full == "Tool/HighlightSprite")
+            tool_highlight_entries.push_back(i);
+    }
+    std::sort(tool_highlight_entries.begin(), tool_highlight_entries.end(),
+              [&entries](std::size_t a, std::size_t b) {
+                  return entries[a].item.x < entries[b].item.x;
+              });
+    std::map<std::size_t, std::string> highlight_tool;
+    for (std::size_t i = 0; i < tool_highlight_entries.size() && i < tools.size(); ++i)
+        highlight_tool[tool_highlight_entries[i]] = tools[i].second;
+    std::string hover_tool;
+    for (const auto& tool : tools)
+        if (cakes_hover_name.rfind(tool.second, 0) == 0) hover_tool = tool.second;
+
     // InitGameUI builds the Media Center header nodes only when g_bMediaCenter == 1 (0x10005E0DB),
     // and this build's executable deletes the matching five nodes of its own game when it is 0
     // (0x10008122B), so they are absent by default here too; --mce keeps them.
     std::size_t sprites = 0, unresolved = 0;
     cakes_button_type.clear();
-    for (const CakesEntry& entry : entries) {
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const CakesEntry& entry = entries[i];
         const pple::SceneItem& item = entry.item;
         const std::string& key = item.name.empty() ? item.instance : item.name;
+        const std::string full = item.widget_path.empty() ? key : item.widget_path + key;
         // This document spells the two Media Center header nodes NewGameButton / ExitGameButton
         // (ConcentrationGame's own document spells them NewGame / ExitGame).
         const bool mce_node = key == "NewGameButton" || key == "ExitGameButton" ||
@@ -283,6 +334,16 @@ void App::build_cakes() {
         // Comfy Cakes room is a sprite or a button.
         if (item.kind == pple::NodeKind::Label) continue;
         if (item.kind == pple::NodeKind::Movie) continue;
+        // A highlight is only drawn for the control it belongs to while that control is focused.
+        const std::map<std::size_t, std::string>::const_iterator highlight = highlight_tool.find(i);
+        if (highlight != highlight_tool.end()) {
+            if (hover_tool.empty() || highlight->second != hover_tool) continue;
+        } else if (full == "SlideLeftHighlightSprite" || full == "SlideRightHighlightSprite") {
+            const bool left = full == "SlideLeftHighlightSprite";
+            if (cakes_hover_name != (left ? "SlideLeftButton" : "SlideRightButton")) continue;
+        } else if (full == "CakeScreen/HighlightSprite") {
+            continue;
+        }
         // A tool button names the LAYERS.xml entry it applies in its <Desc><Type>, which the
         // core loader reads for every <ButtonTool>.
         if (item.kind == pple::NodeKind::Button && item.tool_type >= 0)
@@ -338,6 +399,7 @@ void App::start_cakes(int difficulty) {
     screen = Screen::ComfyCakes;
     menu_ready = false;
     cakes_ready = false;
+    cakes_hover_name.clear();
     cakes_new_game(difficulty);
     build_cakes();
     cakes_refresh();
