@@ -10,27 +10,33 @@ namespace pple::viewer {
 // The Comfy Cakes rules, wired to the room cakes_screen.cpp draws.
 //
 //   a tool button  Tool::UseTool (0x1000751CC) takes the button's <Type> (a LAYERS.xml entry),
-//                  finds the cake at the tool's own station on the belt and calls
-//                  Cake::CanAddLayer / Cake::CanRemoveAndAddLayer; a refusal plays
-//                  GameAudio protos 0x10 and 3 and shakes the tool's machine Base, and raises
-//                  the "NeedWaxPaper" tip when there is no cake under it at all
+//                  finds the cake at the tool's own belt position and calls
+//                  Cake::CanAddLayer / Cake::CanRemoveAndAddLayer; a refusal plays two GameAudio
+//                  protos and shakes the machine Base with MachineUnusableShakeAnim.xml, and
+//                  raises the "NeedWaxPaper" tip when there is no cake in reach at all
+//   the machines  each <Tool> runs its own animation for the button's flavour and the layer is
+//                  applied when it completes: Tool::FinishAddTool (0x10007548A) ->
+//                  Cake::AddLayer, and the machine's falling stream and fill sprite carry the
+//                  ingredient onto the cake while it plays
 //   the belt       ConveyorBelt::SetCakePosition (0x100063074): slot p is at (98*p - 66, 29)
-//                  inside /ConveyorBelt at (0,220); slot 0 is the off-belt slot at (66,-115)
+//                  inside /ConveyorBelt at (0,220); slot 0 is the chute the replacement cake
+//                  arrives on, and the last slot (8) is where a cake is judged.  Sliding left
+//                  ascends and right descends, so each cake moves exactly one slot per slide
 //   the arrows     ComfyCakesGame::SlideLeft (0x10005C8B8) / SlideRight (0x10005C984) clear
-//                  RoundData's NumSlides and Timer; ConveyorBelt::SlideLeft (0x1000627F0)
-//                  moves every cake one slot towards index 0
-//   judging        ComfyCakesGame::OnCakeDone (0x10005C120) compares against the TV's target
-//                  and credits RightCakePoints or WrongCakePoints, then CheckEndCondition
-//                  (0x10005C7E8)
+//                  RoundData's NumSlides and Timer and first call Tool::CompleteTool on every
+//                  machine, so a click on an arrow lands the layer a machine was carrying
+//   judging       ConveyorBelt::SlideRight harvests the cake that reaches the last slot
+//                  (0x100062D64) and ComfyCakesGame::OnCakeDone (0x10005C120) compares it
+//                  against the TV's target, credits RightCakePoints or WrongCakePoints, then
+//                  CheckEndCondition (0x10005C7E8)
 //   the score      ComfyCakesGame::ComputeScore (0x10005CC4C)
-//
-// The Chef, the tool and belt animations and the shipped tips are not reproduced here; a click is
-// reported and the cakes move, which is what keeps the rules checkable.
 
 namespace {
 
 // Where a cake sits, in belt-container coordinates.  ConveyorBelt::SetCakePosition (0x100063074):
-// slot 0 is the off-belt position and slot p >= 1 is at (98*p - 66, 29).
+// slot 0 is the chute and slot p >= 1 is at (98*p - 66, 29).  ConveyorBelt::AddCake
+// (0x100062F9E) puts the replacement on the chute at (100,-115); the engine's own chute value is
+// the off-screen position either way, and the room clips it exactly as the Pairs board does.
 float cakes_slot_x(int slot) {
     return slot <= 0 ? 66.0f : 98.0f * static_cast<float>(slot) - 66.0f;
 }
@@ -118,10 +124,14 @@ void App::cakes_load_model() {
 void App::cakes_new_game(int difficulty) {
     cakes_load_model();
     if (!cakes_model.layers_ok()) return;
+    cakes_tools_load();
     cakes_difficulty = difficulty;
     cakes_target = cakes_model.generate_correct(difficulty, [] { return std::rand(); });
     cakes_belt.assign(static_cast<std::size_t>(pple::kCakeBeltSlots), pple::Cake {});
     cakes_belt_present.assign(static_cast<std::size_t>(pple::kCakeBeltSlots), false);
+    // ComfyCakesGame::NewGame's AddInitialCake (0x10005B4CE): RoundData+12 picks the belt
+    // position -- 0 for a Beginner round and non-zero otherwise -- and the cake is put straight
+    // there, at slot 3 or slot 2, without going through the chute.
     cakes_current_slot = difficulty == 0 ? 3 : 2;
     cakes_belt_present[static_cast<std::size_t>(cakes_current_slot)] = true;
     cakes_belt[static_cast<std::size_t>(cakes_current_slot)].station = cakes_current_slot;
@@ -158,56 +168,94 @@ void App::cakes_new_game(int difficulty) {
                     layer.index, layer.shape);
 }
 
-// What a tool button does.  Tool::UseTool's refusal path plays two sounds and shakes the
-// machine, which the reconstruction reports instead.
+// Which belt slot holds the cake being built.  The reconstruction holds one cake at a time: a
+// replacement appears on the chute (slot 0) after a judged cake, and the next slide brings it
+// into the line, so the occupied slot is the one that matters.
+int App::cakes_working_slot() const {
+    for (std::size_t p = cakes_belt.size(); p-- > 0;)
+        if (cakes_belt_present[p]) return static_cast<int>(p);
+    return -1;
+}
+
+// What a tool button does.  Tool::UseTool takes the cake at the tool's own belt position --
+// InitGameUI (0x10005DABC) gives CakePanTool slot 2, BatterTool 3, FillingTool 4, IcingTool 5,
+// DecorationTool 6 and FinalTouchTool 7 -- so a cake has to be slid under its machine first.  The
+// refusal branch plays two sounds, shakes the machine with MachineUnusableShakeAnim.xml and, when
+// no cake is in reach at all, raises the "NeedWaxPaper" bubble.
 void App::cakes_use_tool(int station, int index) {
     if (cakes_over || !cakes_model.layers_ok()) return;
-    const std::size_t slot = static_cast<std::size_t>(cakes_current_slot);
-    if (slot >= cakes_belt_present.size() || !cakes_belt_present[slot]) {
-        std::printf("cakes: station %d, LAYERS %d -> refused, there is no cake under it\n", station,
-                    index);
+    // A machine that is still playing its last animation lands it first, exactly as an arrow
+    // click does (ComfyCakesGame::SlideLeft calls Tool::CompleteTool on every machine), so a
+    // fast click never loses a layer.
+    cakes_tool_complete();
+    ++cakes_moves;  // RoundData+MovesMade, which Tool::UseTool increments before it decides
+    const int slot = cakes_tool_slot_for(station);
+    const bool reachable = slot >= 0 && static_cast<std::size_t>(slot) < cakes_belt_present.size() &&
+                           cakes_belt_present[static_cast<std::size_t>(slot)];
+    const char* answer = nullptr;
+    if (reachable) {
+        pple::CakeLayer added;
+        const pple::CakeUse use =
+            cakes_model.use_tool(cakes_belt[static_cast<std::size_t>(slot)], station, index, added,
+                                 [] { return std::rand(); });
+        switch (use) {
+            case pple::CakeUse::Added: answer = "added"; break;
+            case pple::CakeUse::Replaced: answer = "replaced the top layer"; break;
+            case pple::CakeUse::Stripped: answer = "stripped the top layers"; break;
+            case pple::CakeUse::Refused: break;
+        }
+    }
+    if (answer == nullptr) {
+        // Tool::UseTool's else branch (0x10007539B).
+        play_pair_sfx("Con_CakeButtons");
+        cakes_tools_shake(station);
+        std::printf("cakes: station %d (%s), LAYERS %d -> refused, %s, %d move(s)\n", station,
+                    cakes_station_name(station), index,
+                    reachable ? "the cake cannot take it" : "there is no cake under it", cakes_moves);
         return;
     }
-    pple::CakeLayer added;
-    const pple::CakeUse use = cakes_model.use_tool(cakes_belt[slot], station, index, added,
-                                                   [] { return std::rand(); });
-    const char* answer = "?";
-    switch (use) {
-        case pple::CakeUse::Refused: answer = "refused"; break;
-        case pple::CakeUse::Added: answer = "added"; break;
-        case pple::CakeUse::Replaced: answer = "replaced the top layer"; break;
-        case pple::CakeUse::Stripped: answer = "stripped the top layers"; break;
-    }
-    ++cakes_moves;  // RoundData+MovesMade, which Tool::UseTool increments before it decides
     std::printf("cakes: station %d (%s), LAYERS %d -> %s, %d layer(s), %d move(s)\n", station,
                 cakes_station_name(station), index, answer,
-                static_cast<int>(cakes_belt[slot].layers.size()), cakes_moves);
-    if (use == pple::CakeUse::Refused) {
-        play_pair_sfx("Con_CakeButtons");
-        return;
-    }
+                static_cast<int>(cakes_belt[static_cast<std::size_t>(slot)].layers.size()),
+                cakes_moves);
     play_pair_sfx("Con_CakeBatterButton");
-    // ComfyCakesGame::OnToolUsed (0x10005C624) compares after every accepted use and marks the
-    // cake wrong the moment it can no longer match the target.
-    const pple::CakeCompare cmp = cakes_model.compare(cakes_belt[slot], cakes_target);
+    // The machine plays its own animation and the layer is shown again when it ends: the engine
+    // hides the cake's top layer while the machine's fill sprite grows the ingredient in
+    // (PlayAddToolAnimation 0x100075F46) and FinishAddTool (0x10007548A) applies the layer.
+    cakes_tools_start(station, index,
+                      cakes_belt[static_cast<std::size_t>(slot)].shape, slot);
+}
+
+// ComfyCakesGame::OnToolUsed (0x10005C624), run when the machine's animation completes: the
+// cake is compared with the TV's order and marked wrong the moment it can no longer match.
+void App::cakes_tool_complete() {
+    if (!cakes_tool_busy) return;
+    const int slot = cakes_tool_slot_running;
+    const int station = cakes_tool_station_running;
+    cakes_tools_stop();
+    if (slot < 0 || static_cast<std::size_t>(slot) >= cakes_belt.size()) return;
+    const pple::CakeCompare cmp = cakes_model.compare(cakes_belt[static_cast<std::size_t>(slot)],
+                                                     cakes_target);
     if (cmp != pple::CakeCompare::Exact && cmp != pple::CakeCompare::TargetLonger) {
-        if (!cakes_belt[slot].wrong) {
-            cakes_belt[slot].wrong = true;
+        if (!cakes_belt[static_cast<std::size_t>(slot)].wrong) {
+            cakes_belt[static_cast<std::size_t>(slot)].wrong = true;
             std::printf("cakes: the cake can no longer match the order\n");
         }
     } else if (cmp == pple::CakeCompare::Exact && !cakes_matched_seen) {
         cakes_matched_seen = true;
-        // ComfyCakesGame::OnToolUsed's second block: the Chef says so, unless the difficulty is
-        // Expert and he has not said it already.
         if (cakes_difficulty != 2) cakes_chef_show(4, "CakeMatchedOrder");
         std::printf("cakes: the cake matches the order\n");
     }
+    std::printf("cakes: station %d (%s) finished\n", station, cakes_station_name(station));
+    cakes_refresh();
 }
 
-// ConveyorBelt::SlideLeft (0x1000627F0): every cake moves one slot towards index 0.
-// ComfyCakesGame::SlideLeft resets NumSlides and Timer and only runs while the belt is idle.
+// ComfyCakesGame::SlideLeft (0x10005C8B8): every cake moves one slot towards index 0, and the
+// round's slide counter and timer are cleared.  It first calls Tool::CompleteTool on every
+// machine, so a click on an arrow lands whatever layer a machine was still carrying.
 void App::cakes_slide_left() {
     if (cakes_over) return;
+    cakes_tool_complete();
     bool moved = false;
     // Ascending, exactly as ConveyorBelt::SlideLeft's `for (v4 = 1; v4 < v3; ++v4)` loop does:
     // slot p-1 is filled only after it has already been tested, so each cake moves exactly one
@@ -227,13 +275,15 @@ void App::cakes_slide_left() {
     }
     ++cakes_slides;
     std::printf("cakes: the belt slid left (%d slide(s))\n", cakes_slides);
-    cakes_judge();
 }
 
 // ComfyCakesGame::SlideRight (0x10005C984): every cake moves one slot away from index 0, which
-// is the way the player sends a finished cake towards the box at the far end.
+// is the way the player sends a finished cake down the line towards the shipping end.  A cake
+// that reaches the last slot is judged: ConveyorBelt::SlideRight harvests it (0x100062D64) and
+// OnCakeDone compares it against the TV's order.
 void App::cakes_slide_right() {
     if (cakes_over) return;
+    cakes_tool_complete();
     bool moved = false;
     // Descending, the mirror of the left slide: slot p is filled only after it has been tested,
     // so each cake moves exactly one slot per slide.
@@ -252,6 +302,20 @@ void App::cakes_slide_right() {
     }
     ++cakes_slides;
     std::printf("cakes: the belt slid right (%d slide(s))\n", cakes_slides);
+    cakes_judge();
+}
+
+// Slide the belt until the cake being built sits under `want`.  A cake that reaches the last
+// slot on the way is judged, which takes it off the line, so the walk stops there.
+void App::cakes_slide_to(int want) {
+    const int judged = cakes_correct + cakes_missed;
+    for (int guard = 0; guard < 16 && !cakes_over; ++guard) {
+        const int at = cakes_working_slot();
+        if (at < 0 || at == want) return;
+        if (cakes_correct + cakes_missed != judged) return;
+        if (at < want) cakes_slide_right();
+        else cakes_slide_left();
+    }
 }
 
 // Play a whole round out: build the current target through the same click path the mouse uses,
@@ -260,23 +324,30 @@ void App::cakes_slide_right() {
 void App::cakes_solve() {
     if (!cakes_model.layers_ok()) return;
     const pple::CakeVars& v = cakes_model.vars(cakes_difficulty);
+    const int last = static_cast<int>(cakes_belt.size()) - 1;
     std::printf("cakes solve: %s, %d cake(s) needed\n",
                 cakes_difficulty == 0 ? "Beginner"
                                       : (cakes_difficulty == 1 ? "Intermediate" : "Expert"),
                 v.cakes_needed);
     int guard = 0;
-    while (!cakes_over && guard++ < 200) {
+    while (!cakes_over && guard++ < 400) {
         // Replay the generator's own tool uses.  That is the sequence a player has to follow, and
-        // it includes the pans that Cake::AddLayer's replace operation removes again.
+        // it includes the pans that Cake::AddLayer's replace operation removes again.  Each use
+        // needs the cake under that step's own machine, so the belt is slid to it first.
         for (const pple::CakeLayer& step : cakes_target.moves) {
+            cakes_slide_to(cakes_tool_slot_for(step.station));
+            if (cakes_over) break;
             cakes_use_tool(step.station, step.index);
             if (cakes_over) break;
         }
-        // Slide the finished cake down the line.  The working slot is `cakes_current_slot`, so
-        // that many slides take it to slot 0, where cakes_judge collects it.
-        for (int slide = 0; slide < cakes_current_slot; ++slide) {
-            if (cakes_over) break;
-            cakes_slide_left();
+        // Ship the finished cake: slide it to the last slot, where ConveyorBelt::SlideRight
+        // harvests it and OnCakeDone compares it against the order.
+        const int judged = cakes_correct + cakes_missed;
+        for (int slide = 0; slide < 16 && !cakes_over; ++slide) {
+            if (cakes_correct + cakes_missed != judged) break;
+            const int at = cakes_working_slot();
+            if (at < 0 || at >= last) break;
+            cakes_slide_right();
         }
     }
     std::printf("cakes solve: finished, %s, score %d, %d correct, %d missed, %d move(s)\n",
@@ -284,13 +355,13 @@ void App::cakes_solve() {
 }
 
 // ComfyCakesGame::OnCakeDone (0x10005C120) and CheckEndCondition (0x10005C7E8).  A cake that
-// reaches the end of the line is compared against the target: an exact match credits
+// reaches the last slot of the belt is compared against the target: an exact match credits
 // RightCakePoints, anything else credits WrongCakePoints, which COMFYCAKESVARS.XML carries as a
 // negative number.
 void App::cakes_judge() {
-    if (cakes_belt_present.empty() || !cakes_belt_present.front()) return;
+    if (cakes_belt_present.empty() || !cakes_belt_present.back()) return;
     const pple::CakeVars& v = cakes_model.vars(cakes_difficulty);
-    const pple::CakeCompare cmp = cakes_model.compare(cakes_belt.front(), cakes_target);
+    const pple::CakeCompare cmp = cakes_model.compare(cakes_belt.back(), cakes_target);
     const bool right = cmp == pple::CakeCompare::Exact;
     if (right) {
         ++cakes_correct;
@@ -303,19 +374,14 @@ void App::cakes_judge() {
         std::printf("cakes: cake judged wrong (%d), %+d point(s)\n", cakes_missed,
                     v.wrong_cake_points);
     }
-    cakes_belt_present.front() = false;
-    cakes_belt.front() = pple::Cake {};
-    // ConveyorBelt::AddCake brings a new cake down the chute while the round is still running.
-    // The engine's chute is the off-belt position (66,-115) and its slide animations carry the
-    // cake to the station; the reconstruction has no belt animation, so the replacement arrives
-    // at the station the tools work on, which is the only slot a click can reach.
+    cakes_belt_present.back() = false;
+    cakes_belt.back() = pple::Cake {};
+    // ConveyorBelt::AddCake (0x100062E44) brings a replacement down the chute onto slot 0 while
+    // the round is still running; the next right slide carries it into the line at slot 1.
     if (cakes_correct < v.cakes_needed) {
-        const std::size_t slot = static_cast<std::size_t>(cakes_current_slot);
-        if (slot < cakes_belt_present.size() && !cakes_belt_present[slot]) {
-            cakes_belt_present[slot] = true;
-            cakes_belt[slot] = pple::Cake {};
-            cakes_belt[slot].station = cakes_current_slot;
-        }
+        cakes_belt_present.front() = true;
+        cakes_belt.front() = pple::Cake {};
+        cakes_belt.front().station = 0;
     }
     if (cakes_correct >= v.cakes_needed) {
         cakes_over = true;
@@ -358,12 +424,35 @@ void App::cakes_compute_score() {
                 cakes_moves, minimum, band * 10, cakes_bonus, cakes_final);
 }
 
+// Where a cake's top layer sits, inside the belt container.  Cake::PutLayerOnTop (0x10005733C)
+// puts a layer's node at the cake's running <Delta> sum and then adds the layer's own <Delta>,
+// which is the same walk the drawing below makes.
+float App::cakes_cake_top_y(const pple::Cake& cake, int hide_top) const {
+    float y = 0.0f;
+    const std::size_t visible = cake.layers.size() >
+                                        static_cast<std::size_t>(std::max(0, hide_top))
+                                    ? cake.layers.size() - static_cast<std::size_t>(std::max(0, hide_top))
+                                    : 0;
+    for (std::size_t i = 0; i < visible; ++i) {
+        const pple::CakeLayerDef* def = cakes_model.layer(cake.layers[i].index);
+        y += static_cast<float>(def == nullptr ? 0 : def->delta);
+    }
+    return y;
+}
+
 // Draw a cake's layers bottom-up, each shifted by the running sum of the earlier layers' <Delta>.
-// CakeScreen::SetCake anchors the TV's cake at CakeX/CakeY (65,104).
-void App::cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y) {
+// CakeScreen::SetCake anchors the TV's cake at CakeX/CakeY (65,104), and a belt cake at its own
+// ConveyorBelt::SetCakePosition slot.  `hide_top` leaves the newest layer out, which is what a
+// machine's animation does while its fill sprite grows the ingredient in.
+void App::cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y, int hide_top) {
     if (!cakes_model.layers_ok()) return;
     float y = base_y;
-    for (const pple::CakeLayer& layer : cake.layers) {
+    const std::size_t visible = cake.layers.size() >
+                                        static_cast<std::size_t>(std::max(0, hide_top))
+                                    ? cake.layers.size() - static_cast<std::size_t>(std::max(0, hide_top))
+                                    : 0;
+    for (std::size_t i = 0; i < visible; ++i) {
+        const pple::CakeLayer& layer = cake.layers[i];
         const pple::CakeLayerDef* def = cakes_model.layer(layer.index);
         if (def == nullptr) continue;
         const std::string& sprite = def->shapes.empty()
@@ -407,18 +496,25 @@ void App::cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y) {
     }
 }
 
-// One frame of the room with the cakes on it: the static layer first, then the TV's target and
-// every cake on the belt.
-void App::cakes_refresh() {
+// One frame of the room with the cakes on it: the static room first, then the Chef, the TV's
+// target, every cake on the belt, and finally the machines of the tool animation in flight.
+// build_cakes is the expensive half (the scene load and its sheet textures), so it is only run by
+// cakes_refresh; this is the per-frame half and it rewrites everything after the static room, so
+// a machine's animation and the Chef's movie play without rebuilding the room.
+void App::cakes_redraw() {
     if (!cakes_ready) return;
-    build_cakes();
+    scene_draws.resize(cakes_room_at);
+    cakes_draw_names.resize(cakes_room_at);
     cakes_draw_chef();
     cakes_draw_cake(cakes_target, 65.0f, 104.0f);
     for (std::size_t p = 0; p < cakes_belt.size(); ++p) {
         if (p >= cakes_belt_present.size() || !cakes_belt_present[p]) continue;
+        // The cake a machine is working on keeps its top layer hidden while that machine plays.
+        const int hide = cakes_tool_busy && cakes_tool_slot_running == static_cast<int>(p) ? 1 : 0;
         cakes_draw_cake(cakes_belt[p], cakes_slot_x(static_cast<int>(p)),
-                        220.0f + cakes_slot_y(static_cast<int>(p)));
+                        220.0f + cakes_slot_y(static_cast<int>(p)), hide);
     }
+    cakes_tools_draw();
     std::size_t belt_cakes = 0;
     for (bool present : cakes_belt_present)
         if (present) ++belt_cakes;
@@ -431,6 +527,13 @@ void App::cakes_refresh() {
                  cakes_over ? (cakes_won ? std::string("WON") : std::string("LOST"))
                             : std::string("click a tool button, or a belt arrow")};
     rebuild_hud();
+}
+
+void App::cakes_refresh() {
+    if (!cakes_ready) return;
+    build_cakes();
+    cakes_room_at = scene_draws.size();
+    cakes_redraw();
     cakes_dump_draws();
 }
 

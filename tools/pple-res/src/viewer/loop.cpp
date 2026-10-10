@@ -223,9 +223,17 @@ int App::run_loop() {
                 draw_difficulty();
             }
         }
-        // Comfy Cakes: the Chef's own movie clock, on the same 30 Hz step as everything else.
+        // Comfy Cakes: the Chef's movie clock and the tool machines' animations, on the same
+        // 30 Hz step the engine runs them on (PurbleChef::Update 0x10006FF44 and the animation
+        // timers Tool::UseTool starts).  Either one moving rewrites the two animated layers of
+        // the draw list; the room itself is not rebuilt.
         if (screen == Screen::ComfyCakes) {
-            cakes_chef_advance();
+            cakes_tick += static_cast<float>(SDL_GetTicks() - cakes_tick_at) / 1000.0f;
+            cakes_tick_at = SDL_GetTicks();
+            const bool chef_moved = cakes_chef_advance();
+            cakes_tools_advance(std::clamp(cakes_tick, 0.0f, 0.25f));
+            cakes_tick = 0.0f;
+            if (chef_moved || cakes_tool_busy || cakes_tool_shake >= 0.0f) cakes_redraw();
         }
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {
@@ -539,6 +547,9 @@ int App::run_loop() {
                 SDL_Delay(8);
                 continue;
             }
+            // The dump describes exactly what is about to be captured, so a frame with a
+            // machine mid-animation is read back as it was drawn.
+            if (screen == Screen::ComfyCakes) cakes_dump_draws();
             const bool ok = capture(renderer, shot_path);
             SDL_RenderPresent(renderer);
             running = false;

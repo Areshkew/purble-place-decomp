@@ -1,5 +1,6 @@
 #pragma once
 #include "types.hpp"
+#include "cakes_tools.hpp"
 #include "pple/cakes.hpp"
 
 namespace pple::viewer {
@@ -155,6 +156,26 @@ private:
     // Resolves one resolved scene item into a draw and, for a button, a hot-spot.  Shared with
     // build_cakes so the draw maths lives in one place.
     bool cakes_append(const pple::SceneItem& item, int state = 0);
+    // ---- Comfy Cakes: the tool machines -------------------------------------------
+    // The six <Tool> machines of COMFYCAKESGAME.XML, their parts and the animations a button
+    // click plays on them.  cakes_tools.cpp owns the parsing, the tick and the drawing.
+    void cakes_tools_load();
+    void cakes_tools_start(int station, int type, int shape, int slot);
+    void cakes_tools_shake(int station);
+    void cakes_tools_advance(float dt);
+    void cakes_tools_stop();
+    void cakes_tools_draw();
+    // The belt slot a tool's station works on, from the tool's own position on the belt.
+    static int cakes_tool_slot_for(int station);
+    // Which of the six tool documents a station belongs to.
+    const CakeTool* cakes_tool_for_station(int station) const;
+    // The flavour index one machine part plays for a button's <Type>, and the direction the
+    // engine runs it in (ToolIcing::PlayRotateAnimation reverses half its pairs).
+    static std::size_t cakes_tool_flavour(const CakeToolPart& part, int type, int shape,
+                                          bool& reverse);
+    // Applies the layer a running machine animation was carrying, and runs
+    // ComfyCakesGame::OnToolUsed's compare.
+    void cakes_tool_complete();
     // ---- Comfy Cakes: the rules --------------------------------------------------------
     // The SDL-free model lives in pple::CakeModel (src/cakes.cpp); these methods only move its
     // state and log what happened.
@@ -167,8 +188,18 @@ private:
     // Build the current target through the click path and slide it down the line.  --cakes-solve.
     void cakes_solve();
     void cakes_compute_score();
-    void cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y);
+    void cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y, int hide_top = 0);
+    // Where a cake's top layer sits inside its container, which is what the batter machine's
+    // fill sprite is placed against.
+    float cakes_cake_top_y(const pple::Cake& cake, int hide_top) const;
+    // The belt slot that holds the cake being built, or -1 when the belt is empty.
+    int cakes_working_slot() const;
+    // Slide the belt until the cake being built sits under a given slot.
+    void cakes_slide_to(int want);
     void cakes_refresh();
+    // The per-frame half of cakes_refresh: the two animated layers are rewritten in place, so a
+    // machine's animation and the Chef's movie play without rebuilding the room.
+    void cakes_redraw();
     // The draw list with the cakes' layers included, for a capture run.
     void cakes_dump_draws();
     // ---- Comfy Cakes: the Purble Chef -----------------------------------------------
@@ -176,10 +207,35 @@ private:
     void cakes_chef_show(int state, const std::string& tip_id);
     void cakes_chef_enter();
     const pple::Movie* cakes_chef_movie(const char* which) const;
-    void cakes_chef_advance();
+    // Runs the Chef's state machine one step and reports whether his visible frame changed.
+    bool cakes_chef_advance();
     void cakes_draw_chef();
     // The station (0..5) a tool button belongs to, from the tool document's <Station>.
     int cakes_tool_station(const std::string& button_name) const;
+    // The six tool machines, by their COMFYCAKESGAME.XML <Tool Name=...> value ("BatterTool").
+    // Each machine's container position, recorded by build_cakes from the same document.
+    std::map<std::string, CakeTool> cakes_tools;
+    std::map<std::string, std::pair<float, float>> cakes_tool_anchor;
+    bool cakes_tools_tried = false;
+    // The machine animation in flight.  Tool::UseTool (0x1000751CC) starts it and
+    // Tool::FinishAddTool (0x10007548A) applies the layer when it completes; while it runs the
+    // cake's top layer is hidden (PlayAddToolAnimation 0x100075F46) and the machine's own
+    // falling stream and fill sprite carry the ingredient in.
+    bool cakes_tool_busy = false;
+    int cakes_tool_station_running = -1;
+    int cakes_tool_slot_running = -1;
+    int cakes_tool_type_running = -1;
+    int cakes_tool_shape_running = 0;
+    float cakes_tool_time = 0.0f;
+    float cakes_tool_total = 0.0f;
+    // A refusal's shake, on the machine Base; -1 when nothing is shaking.
+    float cakes_tool_shake = -1.0f;
+    int cakes_tool_shake_station = -1;
+    // One machine part of the running animation, with the flavour index it plays.
+    std::vector<CakeToolPlaying> cakes_tool_playing;
+    // Where the static room ends in scene_draws, so the per-frame half of a refresh can rewrite
+    // everything after it (the Chef, the cakes and the machines) without rebuilding the room.
+    std::size_t cakes_room_at = 0;
 
     std::vector<std::string> modules;
     std::string want_resource;
@@ -447,6 +503,9 @@ private:
     std::vector<bool> cakes_belt_present;
     // The slot the tools work on: position 3 on Beginner, 2 otherwise.
     int cakes_current_slot = 3;
+    // Comfy Cakes' own clock: how long since the last frame, for the tool machines' animations.
+    Uint32 cakes_tick_at = 0;
+    float cakes_tick = 0.0f;
     pple::Cake cakes_target;
     int cakes_correct = 0, cakes_missed = 0, cakes_moves = 0, cakes_slides = 0;
     int cakes_score = 0, cakes_bonus = 0, cakes_final = 0;

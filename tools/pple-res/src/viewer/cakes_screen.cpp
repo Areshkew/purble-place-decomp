@@ -288,6 +288,17 @@ void App::build_cakes() {
             }
     }
     std::sort(tools.begin(), tools.end());
+    // The machines' own containers.  A <Tool> element's X/Y is where the engine puts its
+    // button-area Base, and every machine part of that tool's document is positioned inside it,
+    // which is what cakes_tools.cpp needs to draw a machine's animation.
+    cakes_tool_anchor.clear();
+    for (const std::pair<float, std::string>& tool : tools)
+        cakes_tool_anchor[tool.second + "Tool"] = {tool.first, 298.0f};
+    for (const pple::SceneItem& container : scene.containers) {
+        if (!container.widget || container.instance != "Tool") continue;
+        const auto it = cakes_tool_anchor.find(container.name);
+        if (it != cakes_tool_anchor.end()) it->second = {container.x, container.y};
+    }
 
     // The engine creates every /HighlightSprite hidden and shows it while the button it belongs
     // to has the focus: ComfyCakesGame::InitGameUI clears the slide highlights' visible flag at

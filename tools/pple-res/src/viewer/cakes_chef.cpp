@@ -2,7 +2,9 @@
 #include "audio.hpp"
 #include "pple/cakes.hpp"
 
+#include <algorithm>
 #include <cstdio>
+#include <cstring>
 
 namespace pple::viewer {
 
@@ -146,8 +148,12 @@ const pple::Movie* App::cakes_chef_movie(const char* which) const {
 
 // PurbleChef::Update (0x10006FF44) on the 30 Hz tick: advance the current movie, and when a
 // one-shot movie finishes, either pop the queued show or fall back to the looping Idle.
-void App::cakes_chef_advance() {
-    if (cakes_chef_state == 0) return;
+// Returns true when the movie's visible frame changed, which is what tells the frame loop to
+// redraw him.
+bool App::cakes_chef_advance() {
+    if (cakes_chef_state == 0) return false;
+    const int frame_before = static_cast<int>(cakes_chef_frame);
+    const int state_before = cakes_chef_state;
     const char* which = "Idle";
     bool loops = true;
     switch (cakes_chef_state) {
@@ -159,15 +165,17 @@ void App::cakes_chef_advance() {
         default: break;
     }
     const pple::Movie* movie = cakes_chef_movie(which);
-    if (movie == nullptr) return;
+    if (movie == nullptr) return false;
     const int frames = std::max(1, movie->frame_count);
     const float fps = pple::movie_frame_rate(*movie, movie->parts.front());
     cakes_chef_frame += fps / 30.0f;
-    if (cakes_chef_frame < static_cast<float>(frames)) return;
+    if (cakes_chef_frame < static_cast<float>(frames))
+        return static_cast<int>(cakes_chef_frame) != frame_before ||
+               cakes_chef_state != state_before;
     // The movie ran out.
     if (loops) {
         cakes_chef_frame = 0.0f;
-        return;
+        return true;
     }
     if (cakes_chef_state == 2 && cakes_chef_pending > 0) {
         // The entrance finished: play the queued state and its tip.
@@ -180,12 +188,13 @@ void App::cakes_chef_advance() {
         play_pair_sfx(next == 6 ? "Con_ChefExit" : "Con_TVon_Ding");
         std::printf("cakes chef: state %d (%s)\n", next, tip_id.c_str());
         if (!tip_id.empty()) show_tip(tip_id, kChefTipX, kChefTipY);
-        return;
+        return true;
     }
     // Everything else falls back to the idle loop.
     cakes_chef_state = 1;
     cakes_chef_frame = 0.0f;
     if (tip.visible) hide_tip();
+    return true;
 }
 
 // Draw the Chef's current movie over the room.
@@ -204,7 +213,9 @@ void App::cakes_draw_chef() {
     if (movie == nullptr) return;
     const int frames = std::max(1, movie->frame_count);
     int frame = cakes_chef_frame < 0.0f ? 0 : static_cast<int>(cakes_chef_frame);
-    if (which == "Idle") frame %= frames;
+    // The idle movie loops, so its frame wraps; every one-shot movie holds its last frame.
+    // (std::strcmp rather than a pointer comparison: the literals are not required to be pooled.)
+    if (std::strcmp(which, "Idle") == 0) frame %= frames;
     else frame = std::min(frame, frames - 1);
     const std::size_t before = scene_draws.size();
     float extent_w = 0.0f, extent_h = 0.0f;

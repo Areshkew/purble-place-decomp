@@ -14,7 +14,8 @@ flags and the core library's public interfaces are unchanged.
 | Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
 | Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append`, `start_cakes`, `cakes_dump_draws` |
-| Comfy Cakes: the round's state over the SDL-free model | [cakes_play.cpp](cakes_play.cpp): `cakes_new_game`, `cakes_use_tool`, `cakes_slide_left`, `cakes_judge`, `cakes_compute_score`, `cakes_draw_cake`, `cakes_refresh`, `cakes_solve` |
+| Comfy Cakes: the round's state over the SDL-free model | [cakes_play.cpp](cakes_play.cpp): `cakes_new_game`, `cakes_use_tool`, `cakes_slide_to`, `cakes_slide_left`, `cakes_slide_right`, `cakes_judge`, `cakes_compute_score`, `cakes_draw_cake`, `cakes_refresh`, `cakes_redraw`, `cakes_solve` |
+| Comfy Cakes: the six tool machines and the animations a button plays | [cakes_tools.cpp](cakes_tools.cpp): `cakes_tools_load`, `cakes_tools_start`, `cakes_tools_shake`, `cakes_tools_advance`, `cakes_tools_draw` |
 | Comfy Cakes: the Purble Chef's states, movies and tips | [cakes_chef.cpp](cakes_chef.cpp): `cakes_load_chef`, `cakes_chef_show`, `cakes_chef_advance`, `cakes_draw_chef` |
 | Resource resolution, image decoding, sprite XML, file/PPM I/O, localiser | [resources.hpp](resources.hpp), [resources.cpp](resources.cpp): `Bundle`, `resolve_sprite`, `decode_payload`, `capture` |
 | Sheet texture cache, colour/alpha composition, coverage, the double-DPI (x2) resources | [textures.cpp](textures.cpp): `load_sheet_texture`, `load_sheet_surface`, `load_split_list`, `src_scale_for`, `clear_sheet_textures` |
@@ -213,17 +214,48 @@ The viewport is the room's 800x496 design bounds, never the sprites' extents: th
 150x270 frame reaches x = 825 and the Media Center art starts at negative y, so both are clipped
 exactly as the Pairs board's offscreen parts are.
 
-The game rules (cake generation, the belt, judging, scoring) are **not** in this milestone; the
-screen is reachable, drawn and hoverable, and a tool or belt click is reported.
+The game rules (cake generation, the belt, judging, scoring) live in `pple::CakeModel`
+(`src/cakes.cpp`); `cakes_play.cpp` only moves that state, logs what happened and draws it.
+`build_cakes` resolves the room and records each tool button's `<Type>` (a LAYERS.xml entry) by
+name; a click on one of them becomes `cakes_use_tool`, an arrow click `cakes_slide_left` /
+`cakes_slide_right`.
 
-The game rules live in `pple::CakeModel` (`src/cakes.cpp`), not here: the viewer only moves its
-state and logs what happened.  `build_cakes` resolves the room and records each tool button's
-`<Type>` (a LAYERS.xml entry) by name; `cakes_play.cpp` turns a click on one of them into
-`use_tool`, turns an arrow click into `slide_left` / `slide_right`, and judges the cake that
-leaves slot 0 with `App::cakes_judge`.  A hover rebuilds the whole screen exactly as the menu
-does — but through `cakes_refresh`, so the rebuild re-appends the Chef, the TV's target cake and
+**Each tool works on the belt slot its own machine stands over.**  `InitGameUI` hands the six
+`<Tool>` elements their positions in document order (`0x10005DABC`: `Tool+60 = tools loaded so far
++ 2`), so CakePanTool slot 2, BatterTool 3, FillingTool 4, IcingTool 5, DecorationTool 6 and
+FinalTouchTool 7 — the left-to-right order of the machines in the room.  `Tool::UseTool`
+(`0x10007525C`) takes `ConveyorBelt::GetCake` at that slot, so `cakes_use_tool` does too, and the
+cake is slid between machines: slot 1 is where a replacement enters, slot 8 is where a cake is
+judged (ConveyorBelt::SlideRight harvests it at `0x100062D64`), and slot 0 is the chute a
+replacement arrives on.  A button whose machine has no cake under it takes `Tool::UseTool`'s
+refusal branch instead: two sounds, and `MachineUnusableShakeAnim.xml` shaken on the machine Base.
+
+**A click that is accepted plays that machine's own animation**, and `cakes_tools.cpp` owns it.
+The parts and their per-flavour animations come out of the tool documents
+(`UI\COMFYCAKES\TOOLS\*.XML`); each part is a sprite with a position inside the tool's container
+and a list of `<*Anim>` documents, one per flavour of that tool.  A `ResourceAnimation` is a list
+of `<Animation>` blocks — `<Affects>` names the property, `<Type Name="LinearAbsolute">` carries
+`<Start>`/`<End>` and `LinearRelative` a `<Count>`, with `<Time>` in seconds and
+`<WaitForComplete/>` between them, which every shipped set uses, so the blocks concatenate into
+one timeline per part.  `anim_value` evaluates a timeline: a block contributes nothing until it
+starts, its interpolated value while it runs and its end value afterwards, and a relative block
+adds to what is already there (the shake's `+6 / -12 / +6` sums back to zero).  The frame index a
+`CurrentFrame` block names is read past the sprite's declared `FrameCount` for several machines,
+so the geometry uses the animation's reach as its frame count.
+
+While a machine plays, the cake's top layer is left out of the draw — the engine hides it
+(`PlayAddToolAnimation` `0x100075F46`) and `Tool::FinishAddTool` (`0x10007548A`) applies the layer
+when the animation ends — and the batter machine's shape fill sprite is drawn inside the cake's
+own coordinates, which is `NodeBase::ImportNode` re-parenting it onto the cake's node
+(`0x100076050`).  An arrow click lands whatever a machine was still carrying first, which is
+`ComfyCakesGame::SlideLeft`'s `Tool::CompleteTool` loop.
+
+Two layers of the room are animated per frame — the Chef's movie and the machines in flight — so
+`cakes_refresh` (which calls `build_cakes`, the expensive half) is only run on a click, a hover or
+a rebuild, and `cakes_redraw` rewrites everything after the static room in place.  A hover still
+rebuilds through `cakes_refresh`, so the rebuild re-appends the Chef, the TV's target cake and
 the belt cakes and they survive the pointer moving over the room; the draw dump
-(`cakes_dump_draws`) only runs for a `--shot` capture.
+(`cakes_dump_draws`) runs for every `cakes_refresh` and again for a `--shot` capture.
 
 The room's `/HighlightSprite`s are **focus art**: the engine creates each one hidden and shows it
 while the button it belongs to has the focus (`InitGameUI` `0x10005D449`/`0x10005D5D5`,
@@ -240,7 +272,8 @@ cake cascades to the end of the line in one slide.
 `cakes_chef.cpp` owns the Purble Chef.  His six movies are parsed once and keyed by state, and
 `cakes_chef_show` pushes a state plus its tip onto a one-deep queue, entering him first when he is
 hidden — which is `PurbleChef::Show`'s own `OnEnterState(2)` branch.  `cakes_chef_advance` runs on
-the same 30 Hz tick as the deal-in and the jar, and falls back to the looping Idle when a one-shot
+the same 30 Hz tick as the deal-in and the jar, returns whether his visible frame changed (which
+is what tells the frame loop to redraw him), and falls back to the looping Idle when a one-shot
 movie ends.  His tips come from `COMFYCAKESTIPS.XML`, which `load_tips` merges into `tip_defs`
 beside `TIPS.XML`; it takes the document as an argument and remembers which documents it has read.
 

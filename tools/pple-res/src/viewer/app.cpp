@@ -289,6 +289,12 @@ int App::run(int argc, char** argv) {
         build_difficulty();
     } else if (cakes_mode) {
         start_cakes(cakes_difficulty_choice);
+    } else if (scene_xml == "UI\\COMFYCAKES\\COMFYCAKESGAME.XML") {
+        // The Comfy Cakes document is the game screen itself, not a layout to be measured: it is
+        // reached as a round, exactly as PurblePlaceManager::Show reaches it from the menu house
+        // (ComfyCakesGame::LoadGameUI, then NewGame).  Rendering it as a plain scene would leave a
+        // room with no cake on it and buttons that answer nothing.
+        start_cakes(cakes_difficulty_choice);
     } else if (menu_mode) {
         if (loading_mode) {
             screen = Screen::Loading;

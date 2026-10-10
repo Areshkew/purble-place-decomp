@@ -54,8 +54,11 @@ fallback.
 On the Comfy Cakes screen: **left click** `ReturnToMainMenu` (or **ESC**) leaves, a **tool button**
 or a **belt arrow** builds the cake or slides the belt, and the pointer's focus follows the mouse
 exactly as it does on the Pairs board — a focused tool or arrow draws its highlight, and the target
-cake on the TV and the cake on the belt stay on screen while the pointer moves. The rules, the
-Chef and the score are in; see section 32 of `D:\Development\re\notes\purbleplace.md` for what the
+cake on the TV and the cake on the belt stay on screen while the pointer moves. Each tool works on
+the belt slot its own machine stands over, so the cake is slid from machine to machine: a button
+whose machine has no cake under it shakes and refuses, and a button that has one plays that
+machine's own animation before the ingredient appears on the cake. The rules, the machines, the
+Chef and the score are in; see section 33 of `D:\Development\re\notes\purbleplace.md` for what the
 room checks and what it still does not do.
 
 Headless equivalents that need no window (useful for checking a change):
@@ -225,8 +228,8 @@ reference of its own — PurbleChef, CakeScreen, ConveyorBelt and each Tool — 
 `GetDescNode` (`0x100072E80`) follows the document it names and `SetWidgetPos` (`0x100072F20`)
 places the widget at the outer X/Y, which is what the core loader now does for every scene.
 
-The rules — cake generation, the belt, judging, the score — are the next milestone.  A tool or
-belt click is reported and nothing more.
+The rules — cake generation, the belt, judging, the score, the machines' animations and the Chef —
+are in, through the click path and `--cakes-solve`.
 
 ### Comfy Cakes: the round
 
@@ -241,10 +244,11 @@ state over the SDL-free model in `src/cakes.cpp`:
 | the tool stations | each tool document's `<Station>`: CakePan 1, Batter 0, Decoration 2, Filling 3, FinalTouch 4, Icing 5 | `App::cakes_tool_station` |
 | what a button does | `Tool::UseTool` (`0x1000751CC`) → `Cake::CanAddLayer` / `CanRemoveAndAddLayer` / `AddLayer` | `CakeModel::use_tool` |
 | the target | `ComfyCakesGame::GenerateCorrectCake` (`0x100060460`) | `CakeModel::generate_correct` |
-| judging | `ComfyCakesGame::OnCakeDone` (`0x10005C120`) + `CheckEndCondition` (`0x10005C7E8`) | `App::cakes_judge` |
+| judging | `ConveyorBelt::SlideRight`'s harvest (`0x100062D64`) + `ComfyCakesGame::OnCakeDone` (`0x10005C120`) + `CheckEndCondition` (`0x10005C7E8`) | `App::cakes_judge` |
 | the score | `ComfyCakesGame::ComputeScore` (`0x10005CC4C`) | `App::cakes_compute_score` |
-| the belt | `ConveyorBelt::SetCakePosition` (`0x100063074`), nine slots | `CakeModel::belt_position` |
+| the belt | `ConveyorBelt::SetCakePosition` (`0x100063074`), nine slots: 0 the chute, 1 the line's entry, 8 the shipping end | `CakeModel::belt_position` |
 | the Chef | `PurbleChef::Show` (`0x10006FD1C`), `OnEnterState` (`0x10006FFEC`), `Init` (`0x10006F7DC`) | [cakes_chef.cpp](src/viewer/cakes_chef.cpp): `cakes_chef_show`, `cakes_chef_advance`, `cakes_draw_chef` |
+| the tool machines | each tool document's `<FallingSprite>`, `<ActionSprite>`, `<SplatSprite>`, `<StreamSprite>`, `<BaseSprite>` and the three shape fills, with their `<*Anim>`s | [cakes_tools.cpp](src/viewer/cakes_tools.cpp): `cakes_tools_load`, `cakes_tools_start`, `cakes_tools_advance`, `cakes_tools_draw` |
 
 `--cakes-solve` plays a whole round out through the same click path the mouse uses, the way
 `--pairs-solve` does for Purble Pairs.  Measured: **Beginner 5 correct, 30 moves, final 950**;
@@ -258,9 +262,52 @@ anchored at the room origin, not at the document's `<PurbleChef>` 900,400: his i
 frame already places his parts at x 643..690, y 401..442.
 
 Measured on a Beginner round: the target generates 4 layers (batter, filling, icing, decoration),
-the five clicks that build it are each accepted, the cake reports "matches the order", and sliding
-the belt left judges it `correct (1/5), +10 point(s)`.  Intermediate generates 7 layers and
-Advanced 10, matching their `MinLayers` of 2 and 3.
+the cake is slid under each machine in turn and each of its buttons is accepted, the cake reports
+"matches the order", and sliding the belt right to the last slot judges it `correct (1/5), +10
+point(s)`.  Intermediate generates 7 layers and Advanced 10, matching their `MinLayers` of 2 and 3.
+
+#### Each machine works on its own slot, and plays its own animation
+
+`ComfyCakesGame::InitGameUI` hands the six `<Tool>` elements their belt positions as it loads them
+(`0x10005DABC`: `Tool+60 = the tool count so far + 2`), in COMFYCAKESGAME.XML's document order —
+so **CakePanTool slot 2, BatterTool 3, FillingTool 4, IcingTool 5, DecorationTool 6,
+FinalTouchTool 7**, which is the left-to-right order of the machines in the room.  `Tool::UseTool`
+(`0x10007525C`) takes `ConveyorBelt::GetCake` at that slot, so a cake has to be slid under its
+machine before the machine can work on it: the cake enters at slot 1, is built as it is slid right
+through slots 2..7, and is judged when it reaches the last slot (8).  Every slide still moves each
+cake exactly one slot.
+
+A click is `Tool::UseTool`:
+
+| Branch | Engine | Reconstruction |
+|---|---|---|
+| the cake cannot answer it, or the machine has no cake under it | two `GameAudio` protos, then `NodeBase::ResumeAnimation` on the machine Base with `MachineUnusableShakeAnim.xml` (a `+6 / -12 / +6` X-position run, 0.2 s), and the `NeedWaxPaper` bubble when no cake is in reach | `Con_CakeButtons`, `cakes_tools_shake`, `refused, the cake cannot take it` / `there is no cake under it` |
+| the cake can answer it | the machine's own animation for the button's `<Type>`, and `Tool::FinishAddTool` (`0x10007548A`) applies the layer when it completes | `Con_CakeBatterButton`, `cakes_tools_start`, and the layer is drawn again when the 0.6 s animation ends |
+| the cake's top layer | hidden while the animation runs (`PlayAddToolAnimation` `0x100075F46`), and the batter machine's shape fill sprite is re-parented onto the cake (`NodeBase::ImportNode` `0x100076050`) | the cake's last layer is left out of the draw while the machine plays, and the fill sprite is drawn inside the cake's own coordinates |
+
+The machines' parts and their animations come straight out of the tool documents:
+
+| Tool | Parts | Per-flavour animations |
+|---|---|---|
+| CakePan | `CakePanSquishSprite` (31,0), `CakePanMachineSprite` (-14,-298) | `CakePanMachineFallingAnim` (6 frames, 0.5 s), `CakePanMachineActionAnim` (8, 0.2 s) |
+| Batter | `FallingBatterSprite` (10,-130), `BatterMachineSprite` (-32,-298), and Round/Rectangle/Heart`BatterFillSprite` (-32,0) | the falling stream `FallingBatterAnim` (8 frames over 0.6 s), one action anim per flavour (11 frames, 0.6 s), and one fill anim per shape (7 frames over 0.6 s) |
+| Filling | `FillingSplatSprite` (2,-160), `FillingMachineTubesSprite` (2,-298), `FillingMachineSprite` (6,-242) | the splat (4, 0.4 s), one base anim per flavour (2, 0.1 s), the action (6, 0.5 s) |
+| Icing | `IcingSplatSprite` (56,0), `IcingStreamSprite` (52,0), `IcingMachineActionSprite` (-4,-308) | the splat (6, 0.5 s), the stream (4, 0.5 s), and six action anims — three single-flavour and three that rotate the base between flavours (`ToolIcing::PlayRotateAnimation` `0x1000783B8`), five of them reversed |
+| Decoration | `FallingDecorationsSprite` (35,0), `DecorationMachineSprite` (-6,-298) | the falling decorations (10, 0.5 s) and one action anim per decoration (11, 0.2 s) |
+| FinalTouch | `FinalTouchMachineActionSprite` (4,-190), `FinalTouchMachineBaseSprite` (20,-301) | the sugar/burnt action anims (index `type - 13`, so the glaze button plays the sugar strip) and the base rotation (6 frames, 0.5 s) |
+
+A `ResourceAnimation` is a list of `<Animation>` blocks, each with an `<Affects>` property, a
+`LinearAbsolute` (`<Start>`→`<End>`) or `LinearRelative` (`<Count>`) run and a `<Time>` in seconds,
+with `<WaitForComplete/>` between them — which every shipped set uses, so the blocks concatenate
+into one timeline per part.  A block contributes nothing until it starts, its interpolated value
+while it runs and its end value afterwards; a relative block adds to what is already there, which
+is how the shake's three runs sum back to zero.  The frame a block names is read past the sprite's
+declared `FrameCount` for several machines, which is what the engine's own arithmetic does, so the
+geometry passed to `sprite_frame_rect` uses the animation's reach.
+
+The Chef's movie now plays frame by frame: `cakes_chef_advance` reports whether his visible frame
+changed and the frame loop rewrites the two animated layers (the Chef and the machines) in place,
+so the static room is not rebuilt per frame.
 
 The operation matrix is the one part that is **not** fully settled.  `LayerOperations::
 GetLayerOperation` (`0x10006F1F0`) indexes a 6x6 table at `0x100014430`, and the row is the top
@@ -718,9 +765,11 @@ these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
   limit is ignored, and `<Music>` is empty in both manifests.
 * PNG interlacing (Adam7) is rejected with a clear error; no shipped asset is interlaced.
 * The three games: Purble Pairs is **playable** (`pple-view --menu`, or headless with
-  `pple-res pairs --autoplay`). Comfy Cakes is **reachable and drawn** (`--cakes`, or the menu's
-  Comfy Cakes house): the whole room, its engine draw order and its hover, but not yet its rules.
-  Purble Shop is not started; its menu hot-spot is drawn and clickable and says so when clicked.
+  `pple-res pairs --autoplay`). Comfy Cakes plays a whole round (`--cakes [Beginner|
+  Intermediate|Advanced]`, or the menu's Comfy Cakes house): the room, its engine draw order, its
+  hover, the rules, the score, the Chef's six movies, and each tool machine's own animation with
+  the ingredient it drops into the cake.  Purble Shop is not started; its menu hot-spot is drawn
+  and clickable and says so when clicked.
   The card deck, board geometry,
   match rule, scoring, placement, container parenting, flip animation, sound map, progress
   meter, multi-level rounds, special cards, sneak peek, per-level card back, the jar's tray
