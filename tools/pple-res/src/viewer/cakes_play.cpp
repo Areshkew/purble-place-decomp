@@ -118,6 +118,7 @@ void App::cakes_load_model() {
 void App::cakes_new_game(int difficulty) {
     cakes_load_model();
     if (!cakes_model.layers_ok()) return;
+    initialise_cake_audio(bundle, mute);
     cakes_tools_load();
     cakes_tools_stop();
     cakes_transport.motion.clear();
@@ -132,6 +133,7 @@ void App::cakes_new_game(int difficulty) {
     std::fill(std::begin(cakes_machine_type), std::end(cakes_machine_type), 0);
     cakes_difficulty = difficulty;
     cakes_target = cakes_model.generate_correct(difficulty, [] { return std::rand(); });
+    play_cake_sfx("CC_CAKEONTV");
     cakes_belt.assign(static_cast<std::size_t>(pple::kCakeBeltSlots), pple::Cake {});
     cakes_belt_present.assign(static_cast<std::size_t>(pple::kCakeBeltSlots), false);
     cakes_transport.positions.resize(cakes_belt.size());
@@ -219,7 +221,8 @@ void App::cakes_use_tool(int station, int index) {
     }
     if (answer == nullptr) {
         // Tool::UseTool's else branch (0x10007539B).
-        play_pair_sfx("Con_CakeButtons");
+        play_cake_sfx("CC_TOOLBUTTONS");
+        play_cake_sfx("BAD_MOVE");
         cakes_tools_shake(station);
         std::printf("cakes: station %d (%s), LAYERS %d -> refused, %s, %d move(s)\n", station,
                     cakes_station_name(station), index,
@@ -230,7 +233,17 @@ void App::cakes_use_tool(int station, int index) {
                 cakes_station_name(station), index, answer,
                 static_cast<int>(cakes_belt[static_cast<std::size_t>(slot)].layers.size()),
                 cakes_moves);
-    play_pair_sfx("Con_CakeBatterButton");
+    // Use the station's own sound, including the two Advanced final touches.
+    const char* event = nullptr;
+    switch (station) {
+        case 0: event = "CC_CAKEBATTERBUTTON"; break;
+        case 1: event = "CC_CAKEPANBUTTON"; break;
+        case 2: event = "CC_DECORATIONBUTTON"; break;
+        case 3: event = "CC_CAKEFILLINGBUTTON"; break;
+        case 4: event = index == 13 ? "CC_FLAME" : "CC_SUGAR"; break;
+        case 5: event = "CC_FROSTINGBUTTON"; break;
+    }
+    if (event) play_cake_sfx(event);
     // The machine plays its own animation and the layer is shown again when it ends: the engine
     // hides the cake's top layer while the machine's fill sprite grows the ingredient in
     // (PlayAddToolAnimation 0x100075F46) and FinishAddTool (0x10007548A) applies the layer.
@@ -286,6 +299,8 @@ void App::cakes_slide_left() {
         std::printf("cakes: the belt cannot slide left\n");
         return;
     }
+    play_cake_sfx("LEFT_BUTTON");
+    play_cake_sfx("CC_CONVEYOR");
     ++cakes_slides;
     std::printf("cakes: the belt slid left (%d slide(s))\n", cakes_slides);
     cakes_transport_slide(-1);
@@ -315,6 +330,8 @@ void App::cakes_slide_right() {
         std::printf("cakes: the belt cannot slide right\n");
         return;
     }
+    play_cake_sfx("RIGHT_BUTTON");
+    play_cake_sfx("CC_CONVEYOR");
     ++cakes_slides;
     std::printf("cakes: the belt slid right (%d slide(s))\n", cakes_slides);
     cakes_transport_slide(1);
@@ -380,6 +397,7 @@ void App::cakes_judge() {
     const pple::CakeVars& v = cakes_model.vars(cakes_difficulty);
     const pple::CakeCompare cmp = cakes_model.compare(cakes_belt.back(), cakes_target);
     const bool right = cmp == pple::CakeCompare::Exact;
+    play_cake_sfx(right ? "CC_CORRECTCAKE" : "CC_BADCAKE");
     if (right) {
         ++cakes_correct;
         cakes_score += v.right_cake_points;
@@ -420,6 +438,7 @@ void App::cakes_judge() {
     if (cakes_correct >= v.cakes_needed) {
         cakes_over = true;
         cakes_won = true;
+        play_cake_sfx("CC_WONGAME");
         cakes_compute_score();
         // ComfyCakesGame::OnEnterState(2), the win: a random GameWin* bubble and state 2 of the
         // Chef's own machine.
@@ -428,6 +447,7 @@ void App::cakes_judge() {
     } else if (cakes_difficulty != 0 && cakes_missed >= v.missed_cakes_allowed) {
         cakes_over = true;
         cakes_won = false;
+        play_cake_sfx("CC_LOSTGAME");
         cakes_compute_score();
         // CheckEndCondition's GameLoseTooMany: the Chef's lose movie and state 6.
         cakes_chef_show(6, "GameLoseTooMany");

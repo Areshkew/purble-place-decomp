@@ -24,7 +24,7 @@ flags and the core library's public interfaces are unchanged.
 | Scene XML draw list, labels, draw-list release | [scene.cpp](scene.cpp): `build_scene`, `append_label`, `release_draws` |
 | Skeletal movie evaluation and part placement | [movie.cpp](movie.cpp): `build_movie`, `append_movie` |
 | Individual image/sprite browser | [browser.cpp](browser.cpp): `load_current` |
-| Audio manifest, PCM playback, cached Pairs sounds | [audio.hpp](audio.hpp), [audio.cpp](audio.cpp): `initialise_pair_audio`, `play_click_sfx` |
+| Audio manifest, PCM playback, shared cached Pairs/Cakes sounds | [audio.hpp](audio.hpp), [audio.cpp](audio.cpp): `initialise_pair_audio`, `initialise_cake_audio`, `play_click_sfx`, `play_cake_sfx`; Cakes dispatch tests in [cakes_audio_regression.py](../../tests/cakes_audio_regression.py) |
 | Fonts and diagnostic HUD | [hud.cpp](hud.cpp): `font_for`, `rebuild_hud`, `refresh_hud` |
 | Pairs setup orchestration, deal/reset, solve/click hooks, scene visibility | [pairs_setup.cpp](pairs_setup.cpp): `build_pairs` |
 | Per-level card back, jar points/coins, arc and burst configuration, animation reset | [level_art.cpp](level_art.cpp): `build_pair_level_art` |

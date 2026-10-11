@@ -20,7 +20,7 @@ namespace pple::viewer {
                  "  --anchor X,Y      origin for --movie, or for --movie-name in --scene mode\n"
                  "  --play NAME       decode and play an AUDIO.XML event key or a resource name\n"
                  "  --volume N        playback volume, 0..100 (default 100)\n"
-                 "  --mute            silence the Purble Pairs sound effects\n"
+                 "  --mute            silence Pairs and Comfy Cakes sound effects\n"
                  "  --pairs-state PATH  save the round when the player returns to the menu, and\n"
                  "                      resume it (with its board thumbnail) when the file holds one\n"
                  "  --pairs-click I,J  flip these cell indices, through the mouse handler\n"                 "  --frame N         frame index within the sprite (default 0)\n"                 "  --state N         which <Animation> of a Button node to show (default 0;\n"                 "                     the engine starts at 0 and moves to 1 on <enter>, 2 on <down>)\n"                 "  --list            list viewable resources and exit\n"                 "  --shot FILE.ppm   render one frame offscreen, write it, exit\n"                 "  --width N --height N   window size (default 1400x900)\n"                 "  --font PATH       TTF for the HUD (default C:\\Windows\\Fonts\\arial.ttf)\n"                 "  --all             include resources this viewer cannot decode\n\n"                 "  keys: LEFT/RIGHT or PGUP/PGDN navigate, SPACE toggles integer scaling,\n"                 "        in --menu/--pairs: click a hot-spot, N new game, R reshuffle, ESC quits\n"                 "        (ESC in the Concentration screen returns to the menu)\n");

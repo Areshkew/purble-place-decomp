@@ -404,8 +404,24 @@ all three difficulties and both DPIs (36 captures; same directory arguments).
   as the other tests. Existing UI/gameplay/animation regressions also pass: **149 viewer runs total**
   plus **2 CTests**, evidence under `C:\re\traces\cpp\cc\s37-*`.
 
+#### Comfy Cakes sound effects (session 39)
+
+Comfy Cakes initializes the shared SDL audio cache on direct starts and menu entry, and uses
+its shipped `CC_*` manifest keys rather than the nonexistent `Con_Cake*`/`Con_Chef*` names.
+The 19 cached events cover the six machines (both final touches), refused tools, belt arrows and
+conveyor, correct/wrong judgments, win/loss, new TV orders and Chef entry/exit. Manifest volumes
+are preserved; `--mute` covers both games. The TV ding is not played for Chef talking/losing.
+Sound cues use the reconstruction's gameplay events; precise original machine callback timing
+and manifest buffer limits are not claimed. No new per-tick asset loads or scene rebuilds.
+[cakes_audio_regression.py](tests/cakes_audio_regression.py) checks decode and successful SDL
+queue/resume, normal clicks, both final touches, solves, loss, mute and Cakes/Pairs navigation
+with a real playback device (**11 runs PASS, 19/19 events decoded, WASAPI**). Existing gameplay
+checks also pass (**23 runs**, including both DPI modes and three Pairs solves), and **CTest 2/2**.
+Evidence is under `C:\re\traces\cpp\cc\s39-audio` and `cc\s39-general`.
+It does not establish listening or exact original timing parity.
+
 Remaining Comfy Cakes gaps: automatic/time-attack timers, simultaneous belt cakes/line-clog loss,
-full removal/replacement choreography, exact sound mapping, decoration placement/orientation,
+full removal/replacement choreography, exact audio cue timing/buffer limits, decoration placement/orientation,
 TV transition/highlight behavior and persisted round state.
 
 Regression checks: `ctest --test-dir build/pple-res --output-on-failure` checks 3000 generated

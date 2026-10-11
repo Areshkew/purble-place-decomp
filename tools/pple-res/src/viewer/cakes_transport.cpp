@@ -1,4 +1,5 @@
 #include "app.hpp"
+#include "audio.hpp"
 #include <algorithm>
 #include <cstdio>
 
@@ -241,6 +242,7 @@ void App::cakes_next_target() {
         if (!same_visible_order) break;
     }
     cakes_matched_seen = false;
+    play_cake_sfx("CC_CAKEONTV");
     std::printf("cakes: next target cake, %zu layer(s)\n", cakes_target.layers.size());
     for (const auto& layer : cakes_target.layers)
         std::printf("  target station %d, LAYERS %d, shape %d\n", layer.station, layer.index, layer.shape);

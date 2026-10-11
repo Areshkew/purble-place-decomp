@@ -150,13 +150,21 @@ PairSfx& pair_sfx(const std::string& event) {
     return slot;
 }
 
-void play_pair_sfx(const std::string& event) {
-    if (!g_sfx_enabled || !g_sfx_ready) return;
+bool play_pair_sfx(const std::string& event) {
+    if (!g_sfx_enabled || !g_sfx_ready) return false;
     PairSfx& sfx = pair_sfx(event);
-    if (!sfx.ok || sfx.stream == nullptr) return;
-    SDL_PutAudioStreamData(sfx.stream, sfx.audio.samples.data(),
-                           static_cast<int>(sfx.audio.samples.size() * sizeof(std::int16_t)));
-    SDL_ResumeAudioStreamDevice(sfx.stream);
+    if (!sfx.ok || sfx.stream == nullptr) return false;
+    return SDL_PutAudioStreamData(sfx.stream, sfx.audio.samples.data(),
+               static_cast<int>(sfx.audio.samples.size() * sizeof(std::int16_t))) &&
+           SDL_ResumeAudioStreamDevice(sfx.stream);
+}
+
+void play_cake_sfx(const std::string& event) {
+    if (!g_sfx_enabled) return;
+    if (play_pair_sfx(event))
+        std::printf("cakes audio: queued %s\n", event.c_str());
+    else
+        std::fprintf(stderr, "cakes audio: failed %s: %s\n", event.c_str(), SDL_GetError());
 }
 
 // The sounds one click owes, in the order Card::DoMatcher reaches them.  Card::FlipForward
@@ -174,41 +182,65 @@ void play_click_sfx(const pple::ClickResult& r) {
     if (r.time_bonus > 0) play_pair_sfx("Con_TimeDelay");
 }
 
-// A sprite node definition, resolved to a sheet and one frame rectangle.
+// One process-lifetime device/cache shared by both games. Changing screens
+// does not decode the same event twice; the Bundle outlives all playback.
+namespace {
+void initialise_sfx(const Bundle& bundle, bool mute) {
+    if (g_sfx_ready) return;
+    g_sfx_enabled = !mute;
+    g_sfx_bundle = &bundle;
+    g_sfx_ready = g_sfx_enabled && SDL_InitSubSystem(SDL_INIT_AUDIO);
+    if (!g_sfx_ready) std::printf("  audio: disabled\n");
+}
+
+void preload_sfx(const char* label, const char* const* events, std::size_t count) {
+    int loaded = 0;
+    std::string names;
+    for (std::size_t i = 0; i < count; ++i) {
+        if (!pair_sfx(events[i]).ok) continue;
+        ++loaded;
+        if (!names.empty()) names += ", ";
+        names += events[i];
+    }
+    const char* driver = SDL_GetCurrentAudioDriver();
+    g_sfx_driver = driver == nullptr ? "(none)" : driver;
+    std::printf("  audio %s%s: %d/%zu events decoded: %s\n", label, g_sfx_driver.c_str(),
+                loaded, count, names.c_str());
+}
+} // namespace
 
 void initialise_pair_audio(const Bundle& bundle, bool mute) {
-        if (!g_sfx_ready) {
-            g_sfx_ready = true;
-            g_sfx_enabled = !mute;
-            g_sfx_bundle = &bundle;
-            if (g_sfx_enabled && SDL_InitSubSystem(SDL_INIT_AUDIO)) {
-                // The three the sound check in the README names, plus every other event this
-                // screen can reach.  Each is decoded once, at the manifest's own <Volume>.
-                const char* kEvents[] = {
-                    "Con_TileFlip",     "Con_Correct",    "Con_TileFlip_Incorrect",
-                    "Con_NewScreen",    "Con_BoardCleared", "Con_Win",
-                    "Con_GameOver",     "Con_PowerUp",    "Con_Mixer",
-                    "Con_PurbleChef",   "Con_TimeDelay",  "Con_SneakPeek_Get",
-                    "Con_SneakPeek_Click", "Con_SneakPeek_Starburst",
-                };
-                int loaded = 0;
-                std::string names;
-                for (const char* event : kEvents) {
-                    PairSfx& sfx = pair_sfx(event);
-                    if (sfx.ok) ++loaded;
-                    if (sfx.ok) {
-                        if (!names.empty()) names += ", ";
-                        names += event;
-                    }
-                }
-                const char* driver = SDL_GetCurrentAudioDriver();
-                g_sfx_driver = driver == nullptr ? "(none)" : driver;
-                std::printf("  audio %s: %d/%zu events decoded: %s\n", g_sfx_driver.c_str(), loaded,
-                            sizeof(kEvents) / sizeof(kEvents[0]), names.c_str());
-            } else {
-                std::printf("  audio: disabled\n");
-            }
-        }
+    initialise_sfx(bundle, mute);
+    static bool loaded = false;
+    if (g_sfx_ready && !loaded) {
+        loaded = true;
+        // Each reachable Pairs event is decoded once at the manifest's volume.
+        const char* kEvents[] = {
+            "Con_TileFlip", "Con_Correct", "Con_TileFlip_Incorrect",
+            "Con_NewScreen", "Con_BoardCleared", "Con_Win",
+            "Con_GameOver", "Con_PowerUp", "Con_Mixer",
+            "Con_PurbleChef", "Con_TimeDelay", "Con_SneakPeek_Get",
+            "Con_SneakPeek_Click", "Con_SneakPeek_Starburst",
+        };
+        preload_sfx("", kEvents, sizeof(kEvents) / sizeof(kEvents[0]));
+    }
+}
+
+void initialise_cake_audio(const Bundle& bundle, bool mute) {
+    initialise_sfx(bundle, mute);
+    static bool loaded = false;
+    if (!g_sfx_ready || loaded) return;
+    loaded = true;
+    // Shipped AUDIO.XML keys, not the nonexistent Con_Cake* names. Cache
+    // every reachable event before the first Chef/tool/conveyor animation.
+    const char* events[] = {
+        "CC_TOOLBUTTONS", "BAD_MOVE", "LEFT_BUTTON", "RIGHT_BUTTON", "CC_CONVEYOR",
+        "CC_CAKEPANBUTTON", "CC_CAKEBATTERBUTTON", "CC_CAKEFILLINGBUTTON",
+        "CC_FROSTINGBUTTON", "CC_DECORATIONBUTTON", "CC_FLAME", "CC_SUGAR",
+        "CC_CORRECTCAKE", "CC_BADCAKE", "CC_WONGAME", "CC_LOSTGAME",
+        "CC_CAKEONTV", "CC_CHEFENTER", "CC_CHEFEXIT",
+    };
+    preload_sfx("cakes ", events, sizeof(events) / sizeof(events[0]));
 }
 
 } // namespace pple::viewer

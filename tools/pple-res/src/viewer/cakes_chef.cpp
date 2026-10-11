@@ -138,7 +138,7 @@ void App::cakes_chef_enter() {
     const int fps = static_cast<int>(pple::movie_frame_rate(*enter, enter->parts.front()));
     if (fps > 0) cakes_chef_fps = static_cast<float>(fps);
     std::printf("cakes chef: entering\n");
-    play_pair_sfx("Con_ChefEnter");
+    play_cake_sfx("CC_CHEFENTER");
 }
 
 const pple::Movie* App::cakes_chef_movie(const char* which) const {
@@ -185,7 +185,9 @@ bool App::cakes_chef_advance() {
         cakes_chef_pending_tip.clear();
         cakes_chef_state = next;
         cakes_chef_frame = 0.0f;
-        play_pair_sfx(next == 6 ? "Con_ChefExit" : "Con_TVon_Ding");
+        // PurbleChef::OnEnterState (0x10006FFEC) sounds only entering/leaving,
+        // not talking/winning/losing. The TV ding belongs to a new order.
+        if (next == 3) play_cake_sfx("CC_CHEFEXIT");
         std::printf("cakes chef: state %d (%s)\n", next, tip_id.c_str());
         if (!tip_id.empty()) show_tip(tip_id, kChefTipX, kChefTipY);
         return true;
