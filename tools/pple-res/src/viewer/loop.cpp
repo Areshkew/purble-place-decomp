@@ -1,5 +1,7 @@
 #include "app.hpp"
 
+#include <cctype>
+
 namespace pple::viewer {
 
 // Switch the whole session between the 1x and the x2 art.  Everything that borrows a sheet
@@ -63,6 +65,7 @@ int App::run_loop() {
         bool move = false;
         float x = 0.0f, y = 0.0f;
         int ms = 0;
+        SDL_Keycode key = 0; // key:1/2/3/n/r exercises the real SDL keyboard handler
     };
     std::vector<ScriptedClick> script_clicks;
     if (!script_click_spec.empty()) {
@@ -74,6 +77,8 @@ int App::run_loop() {
             if (item.rfind("wait:", 0) == 0) {
                 step.wait = true;
                 step.ms = std::atoi(item.substr(5).c_str());
+            } else if (item.rfind("key:", 0) == 0 && item.size() == 5) {
+                step.key = static_cast<SDL_Keycode>(std::tolower(static_cast<unsigned char>(item[4])));
             } else {
                 const bool move = item.rfind("move:", 0) == 0;
                 const std::string body = move ? item.substr(5) : item;
@@ -91,6 +96,7 @@ int App::run_loop() {
     }
     std::size_t script_next = 0;
     Uint64 script_last = SDL_GetTicks();
+    Uint64 script_wait_until = 0;
     // --bench-build N: time N whole build_pairs calls with every sheet already cached.  That is
     // the cost the reveal timer used to pay on every one of its 30 Hz ticks.
     if (bench_build > 0 && pairs_ready) {
@@ -160,6 +166,12 @@ int App::run_loop() {
                     // The menu's "saved game" entry: resume the round the state file holds.
                     std::printf("menu: resuming the saved %s round\n", resume_difficulty.c_str());
                     start_game(resume_difficulty, false);
+                } else
+                if (screen == Screen::ComfyCakes &&
+                    (key == SDLK_R || key == SDLK_N || key == SDLK_1 || key == SDLK_2 || key == SDLK_3)) {
+                    const int difficulty = key == SDLK_1 ? 0 : key == SDLK_2 ? 1 :
+                                           key == SDLK_3 ? 2 : cakes_difficulty;
+                    start_cakes(difficulty);
                 } else
                 if ((key == SDLK_R || key == SDLK_N) && pairs_ready) {
                     ++seed_for_pairs;
@@ -231,9 +243,12 @@ int App::run_loop() {
             cakes_tick += static_cast<float>(SDL_GetTicks() - cakes_tick_at) / 1000.0f;
             cakes_tick_at = SDL_GetTicks();
             const bool chef_moved = cakes_chef_advance();
-            cakes_tools_advance(std::clamp(cakes_tick, 0.0f, 0.25f));
+            const bool tools_moved = cakes_tool_busy || cakes_tool_shake >= 0.0f;
+            const float dt = std::clamp(cakes_tick, 0.0f, 0.25f);
+            cakes_tools_advance(dt);
+            const bool transport_moved = cakes_transport_advance(dt);
             cakes_tick = 0.0f;
-            if (chef_moved || cakes_tool_busy || cakes_tool_shake >= 0.0f) cakes_redraw();
+            if (chef_moved || tools_moved || transport_moved) cakes_redraw();
         }
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {
@@ -416,11 +431,19 @@ int App::run_loop() {
             // entry only moves the clock the spacing is measured from.
             if (script_next < script_clicks.size()) {
                 const Uint64 now = SDL_GetTicks();
-                if (script_next == 0 || now - script_last >= 150) {
+                if (now >= script_wait_until && (script_next == 0 || now - script_last >= 150)) {
                     script_last = now;
                     const ScriptedClick step = script_clicks[script_next++];
                     if (step.wait) {
-                        SDL_Delay(static_cast<Uint32>(std::max(0, step.ms) - 150));
+                        // Keep ticking/rendering during waits; sleeping here freezes every movie.
+                        script_wait_until = now + static_cast<Uint64>(std::max(0, step.ms - 150));
+                    } else if (step.key != 0) {
+                        SDL_Event key_event{};
+                        key_event.type = SDL_EVENT_KEY_DOWN;
+                        key_event.key.key = step.key;
+                        key_event.key.down = true;
+                        SDL_PushEvent(&key_event);
+                        std::printf("script key %zu: %c\n", script_next - 1, static_cast<char>(step.key));
                     } else {
                         std::printf("script %s %zu: scene %.0f,%.0f\n",
                                     step.move ? "move" : "click", script_next - 1,
@@ -535,7 +558,7 @@ int App::run_loop() {
             }
         }
         if (offscreen) {
-            if (script_next < script_clicks.size()) {
+            if (script_next < script_clicks.size() || SDL_GetTicks() < script_wait_until) {
                 // Still working through --script-click: keep rendering, capture on the last one.
                 SDL_RenderPresent(renderer);
                 SDL_Delay(16);

@@ -1,4 +1,5 @@
 #pragma once
+#include "pple/animation.hpp"
 #include <string>
 #include <vector>
 
@@ -20,32 +21,16 @@ namespace pple::viewer {
 //   DecorationTool   <FallingSprite> FallingDecorationsSprite,<ActionSprite> DecorationMachineSprite
 //   FinalTouchTool   <ActionSprite>  FinalTouchMachineAction, <BaseSprite>   FinalTouchMachineBase
 //
-// Each part carries one animation per flavour of its tool (the button's <Type>), or a single one
-// when the part has only one.  A click on a button plays the flavour's animation on every part
-// that has one and applies the layer when the longest one finishes; a click the cake cannot
-// answer shakes the machine Base instead, which is what Tool::UseTool's refusal branch
-// (0x1000753B4) resumes.
+// Each part carries one animation per flavour (the button's <Type>), or a shared one.
+// cakes_tools_start schedules effects from action-frame cues and completion callbacks, and
+// selects only one batter fill shape. A refusal shakes the machine Base instead.
 
 // What one block of a ResourceAnimation drives.  <Affects> names the property, <Type Name>
 // says whether it is an absolute run (Start -> End) or a relative one (Count), and
-// <WaitForComplete/> separates the blocks.  Every shipped Comfy Cakes set uses it, so the runs
-// of one part's animation concatenate into a single timeline.
-struct CakeAnimRun {
-    enum class Affects { Frame, X, Y, Alpha, Position };
-    Affects affects = Affects::Frame;
-    float from = 0.0f;
-    float to = 0.0f;
-    float seconds = 0.0f;
-    // A relative run moves the property by its value instead of setting it, so the blocks of a
-    // shake (+6, -12, +6) accumulate and the machine ends where it started.
-    bool relative = false;
-};
-
-// One animation of one machine part: its timeline, and how long it takes end to end.
-struct CakeAnimSet {
-    std::vector<CakeAnimRun> runs;
-    float total = 0.0f;
-};
+// <WaitForComplete/> separates sequential groups; blocks within each group run together.
+// The shared SDL-free parser/evaluator lives in pple/animation.hpp.
+using CakeAnimRun = pple::AnimationRun;
+using CakeAnimSet = pple::AnimationSet;
 
 // Which number picks an animation out of a part's list.
 enum class CakePartIndex { Single, ByType, ByShape };
@@ -53,6 +38,7 @@ enum class CakePartIndex { Single, ByType, ByShape };
 // One part of a machine.
 struct CakeToolPart {
     std::string sprite;                  // UI\ComfyCakes\Machines\....xml
+    std::string element;                 // owning part, e.g. FallingSprite or StreamSprite
     float x = 0.0f, y = 0.0f;            // inside the tool's own container
     CakePartIndex index_from = CakePartIndex::Single;
     int type_base = 0;                   // the <Type> the part's first animation serves
@@ -60,6 +46,7 @@ struct CakeToolPart {
     // The batter tool's fill sprites are re-parented onto the cake (PlayAddToolAnimation
     // 0x100076050, NodeBase::ImportNode) so they draw inside the cake's own coordinate space.
     bool rides_the_cake = false;
+    bool visible_at_rest = false;        // only the machine body/base, never ingredient effects
     // <RegistrationOffsetX/Y>: the three batter fill sprites carry it on every <Animation>, and
     // it is what centres the growing ingredient on the cake rather than beside it.
     float reg_off_x = 0.0f, reg_off_y = 0.0f;
@@ -79,6 +66,8 @@ struct CakeToolPlaying {
     const CakeToolPart* part = nullptr;
     std::size_t index = 0;
     bool reverse = false;
+    float start = 0; // callback-triggered effects begin after the action cue
+    float finish = 0;
 };
 
 }  // namespace pple::viewer

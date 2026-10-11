@@ -163,8 +163,10 @@ void walk_widget(const XmlNode& node, const XmlNode& desc, float x, float y, flo
                     walk(child, x, y, scale, scene, fetch, depth + 1);
                 // Everything the widget's own document produced belongs to it, so the
                 // qualified name the engine uses becomes part of the item's identity.
-                for (std::size_t i = first_after_background; i < scene.items.size(); ++i)
+                for (std::size_t i = first_after_background; i < scene.items.size(); ++i) {
                     scene.items[i].widget_path = prefix;
+                    scene.items[i].widget_name = widget.name;
+                }
                 for (std::size_t i = first_container; i < scene.containers.size(); ++i)
                     scene.containers[i].widget_path = prefix;
                 return;
@@ -362,7 +364,8 @@ bool scene_load(std::span<const std::uint8_t> data,
         const bool widget = item.widget;
         const int tool_type = item.tool_type;
         const std::string instance = item.instance, name = item.name;
-        const std::string ref = item.ref, widget_path = item.widget_path;
+        const std::string ref = item.ref, widget_path = item.widget_path,
+                          widget_name = item.widget_name;
         const float w = item.w, h = item.h;
         item = resolved;
         item.x = x;
@@ -372,6 +375,7 @@ bool scene_load(std::span<const std::uint8_t> data,
         item.has_position = has_position;
         item.widget = widget;
         item.widget_path = widget_path;
+        item.widget_name = widget_name;
         item.tool_type = tool_type;
         item.w = w;
         item.h = h;

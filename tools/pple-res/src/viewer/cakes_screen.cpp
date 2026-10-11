@@ -96,7 +96,7 @@ struct CakesEntry {
 // subtracts the scaled registration) and, for a button, the hot-spot over it.  `state` picks
 // which <Animation> a button draws: the engine starts at 0 and moves to 1 on <enter>
 // (NodeButton::HandleEvent 0x1000AAC92), whose last frame is the focus art.
-bool App::cakes_append(const pple::SceneItem& item, int state) {
+bool App::cakes_append(const pple::SceneItem& item, int state, int frame) {
     if (item.kind != pple::NodeKind::Sprite && item.kind != pple::NodeKind::Button) return false;
     if (item.ref.empty()) return false;
     const std::string& key = item.name.empty() ? item.instance : item.name;
@@ -122,7 +122,7 @@ bool App::cakes_append(const pple::SceneItem& item, int state) {
     geometry.per_row = sprite.per_row;
     geometry.prepped = sprite.prepped;
     float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
-    pple::sprite_frame_rect(geometry, draw_state == 0 ? 0 : sprite.frames - 1, fx, fy, fw, fh);
+    pple::sprite_frame_rect(geometry, frame >= 0 ? frame : (draw_state == 0 ? 0 : sprite.frames - 1), fx, fy, fw, fh);
     DrawItem d;
     d.texture = tex;
     d.src = SDL_FRect{fx, fy, fw, fh};
@@ -237,7 +237,7 @@ void App::build_cakes() {
 
     // The timer's two sprites are built by name, not by the document.
     int timer_sprites = 0;
-    {
+    if (cakes_difficulty != 0) { // NewGame -> ShowTimer(false) on Beginner.
         struct TimerSprite {
             const char* name;
             const char* xml;
@@ -297,7 +297,13 @@ void App::build_cakes() {
     for (const pple::SceneItem& container : scene.containers) {
         if (!container.widget || container.instance != "Tool") continue;
         const auto it = cakes_tool_anchor.find(container.name);
-        if (it != cakes_tool_anchor.end()) it->second = {container.x, container.y};
+        if (it != cakes_tool_anchor.end()) {
+            const int station = cakes_tool_station(container.name);
+            const float shift = cakes_difficulty == 0 && (station == 0 || station == 1)
+                                    ? 100.0f : 0.0f;
+            // ShowTools always offsets the pan's machine Base by 25, not its buttons.
+            it->second = {container.x + shift + (station == 1 ? 25.0f : 0.0f), container.y};
+        }
     }
 
     // The engine creates every /HighlightSprite hidden and shows it while the button it belongs
@@ -331,9 +337,21 @@ void App::build_cakes() {
     // (0x10008122B), so they are absent by default here too; --mce keeps them.
     std::size_t sprites = 0, unresolved = 0;
     cakes_button_type.clear();
+    cakes_transport_load();
+    cakes_transport.nodes.clear();
     for (std::size_t i = 0; i < entries.size(); ++i) {
         const CakesEntry& entry = entries[i];
-        const pple::SceneItem& item = entry.item;
+        pple::SceneItem item = entry.item;
+        if (item.widget_path == "Tool/") {
+            const int station = cakes_tool_station(item.widget_name);
+            if (!cakes_tool_visible(station)) continue;
+            // All machine parts are owned by the dynamic layer, including their idle state.
+            const CakeTool* tool = cakes_tool_for_station(station);
+            if (tool != nullptr && std::any_of(tool->parts.begin(), tool->parts.end(),
+                    [&item](const CakeToolPart& part) { return part.sprite == item.ref; }))
+                continue;
+            if (cakes_difficulty == 0 && (station == 0 || station == 1)) item.x += 100.0f;
+        }
         const std::string& key = item.name.empty() ? item.instance : item.name;
         const std::string full = item.widget_path.empty() ? key : item.widget_path + key;
         // This document spells the two Media Center header nodes NewGameButton / ExitGameButton
@@ -359,6 +377,7 @@ void App::build_cakes() {
         // core loader reads for every <ButtonTool>.
         if (item.kind == pple::NodeKind::Button && item.tool_type >= 0)
             cakes_button_type[key] = item.tool_type;
+        if (cakes_transport_node(item, entry.state)) continue;
         if (cakes_append(item, entry.state)) ++sprites;
         else ++unresolved;
     }
@@ -400,7 +419,12 @@ void App::cakes_dump_draws() {
         std::printf("  draw %-28s %.0f,%.0f %.0fx%.0f\n", cakes_draw_names[i].c_str(),
                     static_cast<double>(d.dst.x), static_cast<double>(d.dst.y),
                     static_cast<double>(d.dst.w), static_cast<double>(d.dst.h));
+        std::printf("  source %-26s %.0f,%.0f alpha %d\n", cakes_draw_names[i].c_str(),
+                    static_cast<double>(d.src.x), static_cast<double>(d.src.y), d.alpha);
     }
+    std::printf("cakes clocks: belt %.3f, dispatch %.3f, %zu queued\n",
+        static_cast<double>(cakes_transport.belt_time), static_cast<double>(cakes_transport.shipping_time),
+        cakes_transport.shipping_pending.size());
 }
 
 // Entering the room starts a round.  ComfyCakesGame::NewGame is what PurblePlaceManager's

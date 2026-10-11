@@ -15,7 +15,9 @@ flags and the core library's public interfaces are unchanged.
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
 | Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append`, `start_cakes`, `cakes_dump_draws` |
 | Comfy Cakes: the round's state over the SDL-free model | [cakes_play.cpp](cakes_play.cpp): `cakes_new_game`, `cakes_use_tool`, `cakes_slide_to`, `cakes_slide_left`, `cakes_slide_right`, `cakes_judge`, `cakes_compute_score`, `cakes_draw_cake`, `cakes_refresh`, `cakes_redraw`, `cakes_solve` |
-| Comfy Cakes: the six tool machines and the animations a button plays | [cakes_tools.cpp](cakes_tools.cpp): `cakes_tools_load`, `cakes_tools_start`, `cakes_tools_shake`, `cakes_tools_advance`, `cakes_tools_draw` |
+| Comfy Cakes: difficulty-specific machine visibility/slots, idle parts and tool animations | [cakes_tools.cpp](cakes_tools.cpp): `cakes_tool_visible`, `cakes_tool_slot_for`, `cakes_tools_load`, `cakes_tools_start`, `cakes_tools_shake`, `cakes_tools_advance`, `cakes_tools_draw` |
+| Comfy Cakes: belt/roller clocks, chute, wrapping, dispatch, trash and shipping readouts | [cakes_transport.cpp](cakes_transport.cpp): `cakes_transport_advance`, `cakes_transport_draw`, `cakes_transport_finish_slide`, `cakes_next_target`; state owned by `App::cakes_transport` in [cakes_transport.hpp](cakes_transport.hpp) |
+| ResourceAnimation parsing/evaluation, cue times and integer drop integration (SDL-free) | [animation.cpp](../animation.cpp), [animation.hpp](../../include/pple/animation.hpp); tests in [animation_test.cpp](../../tests/animation_test.cpp) |
 | Comfy Cakes: the Purble Chef's states, movies and tips | [cakes_chef.cpp](cakes_chef.cpp): `cakes_load_chef`, `cakes_chef_show`, `cakes_chef_advance`, `cakes_draw_chef` |
 | Resource resolution, image decoding, sprite XML, file/PPM I/O, localiser | [resources.hpp](resources.hpp), [resources.cpp](resources.cpp): `Bundle`, `resolve_sprite`, `decode_payload`, `capture` |
 | Sheet texture cache, colour/alpha composition, coverage, the double-DPI (x2) resources | [textures.cpp](textures.cpp): `load_sheet_texture`, `load_sheet_surface`, `load_split_list`, `src_scale_for`, `clear_sheet_textures` |
@@ -236,21 +238,22 @@ The parts and their per-flavour animations come out of the tool documents
 and a list of `<*Anim>` documents, one per flavour of that tool.  A `ResourceAnimation` is a list
 of `<Animation>` blocks — `<Affects>` names the property, `<Type Name="LinearAbsolute">` carries
 `<Start>`/`<End>` and `LinearRelative` a `<Count>`, with `<Time>` in seconds and
-`<WaitForComplete/>` between them, which every shipped set uses, so the blocks concatenate into
-one timeline per part.  `anim_value` evaluates a timeline: a block contributes nothing until it
-starts, its interpolated value while it runs and its end value afterwards, and a relative block
-adds to what is already there (the shake's `+6 / -12 / +6` sums back to zero).  The frame index a
-`CurrentFrame` block names is read past the sprite's declared `FrameCount` for several machines,
-so the geometry uses the animation's reach as its frame count.
+`<WaitForComplete/>` separating sequential groups. [animation.cpp](../animation.cpp) evaluates
+parallel blocks before each barrier, relative accumulation and independent Position axes. An
+`IntMessage` schedules an effect at its property crossing, not at the end of the whole animation.
+**Correction to session 33:** the logical frame may exceed `FrameCount`, but
+`NodeSprite::UpdateCurrentUVs` (`0x100094484`) clamps its UV index to `FrameCount - 1`.
+Sampling neighboring sheet art was incorrect; the draw geometry now keeps the declared count.
 
-While a machine plays, the cake's top layer is left out of the draw — the engine hides it
-(`PlayAddToolAnimation` `0x100075F46`) and `Tool::FinishAddTool` (`0x10007548A`) applies the layer
-when the animation ends — and the batter machine's shape fill sprite is drawn inside the cake's
-own coordinates, which is `NodeBase::ImportNode` re-parenting it onto the cake's node
-(`0x100076050`).  An arrow click lands whatever a machine was still carrying first, which is
-`ComfyCakesGame::SlideLeft`'s `Tool::CompleteTool` loop.
+The model's updated stack and the immutable pre-use stack are separate while a tool runs.
+The batter machine draws **one** fill shape with the selected batter flavour. Pan and decoration
+wait for their action cue, then integrate the recovered 60 Hz integer drop timers; icing starts
+its stream and splat in sequence; filling runs tubes -> action -> splat; final touch waits for a
+base rotation when changing selection. Fast input completes the previous tool/slide first.
+Removal/replacement movies still approximate some original transitions; the pre-use stack prevents
+unrelated layers disappearing while an effect is running.
 
-Two layers of the room are animated per frame — the Chef's movie and the machines in flight — so
+The Chef, machines, belt and dispatch are animated per frame, so
 `cakes_refresh` (which calls `build_cakes`, the expensive half) is only run on a click, a hover or
 a rebuild, and `cakes_redraw` rewrites everything after the static room in place.  A hover still
 rebuilds through `cakes_refresh`, so the rebuild re-appends the Chef, the TV's target cake and
@@ -267,7 +270,19 @@ TV's never at rest.
 Both slides move each cake exactly one slot: left ascends, right descends, which is
 `ConveyorBelt::SlideLeft`'s own `for (v4 = 1; v4 < v3; ++v4)` order.  Ascending on the left slide
 matters because slot `p-1` is filled only after it has already been tested — the other way round a
-cake cascades to the end of the line in one slide.
+cake cascades to the end of the line in one slide. [cakes_transport.cpp](cakes_transport.cpp)
+retains the actual visual positions: initial/restored placement uses `98*p - 66`, while animated
+moves use the shipped **92 px / 0.5 s**, without snapping an extra 6 px on completion. The two-axis
+chute motion uses its resource. Belt tiles retain their static draw indices and update in place.
+Wrapping props have no idle draw owner; correct cakes fade under BoxDrop, then CakeBox travels
+on its 1.4 s dispatch path and the delivery sign animates. Wrong cakes use trash/red-light/readout
+animations. Pending shipments queue, rather than replacing a running gift; new rounds cancel all
+clocks and queued work. Room rebuilds replace node descriptions, not active clocks or positions.
+
+After a correct cake, the next TV order is generated and immediate visibly identical orders are
+retried. Wrong cakes retain their order. Per-order move minima accumulate for scoring. Changing
+orders on untimed Intermediate/Advanced is a requested usability extension: the original AddCake
+regenerates after a correct cake only on Beginner or time-attack rounds.
 
 `cakes_chef.cpp` owns the Purble Chef.  His six movies are parsed once and keyed by state, and
 `cakes_chef_show` pushes a state plus its tip onto a one-deep queue, entering him first when he is
@@ -294,6 +309,31 @@ state transitions and one-full-build invariants; do not compare benchmark times
 or generated-save timestamps as deterministic values. Real-time animation shots
 may differ by a frame; still movie/scene captures and token-row pixels are stronger
 pixel comparisons.
+
+### Comfy Cakes layout/playability regressions (session 34)
+
+- [cakes_test.cpp](../../tests/cakes_test.cpp): CTest model test, 3000 generated cakes,
+  accessible ingredients by difficulty, single-count height and named-widget ownership.
+- [cakes_regression.py](../../tests/cakes_regression.py): 23 local-asset viewer runs,
+  difficulty layouts/hot-spots, idle effect visibility, 80% TV target, wax paper, normal
+  clicks and solves in both DPI modes, menu roundtrip, SDL keyboard switches/restarts,
+  and Pairs solves. Arguments: build directory, sample directory, output trace directory.
+- The generic scene loader preserves `SceneItem::widget_name` across appearance resolution;
+  Comfy Cakes uses that owner to hide/shift only the intended tool's children.
+- Machine parts belong to the dynamic draw tail even when idle, not both static/dynamic layers.
+  `cakes_new_game` cancels the previous tool animation/shake before changing difficulty.
+
+### Comfy Cakes animation regressions (session 35)
+
+- [animation_test.cpp](../../tests/animation_test.cpp): pure-core timeline barriers, parallel
+  blocks, two-axis Position, frame cues, reverse evaluation and integer 60 Hz drops.
+- [cakes_animation_regression.py](../../tests/cakes_animation_regression.py): 42 normal-click
+  captures of all six tools, one selected batter shape, clamped single-frame body art, belt
+  motion/roller frames, wrapping, gift travel, trash, active-shipping hover and resets, both DPIs.
+- [cakes_regression.py](../../tests/cakes_regression.py) also verifies that each successful order
+  changes visibly, all solves still win, and no invalid machine sprite state is requested.
+- Original `draw` diagnostic lines retain their format for existing coverage tools; separate
+  `source` lines expose UVs/alpha and `cakes clocks` exposes active transport clocks.
 
 Keep this map current. Add behavior to the owning module, not the entry point or
 a catch-all helper. Split a module further only at a cohesive boundary; keep state

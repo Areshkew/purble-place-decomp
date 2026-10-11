@@ -23,12 +23,23 @@ add_library(pple_core STATIC
   src/movie.cpp
   src/concentration.cpp
   src/cakes.cpp
+  src/animation.cpp
   src/mui.cpp
   src/split_list.cpp
   src/rgmh.cpp
   src/sha256.cpp
 )
 target_include_directories(pple_core PUBLIC include)
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(pple-cakes-test tests/cakes_test.cpp)
+  target_link_libraries(pple-cakes-test PRIVATE pple_core)
+  add_test(NAME cakes-model-and-widget COMMAND pple-cakes-test)
+  add_executable(pple-animation-test tests/animation_test.cpp)
+  target_link_libraries(pple-animation-test PRIVATE pple_core)
+  add_test(NAME resource-animation-timeline COMMAND pple-animation-test)
+endif()
 
 if(MSVC)
   target_compile_options(pple_core PRIVATE /W4 /permissive-)
@@ -97,6 +108,7 @@ if(PPLE_BUILD_VIEW)
       src/viewer/cakes_screen.cpp
       src/viewer/cakes_chef.cpp
       src/viewer/cakes_tools.cpp
+      src/viewer/cakes_transport.cpp
       src/viewer/cakes_play.cpp
       src/viewer/card_assets.cpp
       src/viewer/hud.cpp

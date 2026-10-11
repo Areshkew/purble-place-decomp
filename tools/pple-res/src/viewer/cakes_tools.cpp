@@ -177,51 +177,8 @@ float num_ci(const pple::XmlNode& node, const char* name, float fallback) {
     return static_cast<float>(std::atof(c->text.c_str()));
 }
 
-// One <Animation> block of a ResourceAnimation.  The engine's <Affects> names the property the
-// block drives and <Type Name="LinearAbsolute"> carries <Start>/<End> where
-// <Type Name="LinearRelative"> carries <Count>; both carry <Time> in seconds.
-bool read_run(const pple::XmlNode& anim, CakeAnimRun& run) {
-    const pple::XmlNode* affects = child_ci(anim, "Affects");
-    if (affects == nullptr) return false;
-    const std::string& what = affects->text;
-    if (what == "CurrentFrame") run.affects = CakeAnimRun::Affects::Frame;
-    else if (what == "XPosition") run.affects = CakeAnimRun::Affects::X;
-    else if (what == "YPosition") run.affects = CakeAnimRun::Affects::Y;
-    else if (what == "Alpha") run.affects = CakeAnimRun::Affects::Alpha;
-    else if (what == "Position") run.affects = CakeAnimRun::Affects::Position;
-    else return false;  // the belt's <IntMessage>-only blocks drive nothing this draws
-    const pple::XmlNode* type = child_ci(anim, "Type");
-    if (type == nullptr) return false;
-    run.seconds = num_ci(*type, "Time", 0.0f);
-    // The engine spells the attribute "Name"; XmlNode::attr is case-sensitive, so look it up the
-    // way the rest of this module does.
-    std::string kind;
-    for (const pple::XmlAttribute& attribute : type->attributes)
-        if (attribute.name == "Name" || attribute.name == "name") kind = attribute.value;
-    run.relative = kind == "LinearRelative";
-    if (run.relative) {
-        run.from = 0.0f;
-        run.to = num_ci(*type, "Count", 0.0f);
-    } else {
-        run.from = num_ci(*type, "Start", 0.0f);
-        run.to = num_ci(*type, "End", 0.0f);
-    }
-    return true;
-}
-
-// A whole ResourceAnimation document: its blocks, concatenated, and their total duration.
 bool read_anim(const std::vector<std::uint8_t>& bytes, CakeAnimSet& out) {
-    pple::XmlNode root;
-    std::string error;
-    if (!pple::xml_parse(bytes, root, error)) return false;
-    for (const pple::XmlNode& anim : root.children) {
-        if (anim.name != "Animation") continue;
-        CakeAnimRun run;
-        if (!read_run(anim, run)) continue;
-        out.total += run.seconds;
-        out.runs.push_back(run);
-    }
-    return !out.runs.empty();
+    return pple::animation_parse(bytes, out);
 }
 
 // The first non-empty text of an element's child list, which is how the tool documents name a
@@ -243,41 +200,22 @@ std::vector<std::string> anim_list(const pple::XmlNode& node, const char* name) 
 
 // The value one run of an animation holds at time t, accumulated over the whole timeline so a
 // set that drives two properties keeps both.
-struct AnimValue {
-    float frame = 0.0f;
-    float dx = 0.0f, dy = 0.0f;
-    float alpha = 255.0f;
-};
-
-AnimValue anim_value(const CakeAnimSet& set, float t, bool reverse) {
-    AnimValue v;
-    float at = 0.0f;
-    if (reverse) t = set.total - t;
-    for (const CakeAnimRun& run : set.runs) {
-        const float end = at + run.seconds;
-        if (t < at) break;  // the block has not started yet, so it contributes nothing
-        float value = run.to;  // past the block's end: hold its end value
-        if (t < end) {
-            const float k = run.seconds > 0.0f ? (t - at) / run.seconds : 1.0f;
-            value = run.from + (run.to - run.from) * std::clamp(k, 0.0f, 1.0f);
-        }
-        switch (run.affects) {
-            case CakeAnimRun::Affects::Frame: v.frame = value; break;
-            case CakeAnimRun::Affects::Alpha: v.alpha = value; break;
-            case CakeAnimRun::Affects::X: v.dx = run.relative ? v.dx + value : value; break;
-            case CakeAnimRun::Affects::Y: v.dy = run.relative ? v.dy + value : value; break;
-            case CakeAnimRun::Affects::Position: v.dx += value; v.dy += value; break;
-        }
-        at = end;
-    }
-    return v;
-}
+using AnimValue = pple::AnimationValue;
+using pple::animation_value;
 
 }  // namespace
 
-int App::cakes_tool_slot_for(int station) {
+bool App::cakes_tool_visible(int station) const {
+    // ComfyCakesGame::ShowTools (0x100060954).
+    return (station != 3 || cakes_difficulty != 0) &&
+           (station != 4 || cakes_difficulty == 2);
+}
+
+int App::cakes_tool_slot_for(int station) const {
+    if (!cakes_tool_visible(station)) return -1;
     for (const ToolEntry& tool : kTools)
-        if (tool.station == station) return tool.slot;
+        if (tool.station == station)
+            return tool.slot + (cakes_difficulty == 0 && tool.slot < 4 ? 1 : 0);
     return -1;
 }
 
@@ -333,11 +271,14 @@ void App::cakes_tools_load() {
                 const pple::XmlNode* sprite = child_ci(root, spec.element);
                 if (sprite == nullptr) continue;
                 CakeToolPart part;
+                part.element = spec.element;
                 part.x = num_ci(*sprite, "X", 0.0f);
                 part.y = num_ci(*sprite, "Y", 0.0f);
                 part.index_from = spec.index_from;
                 part.type_base = spec.type_base;
                 part.rides_the_cake = spec.rides_the_cake;
+                part.visible_at_rest = std::string(spec.element) == "ActionSprite" ||
+                                       std::string(spec.element) == "BaseSprite";
                 // The sprite document lives in the part's own <Desc><Sprite>.
                 const pple::XmlNode* desc = child_ci(*sprite, "Desc");
                 part.sprite = desc == nullptr ? std::string {} : element_text(*desc, "Sprite");
@@ -408,19 +349,91 @@ void App::cakes_tools_start(int station, int type, int shape, int slot) {
     cakes_tool_slot_running = slot;
     cakes_tool_type_running = type;
     cakes_tool_shape_running = shape;
-    cakes_tool_time = 0.0f;
+    cakes_tool_time = 0;
     cakes_tool_playing.clear();
-    cakes_tool_total = 0.6f;  // the fallback when the machine's animations did not load
-    if (tool == nullptr) return;
-    for (const CakeToolPart& part : tool->parts) {
-        if (part.anims.empty()) continue;
+    cakes_tool_total = 0;
+    cakes_tool_reveal_at = 0;
+    if (tool == nullptr) { cakes_tool_total = 0.6f; return; }
+    const auto find = [&](const char* element) -> const CakeToolPart* {
+        for (const auto& part : tool->parts) if (part.element == element) return &part;
+        return nullptr;
+    };
+    const auto play = [&](const CakeToolPart* part, float start, int override_index = -1,
+                          bool backwards = false) -> float {
+        if (!part || part->anims.empty()) return start;
         bool reverse = false;
-        const std::size_t index = cakes_tool_flavour(part, type, shape, reverse);
-        cakes_tool_playing.push_back({&part, index, reverse});
-        cakes_tool_total = std::max(cakes_tool_total, part.anims[index].total);
+        const auto index = override_index < 0 ? cakes_tool_flavour(*part, type, shape, reverse)
+            : static_cast<std::size_t>(override_index);
+        if (index >= part->anims.size()) return start;
+        const float end = start + part->anims[index].total;
+        cakes_tool_playing.push_back({part, index, reverse || backwards, start, end});
+        cakes_tool_total = std::max(cakes_tool_total, end);
+        return end;
+    };
+    const auto cue = [&](const CakeToolPart* part, int index, float fallback) {
+        if (!part || index < 0 || index >= static_cast<int>(part->anims.size())) return fallback;
+        for (const auto& event : part->anims[index].cues) if (!event.complete) return event.time;
+        return fallback;
+    };
+    const auto* action = find("ActionSprite");
+    const auto* base = find("BaseSprite");
+    const auto* falling = find("FallingSprite");
+    float action_start = 0;
+    const int flavour = station == 5 ? type - 15 : station == 4 ? type - 13 : 0;
+    // ToolIcing::PlayRotateAnimation: pair strips 3/4/5, reversed for the opposite turn.
+    if (station == 5 && action && cakes_machine_type[5] != flavour) {
+        const int old = cakes_machine_type[5];
+        const int pair = (old == 0 && flavour == 1) || (old == 1 && flavour == 0) ? 3
+            : (old == 1 && flavour == 2) || (old == 2 && flavour == 1) ? 4 : 5;
+        const bool reverse = (old == 1 && flavour == 0) || (old == 2 && flavour == 1) || (old == 0 && flavour == 2);
+        action_start = play(action, 0, pair, reverse);
+    } else if (station == 4 && cakes_machine_type[4] != flavour) {
+        action_start = play(base, 0, 0, flavour == 0);
+    } else if (station == 3) {
+        action_start = play(base, 0);
     }
-    std::printf("cakes tool: %s plays for %.2f s (%zu part(s))\n", tool->name.c_str(),
-                static_cast<double>(cakes_tool_total), cakes_tool_playing.size());
+    const float action_end = play(action, action_start);
+    bool reverse = false;
+    const auto action_index = action && !action->anims.empty()
+        ? cakes_tool_flavour(*action, type, shape, reverse) : 0;
+    const float trigger = action_start + cue(action, static_cast<int>(action_index), 0);
+    if (station == 0) {
+        play(falling, 0);
+        static const char* fills[] = {"RoundFillingSprite", "RectangleFillingSprite", "HeartFillingSprite"};
+        play(find(fills[std::clamp(shape, 0, 2)]), 0);
+    } else if (station == 1 || station == 2) {
+        // Pan: speed 4 then +1/tick. Decoration: speed 1 then +0.4/tick, both 60 Hz.
+        const float start_y = station == 1 ? -220.0f : -170.0f;
+        const float end_y = cakes_cake_top_y(cakes_tool_before, 0) - 65;
+        const auto drop = pple::animation_drop(start_y, end_y, 0, station == 1 ? 4 : 1,
+                                              station == 1 ? 1 : 0.4f, station == 1);
+        const float land = trigger + drop.seconds;
+        play(falling, trigger);
+        if (station == 1 && falling && !cakes_tool_playing.empty()) {
+            cakes_tool_playing.back().finish += drop.seconds;
+            cakes_tool_total = std::max(cakes_tool_total, cakes_tool_playing.back().finish);
+        }
+        if (station == 2 && !cakes_tool_playing.empty()) {
+            cakes_tool_playing.back().finish = land;
+            cakes_tool_total = std::max(action_end, land);
+        }
+        cakes_tool_reveal_at = trigger;
+    } else if (station == 3) {
+        play(find("SplatSprite"), trigger);
+    } else if (station == 5) {
+        const auto* stream = find("StreamSprite");
+        play(stream, trigger);
+        const float splat = trigger + cue(stream, 0, 0);
+        play(find("SplatSprite"), splat);
+        cakes_tool_reveal_at = splat;
+    } else if (station == 4) {
+        cakes_tool_reveal_at = trigger;
+    }
+    cakes_machine_type[station] = station == 0 ? type : station == 3 ? type - 10 : flavour;
+    if (cakes_tool_total <= 0) cakes_tool_total = 0.6f;
+    std::printf("cakes tool: %s plays for %.2f s (%zu part(s)), effect cue %.3f s\n",
+                tool->name.c_str(), static_cast<double>(cakes_tool_total), cakes_tool_playing.size(),
+                static_cast<double>(cakes_tool_reveal_at));
 }
 
 // Tool::UseTool's refusal branch: the shake on the machine Base and two GameAudio protos
@@ -464,76 +477,78 @@ void App::cakes_tools_stop() {
 
 // The machine parts of the running animation, drawn over the room.  cakes_redraw has already
 // truncated the draw list back to the static room, so this only appends.  Each part is drawn at
-// its own container offset plus the animation's own positional run, using the frame the
-// animation's CurrentFrame run names -- which is why the frame count passed to the geometry is
-// the animation's reach, not the sprite's declared FrameCount.
+// its own container offset plus the animation's positional run. CurrentFrame still drives
+// callback cues beyond the sheet's last frame, but the UVs clamp to the declared FrameCount.
 void App::cakes_tools_draw() {
-    if (!cakes_tool_busy && cakes_tool_shake < 0.0f) return;
-    const CakeTool* tool = cakes_tool_for_station(cakes_tool_busy ? cakes_tool_station_running
-                                                                 : cakes_tool_shake_station);
-    if (tool == nullptr) return;
-    const auto anchor = cakes_tool_anchor.find(tool->name);
-    const float ax = anchor == cakes_tool_anchor.end() ? 0.0f : anchor->second.first;
-    const float ay = anchor == cakes_tool_anchor.end() ? 0.0f : anchor->second.second;
-    // Where the cake under this machine sits, for the parts that ride it.  The belt container is
-    // at (0,220) and ConveyorBelt::SetCakePosition works inside it.
-    const int slot = cakes_tool_slot_running;
-    float belt_x = 0.0f, belt_y = 0.0f;
-    pple::CakeModel::belt_position(slot, belt_x, belt_y);
-    const float cake_x = belt_x;
-    const float cake_y = 220.0f + belt_y + cakes_cake_top_y(cakes_belt[static_cast<std::size_t>(
-                                                       std::clamp(slot, 0, static_cast<int>(cakes_belt.size()) - 1))], 1);
-    // A refusal shakes the whole machine, which is the machine Base the animation is attached to
-    // in Tool::Init.
-    float shake_dx = 0.0f;
-    if (cakes_tool_shake >= 0.0f) {
-        const AnimValue v = anim_value(tool->shake, cakes_tool_shake, false);
-        shake_dx = v.dx;
-    }
-    for (const CakeToolPlaying& playing : cakes_tool_playing) {
-        const CakeToolPart& part = *playing.part;
-        const CakeAnimSet& set = part.anims[playing.index];
-        const AnimValue v = anim_value(set, cakes_tool_time, playing.reverse);
-        const viewer::Sprite sp =
-            resolve_sprite(bundle, part.sprite, static_cast<int>(playing.index));
-        if (!sp.ok) {
-            std::fprintf(stderr, "cakes tool: %s, %s\n", part.sprite.c_str(), sp.note.c_str());
-            continue;
+    for (const auto& [name, machine] : cakes_tools) {
+        const CakeTool* tool = &machine;
+        if (!cakes_tool_visible(tool->station)) continue;
+        const bool active = cakes_tool_busy && cakes_tool_station_running == tool->station;
+        const bool shaking = cakes_tool_shake >= 0.0f && cakes_tool_shake_station == tool->station;
+        const auto anchor = cakes_tool_anchor.find(tool->name);
+        const float ax = anchor == cakes_tool_anchor.end() ? 0.0f : anchor->second.first;
+        const float ay = anchor == cakes_tool_anchor.end() ? 0.0f : anchor->second.second;
+        // Where the cake under this machine sits, for the parts that ride it.  The belt container is
+        // at (0,220) and ConveyorBelt::SetCakePosition works inside it.
+        const int slot = cakes_tool_slot_running;
+        float belt_x = 0.0f, belt_y = 0.0f;
+        cakes_transport_position(slot, belt_x, belt_y);
+        const float cake_x = belt_x;
+        const float top_y = active && slot >= 0 && static_cast<std::size_t>(slot) < cakes_belt.size()
+            ? cakes_cake_top_y(cakes_belt[static_cast<std::size_t>(slot)], 1) : 0.0f;
+        const float cake_y = 220.0f + belt_y + top_y;
+        // A refusal shakes the whole machine, which is the machine Base the animation is attached to
+        // in Tool::Init.
+        float shake_dx = 0.0f;
+        if (shaking) {
+            const AnimValue v = animation_value(tool->shake, cakes_tool_shake, false);
+            shake_dx = v.dx;
         }
-        std::string how;
-        const auto* sheet_slot = bundle.resolve(sp.requested, how);
-        if (sheet_slot == nullptr) continue;
-        std::string note;
-        SDL_Texture* tex = load_sheet_texture(sp.requested, sheet_slot->entry->name, note);
-        if (tex == nullptr) continue;
-        pple::SceneItem geometry;
-        geometry.src_x = sp.src.x;
-        geometry.src_y = sp.src.y;
-        geometry.src_w = sp.src.w;
-        geometry.src_h = sp.src.h;
-        // The animation names frames beyond the sprite's declared FrameCount for several of the
-        // machines, so the reach is the animation's own.
-        geometry.frames = std::max(sp.frames, static_cast<int>(v.frame) + 1);
-        geometry.per_row = sp.per_row;
-        geometry.prepped = sp.prepped;
-        float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
-        pple::sprite_frame_rect(geometry, static_cast<int>(v.frame), fx, fy, fw, fh);
-        DrawItem d;
-        d.texture = tex;
-        d.src = SDL_FRect{fx, fy, fw, fh};
-        const float base_x = part.rides_the_cake ? cake_x : ax + part.x;
-        const float base_y = part.rides_the_cake ? cake_y : ay + part.y;
-        d.dst = SDL_FRect{base_x + v.dx + shake_dx - (sp.reg_x + part.reg_off_x),
-                          base_y + v.dy - (sp.reg_y + part.reg_off_y), fw, fh};
-        d.alpha = static_cast<int>(std::lround(std::clamp(v.alpha, 0.0f, 255.0f)));
-        scene_draws.push_back(d);
-        cakes_draw_names.push_back(tool->name + "/" + part.sprite);
-    }
-    if (cakes_tool_shake >= 0.0f && cakes_tool_playing.empty()) {
-        // The idle machine parts shake with it, so the whole Base is redrawn once more, offset.
+        std::vector<CakeToolPlaying> parts;
         for (const CakeToolPart& part : tool->parts) {
-            const viewer::Sprite sp = resolve_sprite(bundle, part.sprite, 0);
-            if (!sp.ok) continue;
+            const CakeToolPlaying* playing = nullptr;
+            if (active) for (const auto& candidate : cakes_tool_playing)
+                if (candidate.part == &part && cakes_tool_time >= candidate.start &&
+                    cakes_tool_time < candidate.finish) playing = &candidate;
+            if (playing) parts.push_back(*playing);
+            else if (part.visible_at_rest) {
+                if (active && tool->station == 4 && part.element == "ActionSprite" &&
+                    std::any_of(cakes_tool_playing.begin(), cakes_tool_playing.end(),
+                        [&](const auto& p) { return p.part == &part && cakes_tool_time < p.start; })) continue;
+                const int state = part.index_from == CakePartIndex::Single ? 0 : cakes_machine_type[tool->station];
+                parts.push_back({&part, static_cast<std::size_t>(state), false, -1, 0});
+            }
+        }
+        for (const CakeToolPlaying& playing : parts) {
+            const CakeToolPart& part = *playing.part;
+            float local_time = cakes_tool_time - playing.start;
+            if (tool->station == 1 && part.element == "FallingSprite") {
+                const auto drop = pple::animation_drop(-220, cakes_cake_top_y(cakes_tool_before, 0) - 65,
+                    local_time, 4, 1, true);
+                local_time = std::max(0.0f, local_time - drop.seconds);
+            }
+            AnimValue v = active && playing.start >= 0 && !part.anims.empty()
+                ? animation_value(part.anims[playing.index], local_time, playing.reverse) : AnimValue{};
+            if (active && tool->station == 0 && part.element == "FallingSprite" && v.frame >= 7) continue;
+            int sprite_state = static_cast<int>(playing.index);
+            if (tool->station == 4 && part.element == "BaseSprite")
+                sprite_state = active && playing.start >= 0 ? 2 : cakes_machine_type[4];
+            // A shared effect animation does not imply a shared sprite state: OnAnimationInt
+            // selects the pan shape or ingredient type independently of the animation handle.
+            if (active && !part.visible_at_rest) {
+                switch (tool->station) {
+                    case 1: sprite_state = cakes_tool_shape_running; break;
+                    case 0: sprite_state = cakes_tool_type_running; break;
+                    case 3: sprite_state = cakes_tool_type_running - 10; break;
+                    case 5: sprite_state = cakes_tool_type_running - 15; break;
+                    case 2: sprite_state = cakes_tool_type_running - 6; break;
+                }
+            }
+            const viewer::Sprite sp = resolve_sprite(bundle, part.sprite, sprite_state);
+            if (!sp.ok) {
+                std::fprintf(stderr, "cakes tool: %s, %s\n", part.sprite.c_str(), sp.note.c_str());
+                continue;
+            }
             std::string how;
             const auto* sheet_slot = bundle.resolve(sp.requested, how);
             if (sheet_slot == nullptr) continue;
@@ -545,19 +560,42 @@ void App::cakes_tools_draw() {
             geometry.src_y = sp.src.y;
             geometry.src_w = sp.src.w;
             geometry.src_h = sp.src.h;
+            // NodeSprite::UpdateCurrentUVs (0x100094484) clamps UVs to FrameCount-1.
+            // Logical CurrentFrame still crosses cues, but must never read neighboring art.
             geometry.frames = sp.frames;
             geometry.per_row = sp.per_row;
             geometry.prepped = sp.prepped;
             float fx = 0.0f, fy = 0.0f, fw = 0.0f, fh = 0.0f;
-            pple::sprite_frame_rect(geometry, 0, fx, fy, fw, fh);
+            pple::sprite_frame_rect(geometry, static_cast<int>(v.frame), fx, fy, fw, fh);
             DrawItem d;
             d.texture = tex;
             d.src = SDL_FRect{fx, fy, fw, fh};
-            d.dst = SDL_FRect{ax + part.x + shake_dx - sp.reg_x, ay + part.y - sp.reg_y, fw, fh};
+            const float base_x = part.rides_the_cake ? cake_x : ax + part.x;
+            float base_y = part.rides_the_cake ? cake_y : ay + part.y;
+            const float height = cake_y - 220.0f - belt_y;
+            float scale = 1;
+            if (active && part.element == "FallingSprite" && (tool->station == 1 || tool->station == 2)) {
+                const bool pan = tool->station == 1;
+                const auto drop = pple::animation_drop(pan ? -220 : -170,
+                    cakes_cake_top_y(cakes_tool_before, 0) - 65, cakes_tool_time - playing.start,
+                    pan ? 4 : 1, pan ? 1 : 0.4f, pan);
+                base_y = ay + drop.y;
+                scale = drop.scale;
+                if (pan) v.alpha *= scale;
+            } else if (active && tool->station == 0 && part.element == "FallingSprite") {
+                if (v.frame >= 2) base_y += cakes_cake_top_y(cakes_tool_before, cakes_tool_replacing ? 1 : 0);
+            } else if (active && tool->station == 5 &&
+                       (part.element == "StreamSprite" || part.element == "SplatSprite")) {
+                // ToolIcing::OnAnimationInt (0x100078690) anchors both effects to Cake+20 - 35.
+                base_y = ay + height - 35.0f;
+            }
+            d.dst = SDL_FRect{base_x + v.dx + shake_dx - (sp.reg_x + part.reg_off_x) * scale,
+                              base_y + v.dy - (sp.reg_y + part.reg_off_y) * scale, fw * scale, fh * scale};
+            d.alpha = static_cast<int>(std::lround(std::clamp(v.alpha, 0.0f, 255.0f)));
             scene_draws.push_back(d);
             cakes_draw_names.push_back(tool->name + "/" + part.sprite);
         }
-    }
+    }  // machines
 }
 
 }  // namespace pple::viewer

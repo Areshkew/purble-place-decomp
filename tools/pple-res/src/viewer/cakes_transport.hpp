@@ -1,0 +1,41 @@
+#pragma once
+#include "pple/animation.hpp"
+#include "pple/cakes.hpp"
+#include "pple/scene.hpp"
+#include <map>
+#include <string>
+#include <vector>
+
+namespace pple::viewer {
+struct CakeRoomAnimation {
+    pple::SceneItem item;
+    std::string key;
+    pple::AnimationSet animation;
+    int draw_at = -1;
+    int state = 0;
+};
+struct CakeBeltMotion {
+    int slot = 0;
+    float x = 0, y = 0;
+    pple::AnimationSet animation;
+};
+// App owns these clocks; room rebuilds only replace node descriptions, never active motion.
+struct CakeShipment {
+    pple::Cake cake;
+    bool correct = false;
+    float x = 0, y = 0;
+};
+struct CakeTransport {
+    std::vector<CakeRoomAnimation> nodes;
+    std::map<std::string, pple::AnimationSet> animations;
+    std::vector<CakeBeltMotion> motion;
+    std::vector<std::pair<float, float>> positions;
+    float belt_time = -1, belt_total = 0;
+    bool reverse = false, judge_after_slide = false;
+    float shipping_time = -1;
+    bool correct = false;
+    pple::Cake shipping_cake;
+    float shipping_x = 0, shipping_y = 0;
+    std::vector<CakeShipment> shipping_pending;
+};
+}

@@ -53,6 +53,8 @@ struct SceneItem {
     // The engine looks each of those up on its own widget object, so the qualified name is what
     // identifies them; an item outside any widget leaves this empty.
     std::string widget_path;
+    // Named widget instance, needed when several <Tool> widgets share the same element name.
+    std::string widget_name;
 
     // Sprite/Button
     std::string ref;        // value of <Sprite>/<Button>/<Movie>

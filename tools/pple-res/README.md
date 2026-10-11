@@ -222,8 +222,10 @@ The room is a scene load plus the engine's own draw order.  `ComfyCakesGame::Ini
 | 16-19 | `/ShippingSignBackground`, `/ShippingSign`, **8 x** `/ScreenSlot` (four across at 20 px, second row 30 px down), `/DroppingBox` |
 | 20-21 | `/PurbleChef`, then the two Media Center header buttons and labels, which `--mce` keeps |
 
-Measured: **78 sprites, 0 unresolved**, 21 hot-spots (18 tool buttons, the two belt arrows and
-`ReturnToMainMenu`), in a 800x496 viewport of a 802x496 sprite extent.  A `<Desc>` with no node
+Current room logs: **43 / 48 / 50 static sprites**, **16 / 19 / 21 hot-spots**
+(Beginner / Intermediate / Advanced), **0 unresolved**, in an 800x496 viewport. Machine bodies,
+ingredient effects, wax paper and active gifts are drawn in the dynamic layer. Hiding the two
+idle gift props supersedes session 34's 45 / 50 / 52 counts and the older 78-sprite room.  A `<Desc>` with no node
 reference of its own — PurbleChef, CakeScreen, ConveyorBelt and each Tool — is a **widget**:
 `GetDescNode` (`0x100072E80`) follows the document it names and `SetWidgetPos` (`0x100072F20`)
 places the widget at the outer X/Y, which is what the core loader now does for every scene.
@@ -251,9 +253,13 @@ state over the SDL-free model in `src/cakes.cpp`:
 | the tool machines | each tool document's `<FallingSprite>`, `<ActionSprite>`, `<SplatSprite>`, `<StreamSprite>`, `<BaseSprite>` and the three shape fills, with their `<*Anim>`s | [cakes_tools.cpp](src/viewer/cakes_tools.cpp): `cakes_tools_load`, `cakes_tools_start`, `cakes_tools_advance`, `cakes_tools_draw` |
 
 `--cakes-solve` plays a whole round out through the same click path the mouse uses, the way
-`--pairs-solve` does for Purble Pairs.  Measured: **Beginner 5 correct, 30 moves, final 950**;
-**Intermediate 5 correct, 50 moves, 1750**; **Advanced 6 correct, 90 moves, 2600** — all WON, and
-the lose path reaches `LOST after 3 mistake(s)` on Intermediate with 1850.
+`--pairs-solve` does for Purble Pairs. After correcting target generation, measured default-seed
+rounds are **Beginner 5 correct, 20 moves, final 1650**; **Intermediate 5 correct, 35 moves,
+2250**; **Advanced 6 correct, 66 moves, 2600** — all WON, with zero missed cakes in both art modes.
+Session 35 regenerates each successful order and accumulates its move minimum; Advanced now has
+57 minimum moves, superseding session 34's fixed-target 54 / final 1600. The earlier session-33
+950 / 1750 / 2600 fixtures used the incorrect extra filling/icing sequence; the current Advanced
+2600 is a different, corrected fixture. These are test scores, not original-game scoring parity.
 
 The Chef's states are 0 hidden, 1 idle, 2 entering, 3 leaving, 4 talking, 5 win, 6 lose; his six
 movies are `Chef{Idle,Enter,Leave,Talk,Win,Lose}Movie.xml`, and his bubbles are his own
@@ -261,17 +267,25 @@ movies are `Chef{Idle,Enter,Leave,Talk,Win,Lose}Movie.xml`, and his bubbles are 
 anchored at the room origin, not at the document's `<PurbleChef>` 900,400: his idle movie's first
 frame already places his parts at x 643..690, y 401..442.
 
-Measured on a Beginner round: the target generates 4 layers (batter, filling, icing, decoration),
-the cake is slid under each machine in turn and each of its buttons is accepted, the cake reports
-"matches the order", and sliding the belt right to the last slot judges it `correct (1/5), +10
-point(s)`.  Intermediate generates 7 layers and Advanced 10, matching their `MinLayers` of 2 and 3.
+`GenerateCorrectCake` (`0x100060460`) adds pan/batter for each cake layer and filling **only between
+layers**, then toppings. Beginner now has **3 visible layers** (batter, icing, decoration),
+Intermediate **5**, and the default Advanced fixture **6** (its toppings vary). The old 4 / 7 / 10
+counts were incorrect. The target's height is no longer counted twice.
+
+Press **1 / 2 / 3** in the room to start Beginner / Intermediate / Advanced; **N / R** restarts
+at the current difficulty, including after a win or loss. These reconstruction shortcuts cancel
+any old machine animation before resetting. Wax paper stays visible under every belt cake, so an
+empty working slot is no longer indistinguishable from an empty belt.
 
 #### Each machine works on its own slot, and plays its own animation
 
 `ComfyCakesGame::InitGameUI` hands the six `<Tool>` elements their belt positions as it loads them
 (`0x10005DABC`: `Tool+60 = the tool count so far + 2`), in COMFYCAKESGAME.XML's document order —
 so **CakePanTool slot 2, BatterTool 3, FillingTool 4, IcingTool 5, DecorationTool 6,
-FinalTouchTool 7**, which is the left-to-right order of the machines in the room.  `Tool::UseTool`
+FinalTouchTool 7** initially. `ShowTools` (`0x100060954`) then shifts Beginner's pan/batter
+containers **100 px right**, assigns them **slots 3 / 4**, hides filling on Beginner, and hides
+final touch except on Advanced. Icing and decoration remain at slots 5 / 6. The pan's machine
+Base also has an independent **25 px** X offset, which does not move its buttons. `Tool::UseTool`
 (`0x10007525C`) takes `ConveyorBelt::GetCake` at that slot, so a cake has to be slid under its
 machine before the machine can work on it: the cake enters at slot 1, is built as it is slid right
 through slots 2..7, and is judged when it reaches the last slot (8).  Every slide still moves each
@@ -282,8 +296,8 @@ A click is `Tool::UseTool`:
 | Branch | Engine | Reconstruction |
 |---|---|---|
 | the cake cannot answer it, or the machine has no cake under it | two `GameAudio` protos, then `NodeBase::ResumeAnimation` on the machine Base with `MachineUnusableShakeAnim.xml` (a `+6 / -12 / +6` X-position run, 0.2 s), and the `NeedWaxPaper` bubble when no cake is in reach | `Con_CakeButtons`, `cakes_tools_shake`, `refused, the cake cannot take it` / `there is no cake under it` |
-| the cake can answer it | the machine's own animation for the button's `<Type>`, and `Tool::FinishAddTool` (`0x10007548A`) applies the layer when it completes | `Con_CakeBatterButton`, `cakes_tools_start`, and the layer is drawn again when the 0.6 s animation ends |
-| the cake's top layer | hidden while the animation runs (`PlayAddToolAnimation` `0x100075F46`), and the batter machine's shape fill sprite is re-parented onto the cake (`NodeBase::ImportNode` `0x100076050`) | the cake's last layer is left out of the draw while the machine plays, and the fill sprite is drawn inside the cake's own coordinates |
+| the cake can answer it | the machine's animation for the button's `<Type>`, then `Tool::FinishAddTool` (`0x10007548A`) | callback-sequenced effects; duration comes from the scheduled action, drop and effect timelines, not a fixed 0.6 s |
+| the cake's top layer | batter hides its replaced top and imports the matching shape fill onto the cake | immutable pre-use stack plus one shape fill; other ingredients retain the existing stack until their effect/reveal cue |
 
 The machines' parts and their animations come straight out of the tool documents:
 
@@ -298,28 +312,62 @@ The machines' parts and their animations come straight out of the tool documents
 
 A `ResourceAnimation` is a list of `<Animation>` blocks, each with an `<Affects>` property, a
 `LinearAbsolute` (`<Start>`→`<End>`) or `LinearRelative` (`<Count>`) run and a `<Time>` in seconds,
-with `<WaitForComplete/>` between them — which every shipped set uses, so the blocks concatenate
-into one timeline per part.  A block contributes nothing until it starts, its interpolated value
-while it runs and its end value afterwards; a relative block adds to what is already there, which
-is how the shake's three runs sum back to zero.  The frame a block names is read past the sprite's
-declared `FrameCount` for several machines, which is what the engine's own arithmetic does, so the
-geometry passed to `sprite_frame_rect` uses the animation's reach.
+with `<WaitForComplete/>` separating sequential groups. [animation.cpp](src/animation.cpp) handles
+parallel blocks, independent Position axes, relative accumulation and frame-crossing `IntMessage`
+cues. **Correction:** the session-33 claim that UVs read beyond a sprite's `FrameCount` was wrong.
+`NodeSprite::UpdateCurrentUVs` (`0x100094484`) clamps UVs to `FrameCount - 1`; logical frames can
+still trigger callbacks. The previous override drew neighboring sheet art and made machines
+appear corrupted or disappear. The viewer now respects the declared count.
 
-The Chef's movie now plays frame by frame: `cakes_chef_advance` reports whether his visible frame
-changed and the frame loop rewrites the two animated layers (the Chef and the machines) in place,
-so the static room is not rebuilt per frame.
+The frame loop updates the Chef, machines, belt and dispatch without rebuilding the static room
+per tick. Unchanged HUD text is retained. Scripted `wait:MS` now waits without blocking that loop.
 
-The operation matrix is the one part that is **not** fully settled.  `LayerOperations::
-GetLayerOperation` (`0x10006F1F0`) indexes a 6x6 table at `0x100014430`, and the row is the top
-layer's class rather than its tool station: `Cake::CanAddLayer`'s own illegal-move tips prove
-class 0 is a batter (`IllegalMoveBatterOnBatter` fires when the top layer is class 0) and class 1
-a pan (`IllegalMoveFillingOnPanOrEmpty` when it is class 1), while `Cake::Compare`'s decoration
-branch tests class 2 and its final-touch branch 4.  Filling therefore shares the batter's class 0,
-which is why icing sits on a filling, and class 3 is unreachable.  One consequence is still open:
-with that reading, putting batter on a pan is operation 2, which **replaces** the pan, so a
-generated target never contains a pan layer.  The transposed reading (row = the tool) would keep
-it.  Both the generator and the player go through the same table, so the round stays playable and
-self-consistent either way; which one the shipped build uses is the next RE item.
+The matrix row is the top layer's **class**, not the tool station; filling shares batter's class 0.
+`Cake::AddLayer` (`0x1000567EC`) confirms operation 2 consumes the replaced layer, so batter removes
+its pan. The older claim that this was still unsettled is superseded by sections 31 and 34 of the
+RE notes. A second batter layer needs a new pan first, recorded in the target's move sequence.
+
+Idle bodies and bases are visible; falling pans/batter/decorations, splats, streams and batter
+fills are hidden until their machine runs. Both idle and animated machines belong to one dynamic
+layer, avoiding a second stationary machine behind an animated/shaking copy. Shared effect
+animations now select sprite flavour/shape independently. The pan/decoration drop endpoints and
+icing effect anchors use their recovered callbacks. Pan/decoration drops now integrate the
+recovered integer 60 Hz velocity/acceleration, and effect starts follow authored frame cues.
+Some removal/replacement transitions and audio remain approximations. The TV target uses the
+shipped **80% scale** and shape-dependent vertical offset (`CakeScreen::SetCake`, `0x100057C78`).
+
+#### Conveyor, wrapping and the next order (session 35)
+
+[cakes_transport.cpp](src/viewer/cakes_transport.cpp) owns the roller, chute and dispatch clocks.
+Initial placement uses `98*p - 66`; moving cakes retain the shipped **92 px / 0.5 s** path and its
+endpoint, rather than snapping another 6 px. Left/right roller frames run in the matching direction.
+Correct cakes remain visible until BoxDrop covers/fades them, then a wrapped CakeBox travels on its
+**1.4 s** path and the delivery sign plays. Wrong cakes animate the trash, red light and blinking
+readout. Gift boxes are hidden when idle, and pending shipments queue rather than erase a running
+gift. Hover/DPI rebuilds retain clocks; restarting cancels them.
+
+A correct cake generates a visibly different next TV order; a wrong one retries its order. Original
+`ConveyorBelt::AddCake` (`0x100062E44`) regenerates after success on Beginner or time attack.
+Doing so for untimed Intermediate/Advanced too, and avoiding immediate repeats, are requested
+usability additions. Move minima now accumulate for the different successful orders.
+
+Checks: CTest includes [animation_test.cpp](tests/animation_test.cpp) and the 3000-target model
+fixture. [cakes_regression.py](tests/cakes_regression.py) checks layout, all-difficulty solves,
+changing targets, reset/navigation and Pairs (23 runs). [cakes_animation_regression.py](tests/cakes_animation_regression.py)
+samples all six machines, roller motion, wrapping/dispatch/trash, reset and hover in both DPI modes
+(42 normal-click captures). Arguments: build directory, local sample directory, output directory.
+Timing samples are tolerant and are not a claim of original-game pixel/timing parity.
+
+Remaining Comfy Cakes gaps: automatic/time-attack timers, simultaneous belt cakes/line-clog loss,
+full removal/replacement choreography, exact sound mapping, decoration placement/orientation,
+TV transition/highlight behavior and persisted round state.
+
+Regression checks: `ctest --test-dir build/pple-res --output-on-failure` checks 3000 generated
+cakes and widget ownership. `tests/cakes_regression.py BUILD_DIR SAMPLE_DIR TRACE_DIR` checks all
+three difficulties in both art modes, normal clicks, solves, menu roundtrip, keyboard difficulty
+changes/restarts and the three Pairs solves (23 runs). `--script-click` accepts `key:1`, `key:2`,
+`key:3`, `key:n` and `key:r` to exercise the real SDL keyboard event path. Captures and logs for
+this correction are under `C:\re\traces\cpp\cc\s34`.
 
 ### The Professor, his tips, and the two dialogs drawn inside the game
 

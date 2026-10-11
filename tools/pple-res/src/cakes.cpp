@@ -163,10 +163,10 @@ Cake CakeModel::generate_correct(int difficulty, const std::function<int()>& rng
     for (int i = 0; i < layer_count; ++i) {
         put(1, 3 + shape);      // the pan, which sets the cake's shape
         put(0, rng() % 3);      // the batter
-        put(3, 10 + rng() % 3); // the filling
-        if (layer_count - i > 1) put(5, 15 + rng() % 3);  // the icing that closes the layer
+        // GenerateCorrectCake (0x100060460) adds filling only between cake layers.
+        // Beginner has a single layer and no filling machine.
+        if (layer_count - i > 1) put(3, 10 + rng() % 3);
     }
-    put(5, 15 + rng() % 3);  // the icing on the top layer
     // The toppings.  GenerateCorrectCake keeps a list of candidate decorations and takes from it
     // until the target has `topping_count` of them.
     std::vector<int> candidates;
@@ -214,7 +214,7 @@ Cake CakeModel::generate_correct(int difficulty, const std::function<int()>& rng
             }
         }
     }
-    for (const CakeLayer& layer : cake.layers) cake.height_delta += delta_of(layer.index);
+    // use_tool already maintains height_delta; do not count the layers twice.
     return cake;
 }
 
