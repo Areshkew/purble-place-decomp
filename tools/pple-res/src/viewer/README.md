@@ -351,6 +351,20 @@ pixel comparisons.
   the other integration scripts. [cakes_test.cpp](../../tests/cakes_test.cpp) adds shaped-height
   and replacement assertions. Script navigation restarts frame layout before capture.
 
+### Tool focus and shipping readout correction (session 37)
+
+- `build_cakes` in [cakes_screen.cpp](cakes_screen.cpp) centres each tool's halo on its combined
+  visible button rects, including registration and the Beginner shift. Button geometry is unchanged.
+- [cakes_transport.cpp](cakes_transport.cpp) draws ScreenSlot **frames** 2 (permanent success) / 1
+  (rejection flash) from its single sprite animation; empty slots have alpha 0. Its dedicated
+  `CakeTransport::readout_time/readout_slot` start in `cakes_judge` and reset in `cakes_new_game`
+  ([cakes_play.cpp](cakes_play.cpp)), independently of the gift dispatch queue. Hover rebuilds keep
+  those clocks. This corrects the prior readout claim: selecting animation 1/2 fell back to frame 0.
+- [cakes_focus_readout_regression.py](../../tests/cakes_focus_readout_regression.py) covers every
+  visible tool group on all three difficulties, success, rejection, expiration, queued gifts,
+  hover/reset persistence and final readouts across both rows in both DPI modes. Arguments:
+  `BUILD_DIR SAMPLE_DIR TRACE_DIR`.
+
 Keep this map current. Add behavior to the owning module, not the entry point or
 a catch-all helper. Split a module further only at a cohesive boundary; keep state
 ownership and the relevant regression commands explicit. Functional changes and

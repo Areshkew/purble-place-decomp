@@ -32,6 +32,9 @@ struct CakeTransport {
     std::vector<std::pair<float, float>> positions;
     float belt_time = -1, belt_total = 0;
     bool reverse = false, judge_after_slide = false;
+    // Rejection flash starts at judging, independently of queued gift dispatch.
+    float readout_time = -1;
+    int readout_slot = -1;
     float shipping_time = -1;
     bool correct = false;
     pple::Cake shipping_cake;

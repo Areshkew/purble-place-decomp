@@ -379,6 +379,24 @@ Timing samples are tolerant and are not a claim of original-game pixel/timing pa
   CTest also covers per-shape heights and replacement. `--cakes-solve` is now one-shot so its
   result-panel New Game starts a playable round rather than solving it again.
 
+#### Tool focus and shipping readout corrections (session 37)
+
+- Tool halos are centred on the combined visible button rectangles, including sprite registration
+  and Beginner's 100 px shift. Buttons and hit tests do not move; one group is highlighted at a time.
+  Like the arrow correction, this is a requested visual alignment, not original-coordinate parity.
+- The top-right readout now uses **frames** of `ScreenSlotSprite`'s single animation, not animation
+  indices: frame 2 stays visible after a correct cake; frame 1 flashes on the next empty slot after
+  a rejected cake. Unfilled slots are transparent, removing the two rows of permanent dashes.
+  `InitGameUI` (`0x10005D018`) sets initial alpha 0; `OnCakeDone` (`0x10005C120`) selects frame 2/1.
+  Rejection uses the shipped four-pulse, 2-second alpha animation and a separate judging clock,
+  so a queued gift cannot delay the flash. Hover retains state; restart clears it.
+  This corrects session 35's overly broad claim that the readout was already working.
+- [cakes_focus_readout_regression.py](tests/cakes_focus_readout_regression.py) checks every visible
+  tool group on all difficulties, correct/wrong/queued/expired/reset readouts, and both rows in
+  full solves, with both DPI modes (**54 runs PASS**). It uses the same three directory arguments
+  as the other tests. Existing UI/gameplay/animation regressions also pass: **149 viewer runs total**
+  plus **2 CTests**, evidence under `C:\re\traces\cpp\cc\s37-*`.
+
 Remaining Comfy Cakes gaps: automatic/time-attack timers, simultaneous belt cakes/line-clog loss,
 full removal/replacement choreography, exact sound mapping, decoration placement/orientation,
 TV transition/highlight behavior and persisted round state.

@@ -103,7 +103,13 @@ void App::cakes_transport_ship(const pple::Cake& cake, bool correct, float x, fl
         correct ? "box drop -> wrapped gift -> shipping" : "red light -> trash");
 }
 bool App::cakes_transport_advance(float dt) {
-    const bool moved = cakes_transport.belt_time >= 0 || cakes_transport.shipping_time >= 0;
+    const bool moved = cakes_transport.belt_time >= 0 || cakes_transport.shipping_time >= 0 ||
+                       cakes_transport.readout_time >= 0;
+    if (cakes_transport.readout_time >= 0) {
+        cakes_transport.readout_time += dt;
+        if (cakes_transport.readout_time >= cakes_transport.animations["ScreenSlot"].total)
+            cakes_transport.readout_time = -1;
+    }
     if (cakes_transport.shipping_time >= 0) {
         const float old = cakes_transport.shipping_time;
         cakes_transport.shipping_time += dt;
@@ -161,10 +167,18 @@ void App::cakes_transport_draw(bool foreground) {
             for (const auto& cue : node.animation.cues)
                 if (cue.complete && shipping >= cue.time) state = cue.value;
         } else if (node.key == "ScreenSlot") {
-            state = readout < cakes_correct ? 2 : 0;
-            if (readout == cakes_correct && dispatch && !cakes_transport.correct && shipping < node.animation.total) {
-                state = 1;
-                item.alpha = static_cast<int>(pple::animation_value(node.animation, shipping).alpha);
+            // ScreenSlotSprite has ONE animation with three FRAMES. Selecting
+            // animation 1/2 silently resolves animation 0 and leaves the dash unchanged.
+            // InitGameUI (0x10005D018) starts slots transparent; OnCakeDone
+            // (0x10005C120) makes frame 2 permanent for a success, or blinks frame 1
+            // on the next unfilled slot for a rejection. Unfilled slots stay blank.
+            state = 0;
+            frame = readout < cakes_correct ? 2 : 0;
+            item.alpha = readout < cakes_correct ? 255 : 0;
+            if (readout >= cakes_correct && readout == cakes_transport.readout_slot &&
+                cakes_transport.readout_time >= 0) {
+                frame = 1;
+                item.alpha = static_cast<int>(pple::animation_value(node.animation, cakes_transport.readout_time).alpha);
             }
             ++readout;
         } else if (node.key == "ShippingSign") {

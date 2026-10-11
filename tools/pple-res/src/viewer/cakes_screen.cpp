@@ -371,6 +371,33 @@ void App::build_cakes() {
         const std::map<std::size_t, std::string>::const_iterator highlight = highlight_tool.find(i);
         if (highlight != highlight_tool.end()) {
             if (hover_tool.empty() || highlight->second != hover_tool) continue;
+            // The shared halo surrounds this tool's entire button group, not the
+            // machine Base. Centre it on the visible buttons (including registration
+            // and the Beginner shift), rather than the displaced authored offset.
+            float left = 0, top = 0, right = 0, bottom = 0;
+            bool found = false;
+            for (const auto& candidate : entries) {
+                const auto& button = candidate.item;
+                if (button.kind != pple::NodeKind::Button ||
+                    button.widget_name != item.widget_name) continue;
+                const Sprite face = resolve_sprite(bundle, button.ref, 0);
+                if (!face.ok) continue;
+                const int station = cakes_tool_station(button.widget_name);
+                const float shift = cakes_difficulty == 0 && (station == 0 || station == 1)
+                                        ? 100.0f : 0.0f;
+                const float x = button.x + shift - face.reg_x * button.scale;
+                const float y = button.y - face.reg_y * button.scale;
+                const float r = x + face.src.w * button.scale;
+                const float b = y + face.src.h * button.scale;
+                if (!found) { left = x; top = y; right = r; bottom = b; found = true; }
+                else { left = std::min(left, x); top = std::min(top, y);
+                       right = std::max(right, r); bottom = std::max(bottom, b); }
+            }
+            const Sprite halo = resolve_sprite(bundle, item.ref, 0);
+            if (found && halo.ok) {
+                item.x = (left + right - halo.src.w * item.scale) / 2 + halo.reg_x * item.scale;
+                item.y = (top + bottom - halo.src.h * item.scale) / 2 + halo.reg_y * item.scale;
+            }
         } else if (full == "SlideLeftHighlightSprite" || full == "SlideRightHighlightSprite") {
             const bool left = full == "SlideLeftHighlightSprite";
             const std::string button_name = left ? "SlideLeftButton" : "SlideRightButton";

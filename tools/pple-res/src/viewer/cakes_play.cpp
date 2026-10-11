@@ -123,6 +123,8 @@ void App::cakes_new_game(int difficulty) {
     cakes_transport.motion.clear();
     cakes_transport.belt_time = cakes_transport.shipping_time = -1;
     cakes_transport.judge_after_slide = false;
+    cakes_transport.readout_time = -1;
+    cakes_transport.readout_slot = -1;
     cakes_transport.shipping_cake = {};
     cakes_transport.shipping_pending.clear();
     cakes_minimum_moves = 0;
@@ -388,6 +390,12 @@ void App::cakes_judge() {
         cakes_score += v.wrong_cake_points;
         std::printf("cakes: cake judged wrong (%d), %+d point(s)\n", cakes_missed,
                     v.wrong_cake_points);
+    }
+    if (right) {
+        cakes_transport.readout_time = -1; // a success stops the next slot's rejection flash
+    } else {
+        cakes_transport.readout_slot = cakes_correct;
+        cakes_transport.readout_time = 0;
     }
     if (right) {
         for (const auto& layer : cakes_target.layers)
