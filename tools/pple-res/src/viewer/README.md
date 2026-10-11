@@ -365,6 +365,16 @@ pixel comparisons.
   hover/reset persistence and final readouts across both rows in both DPI modes. Arguments:
   `BUILD_DIR SAMPLE_DIR TRACE_DIR`.
 
+### Cake/conveyor alignment correction (session 38)
+
+- [cakes_transport.cpp](cakes_transport.cpp) fits each slide's authored axis displacement to the
+  fixed destination slot, preserving its timing with no endpoint snap. `CakeBeltMotion::scale_x/y`
+  in [cakes_transport.hpp](cakes_transport.hpp) own this per-slide adjustment; raw chute staging
+  remains separate. Keeping 92px endpoints on a 98px grid previously accumulated leftward drift.
+- [cakes_belt_alignment_regression.py](../../tests/cakes_belt_alignment_regression.py): 36 local-asset
+  captures, all difficulties/both DPIs, initial/repeated/reversed slides, moving hover and replacement
+  chute-to-belt entry. Same `BUILD_DIR SAMPLE_DIR TRACE_DIR` arguments as other viewer tests.
+
 Keep this map current. Add behavior to the owning module, not the entry point or
 a catch-all helper. Split a module further only at a cohesive boundary; keep state
 ownership and the relevant regression commands explicit. Functional changes and

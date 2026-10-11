@@ -343,8 +343,12 @@ shipped **80% scale** and shape-dependent vertical offset (`CakeScreen::SetCake`
 #### Conveyor, wrapping and the next order (session 35)
 
 [cakes_transport.cpp](src/viewer/cakes_transport.cpp) owns the roller, chute and dispatch clocks.
-Initial placement uses `98*p - 66`; moving cakes retain the shipped **92 px / 0.5 s** path and its
-endpoint, rather than snapping another 6 px. Left/right roller frames run in the matching direction.
+Cake placement uses the fixed `98*p - 66` slot grid. Slides fit the authored **92 px / 0.5 s**
+path to the next **98 px** slot, preserving timing without a final snap. Retaining the raw endpoint
+(session 35) caused a cumulative **6 px left offset per right slide**; session 38 corrects that
+claim and implementation. Chute entry also reaches the same grid. This is a reconstruction
+alignment correction, not verified original-game animation parity. Left/right roller frames run
+in the matching direction.
 Correct cakes remain visible until BoxDrop covers/fades them, then a wrapped CakeBox travels on its
 **1.4 s** path and the delivery sign plays. Wrong cakes animate the trash, red light and blinking
 readout. Gift boxes are hidden when idle, and pending shipments queue rather than erase a running
@@ -361,6 +365,9 @@ changing targets, reset/navigation and Pairs (23 runs). [cakes_animation_regress
 samples all six machines, roller motion, wrapping/dispatch/trash, reset and hover in both DPI modes
 (42 normal-click captures). Arguments: build directory, local sample directory, output directory.
 Timing samples are tolerant and are not a claim of original-game pixel/timing parity.
+[cakes_belt_alignment_regression.py](tests/cakes_belt_alignment_regression.py) checks fixed slot
+coordinates after repeated slides, reversals, moving hover and replacement chute entry across
+all three difficulties and both DPIs (36 captures; same directory arguments).
 
 #### Comfy Cakes UI/visual corrections (session 36)
 

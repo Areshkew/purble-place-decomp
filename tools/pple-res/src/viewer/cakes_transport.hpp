@@ -18,6 +18,8 @@ struct CakeBeltMotion {
     int slot = 0;
     float x = 0, y = 0;
     pple::AnimationSet animation;
+    // Fit the authored path to the destination slot; never accumulate its shorter displacement.
+    float scale_x = 1, scale_y = 1;
 };
 // App owns these clocks; room rebuilds only replace node descriptions, never active motion.
 struct CakeShipment {

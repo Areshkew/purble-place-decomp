@@ -54,7 +54,7 @@ for dpi in ('no-hidpi', 'hidpi'):
     belt = draws(run('belt-mid-' + dpi, dpi, '260,440', 180))
     settled = draws(run('belt-end-' + dpi, dpi, '260,440', 800))
     assert idle['WaxPaper'][0] < belt['WaxPaper'][0] < settled['WaxPaper'][0]
-    assert abs(settled['WaxPaper'][0] - idle['WaxPaper'][0] - 92) < 1, 'authored 92px motion has no 6px snap'
+    assert abs(settled['WaxPaper'][0] - idle['WaxPaper'][0] - 98) < 1, 'cake must reach the next 98px slot without drift'
     assert belt['MainBeltSprite'][4:6] != idle['MainBeltSprite'][4:6], 'roller frame must advance'
     batter = draws(run('batter-shape-' + dpi, dpi, '200,350;260,440;310,350', 280))
     assert has(batter, 'RectangleBatterFill') and not has(batter, 'RoundBatterFill') and not has(batter, 'HeartBatterFill')
@@ -104,5 +104,5 @@ for dpi in ('no-hidpi', 'hidpi'):
     hover_text = run('hover-box-' + dpi, dpi, ship + ';wait:1300;move:410,315', 650)
     hover = draws(hover_text)
     assert 'CakeBox' in hover and hover['CakeBox'][0] > 687
-    print(dpi + ': cues, single shape, 92px belt/roller, drop, gift, dispatch, trash, reset, hover PASS')
+    print(dpi + ': cues, single shape, 98px aligned belt/roller, drop, gift, dispatch, trash, reset, hover PASS')
 print(f'PASS: {runs} normal-click animation captures')

@@ -54,8 +54,8 @@ void App::cakes_transport_position(int slot, float& x, float& y) const {
     for (const auto& motion : cakes_transport.motion) {
         if (motion.slot != slot) continue;
         const auto value = pple::animation_value(motion.animation, cakes_transport.belt_time);
-        x = motion.x + value.dx;
-        y = motion.y + value.dy;
+        x = motion.x + value.dx * motion.scale_x;
+        y = motion.y + value.dy * motion.scale_y;
         return;
     }
 }
@@ -63,7 +63,8 @@ void App::cakes_transport_finish_slide() {
     if (cakes_transport.belt_time < 0) return;
     for (const auto& motion : cakes_transport.motion) {
         const auto value = pple::animation_value(motion.animation, motion.animation.total);
-        cakes_transport.positions[motion.slot] = {motion.x + value.dx, motion.y + value.dy};
+        cakes_transport.positions[motion.slot] = {
+            motion.x + value.dx * motion.scale_x, motion.y + value.dy * motion.scale_y};
     }
     cakes_transport.belt_time = -1;
     cakes_transport.motion.clear();
@@ -85,7 +86,17 @@ void App::cakes_transport_slide(int direction) {
         y = cakes_transport.positions[from].second;
         const std::string anim = from == 0 ? "CakeSlideDownLeft" : slot == 0 ? "CakeSlideUpRight"
             : direction > 0 ? "CakeSlideRight" : "CakeSlideLeft";
-        cakes_transport.motion.push_back({static_cast<int>(slot), x, y, cakes_transport.animations[anim]});
+        CakeBeltMotion motion{static_cast<int>(slot), x, y, cakes_transport.animations[anim]};
+        float target_x, target_y;
+        pple::CakeModel::belt_position(static_cast<int>(slot), target_x, target_y);
+        const auto end = pple::animation_value(motion.animation, motion.animation.total);
+        // The resource moves 92px, but the slot grid is 98px. Retaining the raw
+        // endpoint puts cakes increasingly left of the machines. Fit each axis
+        // to the slot while preserving the resource's timing and continuous path.
+        // This also brings replacement cakes from the chute onto the same grid.
+        if (end.dx != 0) motion.scale_x = (target_x - x) / end.dx;
+        if (end.dy != 0) motion.scale_y = (target_y - y) / end.dy;
+        cakes_transport.motion.push_back(std::move(motion));
     }
     cakes_transport.judge_after_slide = direction > 0 && cakes_belt_present.back();
 }
