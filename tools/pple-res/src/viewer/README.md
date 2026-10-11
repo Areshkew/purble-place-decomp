@@ -16,6 +16,8 @@ flags and the core library's public interfaces are unchanged.
 | Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append`, `start_cakes`, `cakes_dump_draws` |
 | Comfy Cakes: the round's state over the SDL-free model | [cakes_play.cpp](cakes_play.cpp): `cakes_new_game`, `cakes_use_tool`, `cakes_slide_to`, `cakes_slide_left`, `cakes_slide_right`, `cakes_judge`, `cakes_compute_score`, `cakes_draw_cake`, `cakes_refresh`, `cakes_redraw`, `cakes_solve` |
 | Comfy Cakes: difficulty-specific machine visibility/slots, idle parts and tool animations | [cakes_tools.cpp](cakes_tools.cpp): `cakes_tool_visible`, `cakes_tool_slot_for`, `cakes_tools_load`, `cakes_tools_start`, `cakes_tools_shake`, `cakes_tools_advance`, `cakes_tools_draw` |
+| Purble Shop: the room, its documents and the cabinet | [shop_screen.cpp](shop_screen.cpp): `start_shop`, `build_shop`, `shop_refresh`, `shop_append`, `shop_draw_cabinet`, `shop_draw_face`; records in [shop_screen.hpp](shop_screen.hpp) |
+| Purble Shop: the round over the SDL-free model | [shop_screen.cpp](shop_screen.cpp): `shop_new_game`, `shop_select`, `shop_guess`, `shop_draw_history`, `shop_draw_counts`; rules in [shop.cpp](../shop.cpp) |
 | Comfy Cakes: belt/roller clocks, chute, wrapping, dispatch, trash and shipping readouts | [cakes_transport.cpp](cakes_transport.cpp): `cakes_transport_advance`, `cakes_transport_draw`, `cakes_transport_finish_slide`, `cakes_next_target`; state owned by `App::cakes_transport` in [cakes_transport.hpp](cakes_transport.hpp) |
 | ResourceAnimation parsing/evaluation, cue times and integer drop integration (SDL-free) | [animation.cpp](../animation.cpp), [animation.hpp](../../include/pple/animation.hpp); tests in [animation_test.cpp](../../tests/animation_test.cpp) |
 | Comfy Cakes: the Purble Chef's states, movies and tips | [cakes_chef.cpp](cakes_chef.cpp): `cakes_load_chef`, `cakes_chef_show`, `cakes_chef_advance`, `cakes_draw_chef` |
@@ -374,6 +376,36 @@ pixel comparisons.
 - [cakes_belt_alignment_regression.py](../../tests/cakes_belt_alignment_regression.py): 36 local-asset
   captures, all difficulties/both DPIs, initial/repeated/reversed slides, moving hover and replacement
   chute-to-belt entry. Same `BUILD_DIR SAMPLE_DIR TRACE_DIR` arguments as other viewer tests.
+
+### Purble Shop (session 40)
+
+- [shop_screen.cpp](shop_screen.cpp) owns the third game's room and [shop_screen.hpp](shop_screen.hpp)
+  its parsed documents. Purble Shop is internally **Build-a-Purble**; the room is not a plain
+  layout either, so the module parses `UI\BuildAPurble\BuildAPurbleGame.xml`,
+  `UI\BuildAPurble\Cabinet\Cabinet.xml` and one `UI\BuildAPurble\PurbleFaceTemplate*.xml` and draws
+  the elements itself: background, mystery head, curtain at its own frame, spotlights, the cabinet's
+  stones/shelves/one visible variant per colour/check boxes, the guess button, the history strip,
+  the colour counts and both faces. `shop_append` is the one placement helper (registration and
+  scale, `state` for a button's hover art, `frame` for the curtain, the numbers and the
+  thermometer).
+- The round's state is `pple::ShopModel` ([shop.hpp](../../include/pple/shop.hpp),
+  [shop.cpp](../../src/shop.cpp)) and the viewer only moves and draws it: `shop_select` is
+  `OnSetFeature`'s toggle plus the item's own `<SoundID>`, `shop_guess` is `MakeGuess` (counts,
+  score, history, Beginner's check-box marks, the reveal and the end-of-round panel).
+  `shop_refresh` = `build_shop` + the HUD; it runs on a click, a hover or a screen rebuild, never
+  per tick.
+- The screen is `Screen::Shop`: the menu's `BuildAPurbleButton` opens the shared chooser with
+  `picker_shop` (the shop's own background and option text), the choice calls `start_shop`, and
+  `ESC`, `ReturnToMainMenu` or the result panel's Main Menu leave through `game_to_menu`.
+  `--shop [D]`, `--shop-seed N` and `--shop-dump` are the CLI hooks.
+- Sounds go through [audio.cpp](audio.cpp)'s shared cache: `initialise_shop_audio` preloads the
+  twelve room events and `audio_event_at(bundle, proto)` maps a template `<SoundID>` to its event
+  key, so a picked item plays its own sound and nothing decodes twice.
+- Regression: [shop_test.cpp](../../tests/shop_test.cpp) (CTest `shop-rules`) covers the
+  comparison rule, the per-difficulty setup, the toggle, the score arithmetic and both end
+  conditions; `tests/cakes_regression.py` still passes over the menu/chooser/loop changes.
+  Not implemented yet: the curtain/stage intro animations, the win animation, the inflate
+  animation, history scrolling, check-box tagging, the tips and the save files.
 
 Keep this map current. Add behavior to the owning module, not the entry point or
 a catch-all helper. Split a module further only at a cohesive boundary; keep state

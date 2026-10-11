@@ -129,12 +129,22 @@ void App::build_difficulty() {
             button.label = choices[i].difficulty;
             button.detail = i == 0 ? "One cake layer, no filling" :
                             i == 1 ? "Two cake layers with filling" : "Three cake layers and final touches";
+        } else if (picker_shop) {
+            // Purble Shop's own three levels: the number of colours, feature shelves and guesses
+            // (Constants.xml MaxGuessesINT 7 / MaxGuessesADV 13).
+            button.label = choices[i].difficulty;
+            button.detail = i == 0 ? "Three colours, three shelves, no guess limit" :
+                            i == 1 ? "Four colours and shelves, seven guesses"
+                                   : "Five colours and shelves, thirteen guesses";
         }
         picker_buttons.push_back(button);
     }
     screen = Screen::Difficulty;
     if (picker_cakes) {
         hud_lines = {"Comfy Cakes", "Select Difficulty"};
+        rebuild_hud();
+    } else if (picker_shop) {
+        hud_lines = {"Purble Shop", "Select Difficulty"};
         rebuild_hud();
     }
     draw_difficulty();
@@ -151,7 +161,9 @@ void App::draw_difficulty() {
         // The classroom is UI\Concentration\hearts.xml's own sprite -- the same Background.png
         // the board screen puts behind the cards (ConcentrationGame::LoadGameUI 0x100081042).
         const Sprite back = resolve_sprite(bundle, picker_cakes
-            ? "UI\\ComfyCakes\\ComfyCakesBackground2.xml" : "UI\\Concentration\\hearts.xml", 0);
+            ? "UI\\ComfyCakes\\ComfyCakesBackground2.xml"
+            : picker_shop ? "UI\\BuildAPurble\\Background.xml"
+                          : "UI\\Concentration\\hearts.xml", 0);
         std::string how;
         const auto* slot = back.ok ? bundle.resolve(back.requested, how) : nullptr;
         if (slot != nullptr) {
@@ -178,7 +190,7 @@ void App::draw_difficulty() {
     }
     // The Professor waits in the classroom while the player chooses, which is the same
     // /ProfessorContainer anchor (295,70) the board uses.
-    if (!picker_cakes && load_professor_movie("ProfessorIdleAnimation")) {
+    if (!picker_cakes && !picker_shop && load_professor_movie("ProfessorIdleAnimation")) {
         const pple::Movie& idle = prof_movie_cache["ProfessorIdleAnimation"];
         const float fps = idle.parts.empty() ? 12.0f : pple::movie_frame_rate(idle, idle.parts.front());
         const int mframe = (idle.frame_count > 1 && fps > 0.0f)
@@ -200,7 +212,8 @@ void App::draw_difficulty() {
                     412.0f);
         append_text(picker_draws, green_style().body_face, 8.0f, 0x00606060u,
                     picker_cakes ? "You can change difficulty during play with keys 1, 2 or 3."
-                                 : (note.empty() ? kDifficultyNote.english : note),
+                                 : picker_shop ? "Pick a feature for every shelf, then Make Guess."
+                                               : (note.empty() ? kDifficultyNote.english : note),
                     194.0f, 100.0f, 412.0f);
     }
     for (const UiButton& button : picker_buttons) append_button(picker_draws, button, 12.0f);
@@ -234,8 +247,10 @@ void App::build_result_panel(bool won) {
     result_buttons = {again, difficulty, menu};
     draw_result_panel();
     std::printf("  result panel: %s, score %d%s\n", won ? "WON" : "LOST",
-                screen == Screen::ComfyCakes ? cakes_final : pairs_board.score(),
-                (screen != Screen::ComfyCakes && won && last_end_ok)
+                screen == Screen::ComfyCakes ? cakes_final
+                    : screen == Screen::Shop ? shop_model.score()
+                                             : pairs_board.score(),
+                (screen != Screen::ComfyCakes && screen != Screen::Shop && won && last_end_ok)
                     ? (", " + std::to_string(last_end.total) + " -> " + last_end.title).c_str()
                     : "");
 }
@@ -247,7 +262,7 @@ void App::draw_result_panel() {
     const float panel_x = 200.0f, panel_y = 80.0f, panel_w = 400.0f, panel_h = 336.0f;
     append_panel(result_draws, panel_x, panel_y, panel_w, panel_h);
 
-    const TipDef* title_tip = screen == Screen::ComfyCakes ? nullptr :
+    const TipDef* title_tip = (screen == Screen::ComfyCakes || screen == Screen::Shop) ? nullptr :
         find_tip(result_won ? "ProWin1" : "ProLose1");
     const std::string title = title_tip != nullptr ? title_tip->title
                              : (result_won ? std::string("You Won!") : std::string("Lost Game"));
@@ -262,12 +277,26 @@ void App::draw_result_panel() {
                     0.0f);
         y += 20.0f;
     };
-    line(kGamePoints, screen == Screen::ComfyCakes ? cakes_score : pairs_board.score());
+    line(kGamePoints, screen == Screen::ComfyCakes ? cakes_score
+                             : screen == Screen::Shop ? shop_model.score()
+                                                      : pairs_board.score());
     if (screen == Screen::ComfyCakes) {
         line(kFinalScore, cakes_final);
         append_text(result_draws, green_style().body_face, 10.0f, 0x00303030u,
                     std::to_string(cakes_correct) + " correct, " + std::to_string(cakes_missed) +
                     " missed; moves bonus " + std::to_string(cakes_bonus), panel_x + 16.0f, y, 0.0f);
+    } else if (screen == Screen::Shop) {
+        // MakeGuess's own numbers: how many features were right, and how many guesses it took
+        // (Advanced also counts the right-colour wrong-feature ones).
+        append_text(result_draws, green_style().body_face, 11.0f, 0x00303030u,
+                    std::to_string(shop_model.count()) + " colour(s) to match in " +
+                        std::to_string(shop_model.guesses()) + " guess(es)",
+                    panel_x + 16.0f, y, 0.0f);
+        y += 20.0f;
+        append_text(result_draws, green_style().body_face, 10.0f, 0x00606060u,
+                    "Last guess: " + std::to_string(shop_model.rcrf()) + " right, " +
+                        std::to_string(shop_model.rcwf()) + " right colour/wrong feature",
+                    panel_x + 16.0f, y, 0.0f);
     } else if (result_won && last_end_ok) {
         line(kFinalScore, last_end.total);
         append_text(result_draws, green_style().body_face, 11.0f, green_style().title_colour, last_end.title,

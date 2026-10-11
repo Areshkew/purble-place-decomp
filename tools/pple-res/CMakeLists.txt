@@ -23,6 +23,7 @@ add_library(pple_core STATIC
   src/movie.cpp
   src/concentration.cpp
   src/cakes.cpp
+  src/shop.cpp
   src/animation.cpp
   src/mui.cpp
   src/split_list.cpp
@@ -39,6 +40,9 @@ if(BUILD_TESTING)
   add_executable(pple-animation-test tests/animation_test.cpp)
   target_link_libraries(pple-animation-test PRIVATE pple_core)
   add_test(NAME resource-animation-timeline COMMAND pple-animation-test)
+  add_executable(pple-shop-test tests/shop_test.cpp)
+  target_link_libraries(pple-shop-test PRIVATE pple_core)
+  add_test(NAME shop-rules COMMAND pple-shop-test)
 endif()
 
 if(MSVC)
@@ -106,6 +110,7 @@ if(PPLE_BUILD_VIEW)
       src/viewer/audio.cpp
       src/viewer/browser.cpp
       src/viewer/cakes_screen.cpp
+      src/viewer/shop_screen.cpp
       src/viewer/cakes_chef.cpp
       src/viewer/cakes_tools.cpp
       src/viewer/cakes_transport.cpp

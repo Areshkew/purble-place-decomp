@@ -38,6 +38,9 @@ void App::rebuild_current_screen() {
         case Screen::ComfyCakes:
             if (cakes_ready) cakes_refresh();
             break;
+        case Screen::Shop:
+            if (shop_ready) shop_refresh();
+            break;
         case Screen::Concentration:
             if (pairs_ready) build_pairs();
             break;
@@ -155,6 +158,11 @@ int App::run_loop() {
                         // and sets the manager's state back to the menu.
                         std::printf("cakes: ESC -> main menu\n");
                         game_to_menu();
+                    } else if (screen == Screen::Shop) {
+                        // BuildAPurbleGame::ReturnToMainMenu (0x100054394) saves the state and
+                        // returns the manager to the menu.
+                        std::printf("shop: ESC -> main menu\n");
+                        game_to_menu();
                     } else {
                         running = false;
                     }
@@ -169,6 +177,15 @@ int App::run_loop() {
                     const int difficulty = key == SDLK_1 ? 0 : key == SDLK_2 ? 1 :
                                            key == SDLK_3 ? 2 : cakes_difficulty;
                     start_cakes(difficulty);
+                } else
+                if (screen == Screen::Shop &&
+                    (key == SDLK_R || key == SDLK_N || key == SDLK_1 || key == SDLK_2 || key == SDLK_3)) {
+                    // BuildAPurbleGame::HandleEvent's own keys: a new game, at a new difficulty
+                    // when 1/2/3 was pressed.
+                    const int difficulty = key == SDLK_1 ? 0 : key == SDLK_2 ? 1 :
+                                           key == SDLK_3 ? 2 : shop_difficulty;
+                    if (key == SDLK_R || key == SDLK_N) ++shop_seed;
+                    start_shop(difficulty);
                 } else
                 if ((key == SDLK_R || key == SDLK_N) && pairs_ready) {
                     ++seed_for_pairs;

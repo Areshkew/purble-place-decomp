@@ -209,6 +209,56 @@ void preload_sfx(const char* label, const char* const* events, std::size_t count
 }
 } // namespace
 
+// The proto -> event key map: GameAudio::LoadGameAudio walks <Sounds> in document order, so the
+// element at index `proto` is the sound that proto plays.  The Pairs and Cakes call sites were
+// checked against this table (0x6D..0x7A are the Con_* events), and Purble Shop's own protos are
+// all in it too: 2 LOSE_GAME, 3 BAD_MOVE, 4/5 the history arrows, 6 BAP_WIN_GAME (OnWinAnimStop
+// 0x100053A4C), 7 BAP_INTRO (OnEnterState's stage intro 0x100053121), 8 BAP_FACE_INFLATE,
+// 0x45 BAP_FEATURE_INTRO (OnEnterCurtainIntroGameState 0x100053408), 0x51 BAP_FEATURE_WIN
+// (OnEnterWonGameState 0x1000537E1), 0x58/0x59 the curtain close and win-open, and each feature
+// sprite's own <SoundID> (FaceFeatureSprite::Show 0x10006BA12).
+std::string audio_event_at(const Bundle& bundle, int proto) {
+    if (proto < 0) return {};
+    const auto* slot = bundle.find("AUDIO\\AUDIO.XML");
+    if (slot == nullptr) return {};
+    pple::XmlNode root;
+    std::string error;
+    if (!pple::xml_parse(bundle.read(*slot), root, error)) return {};
+    int index = 0;
+    for (const pple::XmlNode& group : root.children) {
+        if (group.name != "Sounds" && group.name != "Music") continue;
+        for (const pple::XmlNode& candidate : group.children) {
+            if (index == proto) return candidate.name;
+            ++index;
+        }
+    }
+    return {};
+}
+
+void play_shop_sfx(const std::string& event) {
+    if (!g_sfx_enabled || event.empty()) return;
+    if (play_pair_sfx(event))
+        std::printf("shop audio: queued %s\n", event.c_str());
+    else
+        std::fprintf(stderr, "shop audio: failed %s: %s\n", event.c_str(), SDL_GetError());
+}
+
+void initialise_shop_audio(const Bundle& bundle, bool mute) {
+    initialise_sfx(bundle, mute);
+    static bool loaded = false;
+    if (!g_sfx_ready || loaded) return;
+    loaded = true;
+    // The room's own events, plus the two shared ones MakeGuess and the arrows reach.  A feature
+    // sprite's own <SoundID> is decoded on first use instead: the manifest has 75 of them and a
+    // round can only reach its own difficulty's items.
+    const char* events[] = {
+        "UI_BUTTON", "BAD_MOVE", "LOSE_GAME", "LEFT_BUTTON", "RIGHT_BUTTON",
+        "BAP_WIN_GAME", "BAP_INTRO", "BAP_FACE_INFLATE", "BAP_FEATURE_INTRO",
+        "BAP_CURTAIN_CLOSE", "BAP_CURTAIN_WIN_OPEN", "BAP_FEATURE_WIN",
+    };
+    preload_sfx("shop ", events, sizeof(events) / sizeof(events[0]));
+}
+
 void initialise_pair_audio(const Bundle& bundle, bool mute) {
     initialise_sfx(bundle, mute);
     static bool loaded = false;

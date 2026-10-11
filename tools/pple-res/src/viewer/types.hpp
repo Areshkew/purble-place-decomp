@@ -229,7 +229,7 @@ namespace pple::viewer {
     };
     // Which screen is up, and the clickable rectangles on each.  A hot-spot rect is the engine's
     // node rect: (x, y) - registration, sized SourceWidth x SourceHeight.
-    enum class Screen { Other, Menu, Loading, Difficulty, Concentration, ComfyCakes };
+    enum class Screen { Other, Menu, Loading, Difficulty, Concentration, ComfyCakes, Shop };
     struct Hotspot {
         std::string name;
         SDL_FRect rect{};

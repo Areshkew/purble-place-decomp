@@ -14,6 +14,9 @@ namespace pple::viewer {
                  "  --difficulty      start on the in-canvas Select Difficulty screen\n"
         "  --cakes [D]       start a Comfy Cakes round: D = Beginner|Intermediate|Advanced\n"
         "  --cakes-solve     with --cakes, play the whole round out through the click path\n"
+        "  --shop [D]        start a Purble Shop round: D = Beginner|Intermediate|Advanced\n"
+        "  --shop-seed N     the round's template, variants and hidden face (default 1)\n"
+        "  --shop-dump       print the room's hot-spots after every build\n"
                  "  --intro           with --pairs, also run the Professor's entrance and intro tips\n"
                  "  --no-intro        never run them (an explicit --pairs start skips them anyway)\n"
                  "  --no-tips         do not draw the Professor's TIPS.XML speech bubbles\n"
@@ -66,8 +69,18 @@ int App::run(int argc, char** argv) {
                 cakes_difficulty_choice = d == "Intermediate" ? 1 : (d == "Advanced" ? 2 : 0);
             }
         }
-        else if (a == "--intro") intro_wanted = true;
-        else if (a == "--no-intro") intro_wanted = false;
+        else if (a == "--shop") {
+            shop_mode = true;
+            // An optional difficulty, the way --cakes takes one.
+            if (i + 1 < args.size() && args[i + 1][0] != '-') {
+                const std::string d = args[++i];
+                shop_difficulty_choice = d == "Intermediate" ? 1 : (d == "Advanced" ? 2 : 0);
+            }
+        }
+        else if (a == "--shop-seed" && i + 1 < args.size())
+            shop_choice_seed = static_cast<unsigned>(std::strtoul(args[++i].c_str(), nullptr, 10));
+        else if (a == "--shop-dump") shop_dump = true;
+        else if (a == "--intro") intro_wanted = true;        else if (a == "--no-intro") intro_wanted = false;
         else if (a == "--deal") deal_enabled = true;
         else if (a == "--no-deal") deal_enabled = false;
         else if (a == "--no-tips") tips_enabled = false;
@@ -289,6 +302,11 @@ int App::run(int argc, char** argv) {
         build_difficulty();
     } else if (cakes_mode) {
         start_cakes(cakes_difficulty_choice);
+    } else if (shop_mode) {
+        // Purble Shop's document is the game screen itself, exactly as the Comfy Cakes one is:
+        // BuildAPurbleGame::LoadGameUI followed by NewGame, not a layout to be measured.
+        shop_seed = shop_choice_seed;
+        start_shop(shop_difficulty_choice);
     } else if (scene_xml == "UI\\COMFYCAKES\\COMFYCAKESGAME.XML") {
         // The Comfy Cakes document is the game screen itself, not a layout to be measured: it is
         // reached as a round, exactly as PurblePlaceManager::Show reaches it from the menu house

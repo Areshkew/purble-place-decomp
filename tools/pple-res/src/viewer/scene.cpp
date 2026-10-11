@@ -296,37 +296,69 @@ void App::build_scene() {
 
 // A label through SDL_ttf, positioned with the <Justify> mask (a DrawText flag mask; see
 // section 15 of the notes).  Returns false when it could not be drawn.
+//
+// A shipped label may carry a line break, spelled as a literal "\n" inside the XML text
+// (ColorCountTemplate's "Right Color\nRight Feature", for one); DrawText breaks on it, SDL_ttf
+// does not, so the text is split and the lines are stacked.
 bool App::append_label(const pple::SceneItem& item) {
     if (item.text.empty()) return false;
+    std::vector<std::string> lines;
+    std::string current;
+    for (std::size_t i = 0; i < item.text.size(); ++i) {
+        if (item.text[i] == '\n' ||
+            (item.text[i] == '\\' && i + 1 < item.text.size() && item.text[i + 1] == 'n')) {
+            lines.push_back(current);
+            current.clear();
+            if (item.text[i] == '\\') ++i;
+            continue;
+        }
+        current.push_back(item.text[i]);
+    }
+    lines.push_back(current);
     TTF_Font* f = font_for(item.font_size > 0 ? item.font_size : 16.0f);
     if (f == nullptr) return false;
-    SDL_Surface* surface = TTF_RenderText_Blended(
-        f, item.text.c_str(), item.text.size(),
-        SDL_Color{static_cast<Uint8>((item.colour >> 16) & 0xFF),
-                  static_cast<Uint8>((item.colour >> 8) & 0xFF),
-                  static_cast<Uint8>(item.colour & 0xFF),
-                  static_cast<Uint8>((item.colour >> 24) & 0xFF)});
-    if (surface == nullptr) return false;
     const float box_w = item.w > 0 ? item.w * item.scale : 0.0f;
     const float box_h = item.h > 0 ? item.h * item.scale : 0.0f;
-    float dx = item.x * item.scale;
-    if ((item.justify & 0x04) != 0) {
-        if (box_w > 0.0f) dx += box_w - static_cast<float>(surface->w);
-    } else if ((item.justify & 0x40) != 0) {
-        if (box_w > 0.0f) dx += (box_w - static_cast<float>(surface->w)) * 0.5f;
+    float line_y = item.y * item.scale;
+    for (const std::string& line : lines) {
+        if (line.empty()) {
+            line_y += static_cast<float>(TTF_GetFontHeight(f));
+            continue;
+        }
+        SDL_Surface* surface = TTF_RenderText_Blended(
+            f, line.c_str(), line.size(),
+            SDL_Color{static_cast<Uint8>((item.colour >> 16) & 0xFF),
+                      static_cast<Uint8>((item.colour >> 8) & 0xFF),
+                      static_cast<Uint8>(item.colour & 0xFF),
+                      static_cast<Uint8>((item.colour >> 24) & 0xFF)});
+        if (surface == nullptr) return false;
+        float dx = item.x * item.scale;
+        if ((item.justify & 0x04) != 0) {
+            if (box_w > 0.0f) dx += box_w - static_cast<float>(surface->w);
+        } else if ((item.justify & 0x40) != 0) {
+            if (box_w > 0.0f) dx += (box_w - static_cast<float>(surface->w)) * 0.5f;
+        }
+        float dy = line_y;
+        // The vertical part of the mask only means anything for a single line: it centres or
+        // bottoms that line in the label's own box, which is what the tip and panel labels use.
+        if (lines.size() == 1) {
+            if ((item.justify & 0x01) != 0) {
+                if (box_h > 0.0f) dy += box_h - static_cast<float>(surface->h);
+            } else if ((item.justify & 0x20) != 0) {
+                if (box_h > 0.0f) dy += (box_h - static_cast<float>(surface->h)) * 0.5f;
+            }
+        }
+        DrawItem d;
+        d.texture = SDL_CreateTextureFromSurface(renderer, surface);
+        d.dst = SDL_FRect{dx, dy, static_cast<float>(surface->w),
+                          static_cast<float>(surface->h)};
+        const int line_h = surface->h;
+        d.alpha = item.alpha;
+        SDL_DestroySurface(surface);
+        if (d.texture != nullptr) scene_draws.push_back(d);
+        line_y += static_cast<float>(line_h);
     }
-    float dy = item.y * item.scale;
-    if ((item.justify & 0x01) != 0) {
-        if (box_h > 0.0f) dy += box_h - static_cast<float>(surface->h);
-    } else if ((item.justify & 0x20) != 0) {
-        if (box_h > 0.0f) dy += (box_h - static_cast<float>(surface->h)) * 0.5f;
-    }
-    DrawItem d;
-    d.texture = SDL_CreateTextureFromSurface(renderer, surface);
-    d.dst = SDL_FRect{dx, dy, static_cast<float>(surface->w), static_cast<float>(surface->h)};
-    d.alpha = item.alpha;
-    SDL_DestroySurface(surface);
-    scene_draws.push_back(d);
+    (void)box_h;
     return true;
 }
 

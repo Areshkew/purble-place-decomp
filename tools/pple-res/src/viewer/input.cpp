@@ -81,7 +81,9 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         if (motion_only || hit == nullptr) return true;
         std::printf("difficulty: %s chosen\n", hit->id.c_str());
         const std::string chosen = hit->id;
-        if (picker_cakes) start_cakes(chosen == "Beginner" ? 0 : chosen == "Intermediate" ? 1 : 2);
+        const int difficulty = chosen == "Beginner" ? 0 : chosen == "Intermediate" ? 1 : 2;
+        if (picker_cakes) start_cakes(difficulty);
+        else if (picker_shop) start_shop(difficulty);
         else start_game(chosen, true);
         return true;
     }
@@ -127,6 +129,25 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             }
             return true;
         }
+        if (screen == Screen::Shop) {
+            if (action == "PlayAgain") {
+                // BuildAPurbleGame::OnWinAnimStop's 1086 result: NewGame at the same difficulty,
+                // with a fresh template, variants and hidden face.
+                std::printf("shop: New Game -> a new round\n");
+                ++shop_seed;
+                start_shop(shop_difficulty);
+            } else if (action == "ChangeDifficulty") {
+                std::printf("shop: Change Difficulty -> the chooser\n");
+                game_to_menu();
+                picker_shop = true;
+                picker_cakes = false;
+                build_difficulty();
+            } else {
+                std::printf("shop: Main Menu -> main menu\n");
+                game_to_menu();
+            }
+            return true;
+        }
         if (action == "PlayAgain") {
             std::printf("pairs: New Game -> a new %s round\n", picker_choice.c_str());
             ++seed_for_pairs;
@@ -165,12 +186,20 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             // this opens the in-canvas chooser instead.
             std::printf("menu: ConcentrationButton -> Purble Pairs difficulty chooser\n");
             picker_cakes = false;
+            picker_shop = false;
             build_difficulty();
         } else if (hit->name == "ComfyCakesButton") {
             // PurblePlaceManager::Init sets its state to 2 for this house (0x100071A00 /
             // 0x100071A1A), which is what starts ComfyCakesGame::LoadGameUI.
             std::printf("menu: ComfyCakesButton -> Comfy Cakes difficulty chooser\n");
             picker_cakes = true;
+            picker_shop = false;
+            build_difficulty();
+        } else if (hit->name == "BuildAPurbleButton") {
+            // The Purble Shop house: the manager's state 1 starts BuildAPurbleGame::LoadGameUI.
+            std::printf("menu: BuildAPurbleButton -> Purble Shop difficulty chooser\n");
+            picker_cakes = false;
+            picker_shop = true;
             build_difficulty();
         } else if (hit->name == "ExitButton") {
             std::printf("menu: ExitButton clicked - exiting, as the game does\n");
@@ -230,6 +259,48 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         }
         cakes_use_tool(cakes_tool_station(hit->name), type->second);
         cakes_refresh();
+        return true;
+    }
+    // Purble Shop: the cabinet's items, the guess button and the history arrows.  A feature
+    // click is BuildAPurbleGame::OnSetFeature (0x100053C5C), the guess button is MakeGuess
+    // (0x1000527CC), and ReturnToMainMenu leaves for the menu.
+    if (screen == Screen::Shop) {
+        const Hotspot* hit = nullptr;
+        for (const Hotspot& spot : shop_hotspots) {
+            const SDL_FRect& r = spot.rect;
+            if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
+                hit = &spot;
+                break;
+            }
+        }
+        if (motion_only) {
+            const std::string want = hit == nullptr ? std::string{} : hit->name;
+            if (want == shop_hover_name) return true;
+            shop_hover_name = want;
+            std::printf("  hover: %s\n", want.empty() ? "nothing" : want.c_str());
+            shop_refresh();
+            return true;
+        }
+        if (hit == nullptr) return true;
+        if (hit->name == "ReturnToMainMenu") {
+            std::printf("shop: ReturnToMainMenu -> main menu\n");
+            game_to_menu();
+            return true;
+        }
+        if (hit->name == "GuessButton") {
+            shop_guess();
+            return true;
+        }
+        // A cabinet item: its own FaceFeature (feature and colour) selects that shelf's colour.
+        for (const ShopButtonDef& button : shop_buttons)
+            if (button.name == hit->name) {
+                std::printf("shop: %s -> %s shelf, %s\n", button.name.c_str(),
+                            pple::shop_feature_name(button.feature),
+                            pple::shop_color_name(button.color));
+                shop_select(button.feature, button.color);
+                return true;
+            }
+        std::printf("shop: %s clicked (no action)\n", hit->name.c_str());
         return true;
     }
     if (!pairs_ready) return true;

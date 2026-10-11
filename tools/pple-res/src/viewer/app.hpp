@@ -2,7 +2,9 @@
 #include "types.hpp"
 #include "cakes_tools.hpp"
 #include "cakes_transport.hpp"
+#include "shop_screen.hpp"
 #include "pple/cakes.hpp"
+#include "pple/shop.hpp"
 
 namespace pple::viewer {
 
@@ -145,6 +147,7 @@ private:
     void build_difficulty();
     // The shared chooser keeps its destination across hover and DPI rebuilds.
     bool picker_cakes = false;
+    bool picker_shop = false;
     void draw_difficulty();
     void start_game(const std::string& difficulty, bool intro);
     void game_to_menu();
@@ -287,6 +290,13 @@ private:
     int cakes_difficulty_choice = 0;
     // --cakes-solve plays a whole round out through the click path (the verification hook).
     bool cakes_solve_hook = false;
+    bool shop_mode = false;
+    // 0 Beginner, 1 Intermediate, 2 Advanced, for --shop's optional difficulty.
+    int shop_difficulty_choice = 0;
+    // --shop-seed N picks the round's template, its variants and its hidden face.
+    unsigned shop_choice_seed = 1;
+    // --shop-dump prints every hot-spot of the room after a build, for scripted runs.
+    bool shop_dump = false;
     bool tips_enabled = true;
     bool container_offsets = true;
     std::string script_click_spec;
@@ -538,6 +548,64 @@ private:
     float cakes_chef_fps = 12.0f;
     bool cakes_chef_loaded = false;
     std::map<std::string, pple::Movie> cakes_chef_movies;
+    // ---- Purble Shop (Build-a-Purble) --------------------------------------------------
+    // The third game.  BuildAPurbleGame::LoadGameUI (0x100050B54) loads its widgets from the
+    // document and looks each one up by name; the cabinet and the faces are their own widgets, so
+    // shop_screen.cpp parses those documents itself (FeatureSet::Init 0x10006BC50,
+    // Face::SetTemplate 0x100069444) instead of drawing the scene generically.
+    void start_shop(int difficulty);
+    void build_shop();
+    // The round's own half: the model glue, the two faces, the check boxes, the colour counts
+    // and the guess history.  shop_refresh = build_shop + shop_draw_round.
+    void shop_load_documents();
+    void shop_load_template();
+    void shop_new_game(int difficulty);
+    void shop_select(int feature, int color);
+    void shop_guess();
+    void shop_refresh();
+    void shop_draw_round();
+    // One sprite of the room: its <Animation> state, an explicit frame (-1 = the state's own),
+    // and a scale.  Returns false when the sheet or the frame cannot be resolved.
+    bool shop_append(const std::string& sprite_xml, float x, float y, float scale = 1.0f,
+                     int frame = -1, int state = 0, const std::string& name = std::string());
+    // The same, but as a hot-spot.  A button's <OverrideBB> is not read: the rect is the node's
+    // own (x - registration, SourceWidth x SourceHeight), as it is for every other screen.
+    bool shop_append_button(const std::string& sprite_xml, const std::string& name, float x,
+                            float y, float scale = 1.0f, int state = 0);
+    // A whole purble: body, head and the feature sprites of `colors` (one per slot, -1 = none).
+    void shop_draw_face(const ShopFaceTemplate& face, float base_x, float base_y, float scale,
+                        const int* colors, bool features);
+    void shop_draw_cabinet();
+    void shop_draw_history();
+    void shop_draw_counts();
+    const ShopFaceTemplate* shop_face() const;
+    // The visible item for one (colour, feature): the variant this round picked.
+    const ShopButtonDef* shop_item(int color, int feature) const;
+    const std::string shop_xml = "UI\\BUILDAPURBLE\\BUILDAPURBLEGAME.XML";
+    const std::string shop_cabinet_xml = "UI\\BUILDAPURBLE\\CABINET\\CABINET.XML";
+    bool shop_ready = false;
+    bool shop_documents_loaded = false;
+    int shop_difficulty = 0;
+    unsigned shop_seed = 1;
+    pple::ShopModel shop_model;
+    // The room document's own elements, as the loader read them.
+    std::map<std::string, ShopNodeDef> shop_nodes;
+    std::vector<ShopStoneDef> shop_stones;
+    std::vector<ShopShelfDef> shop_shelves;
+    std::vector<ShopButtonDef> shop_buttons;
+    std::map<std::string, ShopFaceTemplate> shop_templates;
+    // The template this round uses and the items of the two faces.
+    std::string shop_template_doc;
+    // Which sprite frame the curtain and the question mark draw.  7 is the open curtain and 15
+    // the closed one (OpenAnimation 0->7, CloseAnimation 7->15); the round plays the intro, so
+    // the room rests with the curtain open and the mystery head behind it.
+    int shop_curtain_frame = 7;
+    // Per (colour, feature) check box state: 0 nothing, 1 the empty box, 2 the green check,
+    // 3 the red X (FaceFeatureCheckBox::SetState 0x10007AD78).
+    int shop_check[5][5] = {};
+    std::vector<Hotspot> shop_hotspots;
+    std::string shop_hover_name;
+    bool shop_reveal = false;   // the win/lose reveal: the hidden purble replaces the mystery head
     bool menu_ready = false;
     std::string menu_hover_name;
     // Hover.  The engine's focus follows the mouse: UserInterface::ProcessMouseMove (0x100098498)

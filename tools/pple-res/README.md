@@ -174,7 +174,7 @@ and example values, and — with `--refs` — how every resource reference resol
 ## pple-view
 
 ```
-pple-view <pe>... [--menu] [--difficulty] [--cakes] [--resource NAME] [--sprite XML] [--scene XML] [--movie XML]
+pple-view <pe>... [--menu] [--difficulty] [--cakes] [--shop] [--resource NAME] [--sprite XML] [--scene XML] [--movie XML]
                   [--movie-name NAME] [--anchor X,Y] [--frame N] [--state N]
                   [--pairs [D,L,S]] [--pairs-reveal] [--pairs-click I,J] [--pairs-ticks N]
                   [--pairs-solve] [--pairs-save PATH] [--mce] [--no-container-offsets] [--mui PATH]
@@ -182,6 +182,7 @@ pple-view <pe>... [--menu] [--difficulty] [--cakes] [--resource NAME] [--sprite 
                   [--loading [MS]] [--hidpi] [--no-hidpi]
                   [--play NAME] [--volume N] [--mute]
                   [--script-click "x,y;x,y;move:x,y;wait:MS"] [--shot-delay MS] [--bench N] [--bench-build N]
+                  [--shop-seed N] [--shop-dump]
                   [--list] [--shot out.ppm] [--save out.ppm] [--width N] [--height N]
                   [--font PATH] [--all]
 ```
@@ -200,6 +201,39 @@ build's `New Game` / `Exit Game` header buttons — the shipped executable *dele
 nodes when `g_bMediaCenter == 0` (`ConcentrationGame::LoadGameUI` `0x10008122B`), so they are
 absent by default, as they are in this build.  `--no-container-offsets` turns off the engine's
 HUD re-parenting described below.
+
+### Purble Shop
+
+`--shop [Beginner|Intermediate|Advanced]` starts the third game on
+`UI\BuildAPurble\BuildAPurbleGame.xml`; the menu's Purble Shop house reaches it the same way as
+the other two (the manager's own Build-a-Purble state).  `--shop-seed N` picks the round's
+template, its three variants per colour and feature, and its hidden face, and `--shop-dump` prints
+every hot-spot of the room so a scripted run can aim at the cabinet.
+
+Purble Shop is internally **Build-a-Purble**.  Its room is not a layout document either:
+`BuildAPurbleGame::LoadGameUI` (`0x100050B54`) looks every element up by name and the cabinet and
+the faces are widgets of their own, so [shop_screen.cpp](src/viewer/shop_screen.cpp) parses
+`BuildAPurbleGame.xml`, `UI\BuildAPurble\Cabinet\Cabinet.xml` (`FeatureSet::Init` `0x10006BC50`)
+and one of the six `UI\BuildAPurble\PurbleFaceTemplate*.xml` files (`Face::SetTemplate`
+`0x100069444`) and draws:
+
+* the room background (`UI\BuildAPurble\Background.png`, which already contains the cabinet panel
+  and the colour-count panel), the curtain rod, the curtain at its own frame (7 is open, 15
+  closed), the two spotlights and the dark **mystery head** that stands in for the hidden purble
+  until the reveal;
+* the cabinet: the colour stones of the current difficulty, that difficulty's shelves, and for
+  every colour the **one visible variant** of each shelf (the round picks one of three variants per
+  colour and feature) with its check box (empty, green check or red X);
+* the **guess purble** the player assembles -- body, head and the picked feature sprites, in the
+  template's own document order -- the guess button, the six history slots with their thermometer
+  and numbers, and the colour counts.
+
+The rules live in `pple::ShopModel` (`src/shop.cpp`): a round keeps 3, 4 or 5 colours and feature
+slots, the player picks a colour per shelf, and `Face::Compare` (`0x100069F18`) scores the guess as
+*right colour/right feature* and *right colour/wrong feature* over the hidden face's colour
+multiset.  A won or lost round reveals the hidden purble, opens the curtain, plays the round's own
+sounds and raises the same end-of-round panel the other two games use.
+
 
 ### Comfy Cakes
 
@@ -851,6 +885,27 @@ these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
   every sheet already cached, a full `build_pairs` is 17.842 -> 32.158 ms/call and the primed card
   layer 0.0801 -> 0.0863 ms/call, so the 30 Hz path is not the part that pays.
 
+### Session 40: Purble Shop
+
+- `ctest --test-dir build/pple-res`: **3/3** (cakes model, resource animation, `shop-rules`).
+  [tests/shop_test.cpp](tests/shop_test.cpp) checks `Face::Compare`'s multiset rule (including the
+  consumed duplicate and the absent colour), the per-difficulty setup over 200 seeds each, the
+  selection toggle and its bounds, the score arithmetic (`100 + 10*rcrf` and `+ 5*rcwf` on
+  Advanced), the duplicate-guess refusal and both end conditions.
+- `tests/cakes_regression.py BUILD_DIR SAMPLE_DIR TRACE_DIR`: **23 runs PASS** (all three Comfy
+  Cakes difficulties in both DPI modes with solves and normal clicks, the menu roundtrip, the
+  difficulty keys, and the three Pairs solves), i.e. the menu hot-spot, chooser and loop changes
+  left the other two games alone.  Evidence `C:\re\traces\cpp\cc\s40-general`.
+- Purble Shop captures: `C:\re\traces\cpp\bs\shop-{beginner,inter,adv}.png` (the three rooms),
+  `shop-guess.png` (a Beginner win: 3 right, score 130, the shelves' green checks and red Xs),
+  `shop-inter-guess.png` (one judged guess with its history slot), `shop-inter-lose.png` (six
+  judged guesses, six slots with their own thermometer frames and numbers), `shop-adv-guess.png`
+  (Advanced's two counts: 1 right colour/right feature and 1 right colour/wrong feature, score
+  115), `shop-chooser.png` and `shop-from-menu.png` (the menu's house -> the chooser -> a round).
+- Audio: the viewer reported `audio shop wasapi: 12/12 events decoded`, and a scripted win queued
+  `BAP_CURTAIN_CLOSE`, `BAP_FEATURE_INTRO`, the three picked items' own `<SoundID>` events,
+  `BAP_FACE_INFLATE`, `BAP_FEATURE_WIN`, `BAP_CURTAIN_WIN_OPEN` and `BAP_WIN_GAME`.
+
 ## Known gaps
 
 * ~~The exact on-disk geometry of a split sheet's **fourth** `x2` page~~ — **derived and used in
@@ -878,8 +933,14 @@ these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
   `pple-res pairs --autoplay`). Comfy Cakes plays a whole round (`--cakes [Beginner|
   Intermediate|Advanced]`, or the menu's Comfy Cakes house): the room, its engine draw order, its
   hover, the rules, the score, the Chef's six movies, and each tool machine's own animation with
-  the ingredient it drops into the cake.  Purble Shop is not started; its menu hot-spot is drawn
-  and clickable and says so when clicked.
+  the ingredient it drops into the cake.  Purble Shop (internally Build-a-Purble) plays a whole
+  round too (`--shop [Beginner|Intermediate|Advanced]`, or the menu's Purble Shop house): the room,
+  the cabinet with one visible variant per colour, the guess purble, the counts, the history strip,
+  the Beginner check-box marks, the reveal, the round's own sounds and the shared end-of-round
+  panel.  Not done there yet: the curtain/stage intro
+  animations, the win and inflate animations, history scrolling, the Intermediate/Advanced
+  check-box tagging, the tips and the save files; see section 40 of
+  `D:\Development\re\notes\purbleplace.md`.
   The card deck, board geometry,
   match rule, scoring, placement, container parenting, flip animation, sound map, progress
   meter, multi-level rounds, special cards, sneak peek, per-level card back, the jar's tray
