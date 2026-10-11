@@ -182,6 +182,16 @@ void App::cakes_transport_draw(bool foreground) {
         } else if (node.key == "RedLight") {
             if (dispatch && !cakes_transport.correct)
                 frame = static_cast<int>(pple::animation_value(node.animation, shipping).frame);
+        } else if (node.key == "ConveyorPlatform") {
+            // This is the dispatch platform, not a main-belt roller. Belt slides and
+            // replacement chute motion must not start/reset its frames on every update.
+            if (dispatch && cakes_transport.correct && shipping < node.animation.total)
+                frame = static_cast<int>(pple::animation_value(node.animation, shipping).frame);
+        } else if (node.key == "RightBelt") {
+            // OnAnimationComplete(BoxDrop), 0x10005F2E0, resumes the shipping belt.
+            if (dispatch && cakes_transport.correct && shipping >= wrap &&
+                shipping < wrap + node.animation.total)
+                frame = static_cast<int>(pple::animation_value(node.animation, shipping - wrap).frame);
         } else if (cakes_transport.belt_time >= 0) {
             frame = static_cast<int>(pple::animation_value(node.animation, cakes_transport.belt_time,
                 cakes_transport.reverse).frame);

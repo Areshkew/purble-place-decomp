@@ -125,9 +125,18 @@ void App::build_difficulty() {
         button.rect = SDL_FRect{274.0f, 146.0f + static_cast<float>(i) * 68.0f, 251.0f, 60.0f};
         const std::string text = mui_text(choices[i].text->id);
         split_option(text.empty() ? choices[i].text->english : text, button.label, button.detail);
+        if (picker_cakes) {
+            button.label = choices[i].difficulty;
+            button.detail = i == 0 ? "One cake layer, no filling" :
+                            i == 1 ? "Two cake layers with filling" : "Three cake layers and final touches";
+        }
         picker_buttons.push_back(button);
     }
     screen = Screen::Difficulty;
+    if (picker_cakes) {
+        hud_lines = {"Comfy Cakes", "Select Difficulty"};
+        rebuild_hud();
+    }
     draw_difficulty();
     std::printf("difficulty: Select Difficulty, %zu option(s)%s\n", picker_buttons.size(),
                 mui_strings.empty() ? " (no --mui: the shipped English fallbacks are used)" : "");
@@ -141,7 +150,8 @@ void App::draw_difficulty() {
     {
         // The classroom is UI\Concentration\hearts.xml's own sprite -- the same Background.png
         // the board screen puts behind the cards (ConcentrationGame::LoadGameUI 0x100081042).
-        const Sprite back = resolve_sprite(bundle, "UI\\Concentration\\hearts.xml", 0);
+        const Sprite back = resolve_sprite(bundle, picker_cakes
+            ? "UI\\ComfyCakes\\ComfyCakesBackground2.xml" : "UI\\Concentration\\hearts.xml", 0);
         std::string how;
         const auto* slot = back.ok ? bundle.resolve(back.requested, how) : nullptr;
         if (slot != nullptr) {
@@ -168,7 +178,7 @@ void App::draw_difficulty() {
     }
     // The Professor waits in the classroom while the player chooses, which is the same
     // /ProfessorContainer anchor (295,70) the board uses.
-    if (load_professor_movie("ProfessorIdleAnimation")) {
+    if (!picker_cakes && load_professor_movie("ProfessorIdleAnimation")) {
         const pple::Movie& idle = prof_movie_cache["ProfessorIdleAnimation"];
         const float fps = idle.parts.empty() ? 12.0f : pple::movie_frame_rate(idle, idle.parts.front());
         const int mframe = (idle.frame_count > 1 && fps > 0.0f)
@@ -189,7 +199,9 @@ void App::draw_difficulty() {
                     question.empty() ? kDifficultyQuestion.english : question, 194.0f, 78.0f,
                     412.0f);
         append_text(picker_draws, green_style().body_face, 8.0f, 0x00606060u,
-                    note.empty() ? kDifficultyNote.english : note, 194.0f, 100.0f, 412.0f);
+                    picker_cakes ? "You can change difficulty during play with keys 1, 2 or 3."
+                                 : (note.empty() ? kDifficultyNote.english : note),
+                    194.0f, 100.0f, 412.0f);
     }
     for (const UiButton& button : picker_buttons) append_button(picker_draws, button, 12.0f);
 }
@@ -221,8 +233,9 @@ void App::build_result_panel(bool won) {
     result_buttons.clear();
     result_buttons = {again, difficulty, menu};
     draw_result_panel();
-    std::printf("  result panel: %s, score %d%s\n", won ? "WON" : "LOST", pairs_board.score(),
-                (won && last_end_ok)
+    std::printf("  result panel: %s, score %d%s\n", won ? "WON" : "LOST",
+                screen == Screen::ComfyCakes ? cakes_final : pairs_board.score(),
+                (screen != Screen::ComfyCakes && won && last_end_ok)
                     ? (", " + std::to_string(last_end.total) + " -> " + last_end.title).c_str()
                     : "");
 }
@@ -234,7 +247,8 @@ void App::draw_result_panel() {
     const float panel_x = 200.0f, panel_y = 80.0f, panel_w = 400.0f, panel_h = 336.0f;
     append_panel(result_draws, panel_x, panel_y, panel_w, panel_h);
 
-    const TipDef* title_tip = find_tip(result_won ? "ProWin1" : "ProLose1");
+    const TipDef* title_tip = screen == Screen::ComfyCakes ? nullptr :
+        find_tip(result_won ? "ProWin1" : "ProLose1");
     const std::string title = title_tip != nullptr ? title_tip->title
                              : (result_won ? std::string("You Won!") : std::string("Lost Game"));
     append_text(result_draws, green_style().title_face, 16.0f, green_style().title_colour, title,
@@ -248,8 +262,13 @@ void App::draw_result_panel() {
                     0.0f);
         y += 20.0f;
     };
-    line(kGamePoints, pairs_board.score());
-    if (result_won && last_end_ok) {
+    line(kGamePoints, screen == Screen::ComfyCakes ? cakes_score : pairs_board.score());
+    if (screen == Screen::ComfyCakes) {
+        line(kFinalScore, cakes_final);
+        append_text(result_draws, green_style().body_face, 10.0f, 0x00303030u,
+                    std::to_string(cakes_correct) + " correct, " + std::to_string(cakes_missed) +
+                    " missed; moves bonus " + std::to_string(cakes_bonus), panel_x + 16.0f, y, 0.0f);
+    } else if (result_won && last_end_ok) {
         line(kFinalScore, last_end.total);
         append_text(result_draws, green_style().body_face, 11.0f, green_style().title_colour, last_end.title,
                     panel_x + 16.0f, y, 0.0f);
@@ -299,6 +318,8 @@ void App::game_to_menu() {
     result_buttons.clear();
     result_shown = false;
     pairs_ready = false;
+    cakes_ready = false;
+    picker_cakes = false;
     screen = Screen::Menu;
     menu_hover_name.clear();
     build_menu();

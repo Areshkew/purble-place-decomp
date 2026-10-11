@@ -335,6 +335,22 @@ pixel comparisons.
 - Original `draw` diagnostic lines retain their format for existing coverage tools; separate
   `source` lines expose UVs/alpha and `cakes clocks` exposes active transport clocks.
 
+### Comfy Cakes UI and geometry regressions (session 36)
+
+- [overlays.cpp](overlays.cpp) owns the shared chooser/result draws. `App::picker_cakes` keeps
+  the chooser destination across hover/DPI rebuilds; [input.cpp](input.cpp) dispatches the choice
+  and routes modal result input before room controls. New Game/menu transitions release old panels.
+- [cakes_screen.cpp](cakes_screen.cpp) qualifies widget keys once for TV frame/screen order and
+  centres arrow focus halos. [cakes_transport.cpp](cakes_transport.cpp) keeps the dispatch platform
+  and right-belt frames on shipping phases instead of the main-belt/chute clock.
+- [cakes.hpp](../../include/pple/cakes.hpp) retains each shaped layer's height delta; model mutation,
+  cake drawing and tool endpoints use `CakeLayerDef::delta_for(shape)`.
+- [cakes_ui_regression.py](../../tests/cakes_ui_regression.py): 30 local-asset runs, both DPIs,
+  all chooser options, modal win/loss actions, correct navigation captures, purple TV screen pixels,
+  stable idle dispatch UVs and centred/exclusive arrow focus. Same three directory arguments as
+  the other integration scripts. [cakes_test.cpp](../../tests/cakes_test.cpp) adds shaped-height
+  and replacement assertions. Script navigation restarts frame layout before capture.
+
 Keep this map current. Add behavior to the owning module, not the entry point or
 a catch-all helper. Split a module further only at a cohesive boundary; keep state
 ownership and the relevant regression commands explicit. Functional changes and

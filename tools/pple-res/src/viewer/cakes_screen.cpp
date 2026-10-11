@@ -38,11 +38,16 @@ namespace {
 // Where an item sits in that list.  A widget child is keyed by its parent element and its own
 // element name; a top-level instance by its instance or Name.  Anything the table does not name
 // keeps its document order, which is how the tools' own sprites and the MCE nodes behave.
-int cakes_rank(const pple::SceneItem& item) {
+std::string cakes_item_key(const pple::SceneItem& item) {
     const std::string& key = item.name.empty() ? item.instance : item.name;
-    // A widget's children are identified by the widget that owns them, which is how the engine
-    // looks them up: scene_load qualifies them as "<widget element>/<element>".
-    const std::string full = item.widget_path.empty() ? key : item.widget_path + key;
+    // Bare properties are already qualified. Qualifying the TV frame twice gives
+    // it the wrong rank and paints its black screen over the purple screen sprite.
+    return item.widget_path.empty() || key.rfind(item.widget_path, 0) == 0
+               ? key : item.widget_path + key;
+}
+
+int cakes_rank(const pple::SceneItem& item) {
+    const std::string full = cakes_item_key(item);
     static const struct {
         const char* key;
         int rank;
@@ -316,8 +321,7 @@ void App::build_cakes() {
     std::vector<std::size_t> tool_highlight_entries;
     for (std::size_t i = 0; i < entries.size(); ++i) {
         const pple::SceneItem& item = entries[i].item;
-        const std::string& key = item.name.empty() ? item.instance : item.name;
-        const std::string full = item.widget_path.empty() ? key : item.widget_path + key;
+        const std::string full = cakes_item_key(item);
         if (entries[i].rank == 200 && full == "Tool/HighlightSprite")
             tool_highlight_entries.push_back(i);
     }
@@ -353,7 +357,7 @@ void App::build_cakes() {
             if (cakes_difficulty == 0 && (station == 0 || station == 1)) item.x += 100.0f;
         }
         const std::string& key = item.name.empty() ? item.instance : item.name;
-        const std::string full = item.widget_path.empty() ? key : item.widget_path + key;
+        const std::string full = cakes_item_key(item);
         // This document spells the two Media Center header nodes NewGameButton / ExitGameButton
         // (ConcentrationGame's own document spells them NewGame / ExitGame).
         const bool mce_node = key == "NewGameButton" || key == "ExitGameButton" ||
@@ -369,7 +373,21 @@ void App::build_cakes() {
             if (hover_tool.empty() || highlight->second != hover_tool) continue;
         } else if (full == "SlideLeftHighlightSprite" || full == "SlideRightHighlightSprite") {
             const bool left = full == "SlideLeftHighlightSprite";
-            if (cakes_hover_name != (left ? "SlideLeftButton" : "SlideRightButton")) continue;
+            const std::string button_name = left ? "SlideLeftButton" : "SlideRightButton";
+            if (cakes_hover_name != button_name) continue;
+            // Centre the halo on the button's draw rect. The authored halo's top is
+            // 9 px above that centre; using it unchanged leaves a displaced side glow.
+            const auto button = std::find_if(entries.begin(), entries.end(), [&](const CakesEntry& e) {
+                return e.item.instance == button_name;
+            });
+            if (button != entries.end()) {
+                const Sprite face = resolve_sprite(bundle, button->item.ref, 0);
+                const Sprite halo = resolve_sprite(bundle, item.ref, 0);
+                if (face.ok && halo.ok) {
+                    item.x = button->item.x - face.reg_x + (face.src.w - halo.src.w) / 2 + halo.reg_x;
+                    item.y = button->item.y - face.reg_y + (face.src.h - halo.src.h) / 2 + halo.reg_y;
+                }
+            }
         } else if (full == "CakeScreen/HighlightSprite") {
             continue;
         }
@@ -430,6 +448,13 @@ void App::cakes_dump_draws() {
 // Entering the room starts a round.  ComfyCakesGame::NewGame is what PurblePlaceManager's
 // Show path calls, and --cakes-difficulty picks the difficulty the way the chooser does.
 void App::start_cakes(int difficulty) {
+    hide_tip();
+    free_direct(result_draws);
+    result_buttons.clear();
+    result_shown = false;
+    rebuild_overlay();
+    pairs_ready = false;
+    picker_cakes = true;
     picker_choice = difficulty == 0 ? "Beginner" : (difficulty == 1 ? "Intermediate" : "Advanced");
     screen = Screen::ComfyCakes;
     menu_ready = false;
@@ -438,7 +463,10 @@ void App::start_cakes(int difficulty) {
     cakes_new_game(difficulty);
     build_cakes();
     cakes_refresh();
-    if (cakes_solve_hook) cakes_solve();
+    if (cakes_solve_hook) {
+        cakes_solve_hook = false; // one-shot: result-panel New Game must start a playable round
+        cakes_solve();
+    }
 }
 
 }  // namespace pple::viewer

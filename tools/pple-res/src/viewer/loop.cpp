@@ -154,10 +154,7 @@ int App::run_loop() {
                         // ComfyCakesGame::ReturnToMainMenu (0x10005F150) saves the game state
                         // and sets the manager's state back to the menu.
                         std::printf("cakes: ESC -> main menu\n");
-                        cakes_ready = false;
-                        screen = Screen::Menu;
-                        menu_hover_name.clear();
-                        build_menu();
+                        game_to_menu();
                     } else {
                         running = false;
                     }
@@ -448,7 +445,11 @@ int App::run_loop() {
                         std::printf("script %s %zu: scene %.0f,%.0f\n",
                                     step.move ? "move" : "click", script_next - 1,
                                     static_cast<double>(step.x), static_cast<double>(step.y));
+                        const Screen before = screen;
                         running = click_scene(step.x, step.y, step.move);
+                        // The viewport and base_draws above belong to the old screen.
+                        // Recompute both before presenting/capturing a navigation result.
+                        if (screen != before) continue;
                     }
                 }
             }

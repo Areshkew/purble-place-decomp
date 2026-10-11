@@ -52,6 +52,30 @@ int main() {
             if (d < 2) require(target.layers.size() == std::size_t(d == 0 ? 3 : 5), "difficulty layer count");
         }
     }
+    // A shaped definition keeps all three deltas. Round/rectangle are 4px taller
+    // than heart; replacement must subtract the removed layer's own shape too.
+    std::string shaped = "<Root>";
+    for (int i = 0; i < 18; ++i) {
+        if (i < 3) shaped += "<Layer><Shape><Delta>-23</Delta><Sprite>round.xml</Sprite></Shape>"
+                            "<Shape><Delta>-23</Delta><Sprite>rectangle.xml</Sprite></Shape>"
+                            "<Shape><Delta>-19</Delta><Sprite>heart.xml</Sprite></Shape></Layer>";
+        else shaped += "<Layer><Delta>-4</Delta><Sprite>fixture.xml</Sprite></Layer>";
+    }
+    shaped += "</Root>";
+    require(model.load_layers(bytes(shaped), error), "load shape-specific deltas");
+    for (int shape = 0; shape < 3; ++shape) {
+        pple::Cake cake;
+        pple::CakeLayer added;
+        const auto rng = [] { return 0; };
+        const int height = shape == 2 ? -19 : -23;
+        require(model.use_tool(cake, 1, 3 + shape, added, rng) == pple::CakeUse::Added, "initial pan");
+        model.use_tool(cake, 0, 0, added, rng);
+        require(cake.height_delta == height, "batter height follows pan shape");
+        model.use_tool(cake, 0, 1, added, rng);
+        require(cake.height_delta == height, "replacement subtracts shaped batter height");
+        model.use_tool(cake, 5, 15, added, rng);
+        require(cake.height_delta == height - 4, "icing uses shaped top height");
+    }
     // Resource resolution must not discard the named widget owner, or filtering/placement
     // silently applies to no machines despite the scene having the correct widget path.
     pple::Scene scene;

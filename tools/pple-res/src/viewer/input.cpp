@@ -80,7 +80,69 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         }
         if (motion_only || hit == nullptr) return true;
         std::printf("difficulty: %s chosen\n", hit->id.c_str());
-        start_game(hit->id, true);
+        const std::string chosen = hit->id;
+        if (picker_cakes) start_cakes(chosen == "Beginner" ? 0 : chosen == "Intermediate" ? 1 : 2);
+        else start_game(chosen, true);
+        return true;
+    }
+    // The end-of-round panel stands in for OnWinAnimStop's dialog box, so it is modal: only its
+    // own buttons act and every other click is swallowed.
+    if (result_shown) {
+        const UiButton* hit = nullptr;
+        for (const UiButton& button : result_buttons) {
+            const SDL_FRect& r = button.rect;
+            if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
+                hit = &button;
+                break;
+            }
+        }
+        // The chooser highlights on motion, so this panel does too; only the draws are rebuilt.
+        bool hover_changed = false;
+        for (UiButton& button : result_buttons) {
+            const bool hover = hit != nullptr && button.id == hit->id;
+            if (button.hover == hover) continue;
+            button.hover = hover;
+            hover_changed = true;
+        }
+        if (hover_changed) draw_result_panel();
+        // The panel stands in for a modal dialog, so the board behind it holds no focus.
+        if (motion_only) {
+            if (screen == Screen::Concentration) update_hover(-1.0f, -1.0f);
+            return true;
+        }
+        if (hit == nullptr) return true;
+        const std::string action = hit->id; // rebuilding clears result_buttons
+        if (screen == Screen::ComfyCakes) {
+            if (action == "PlayAgain") {
+                std::printf("cakes: New Game -> a new round\n");
+                start_cakes(cakes_difficulty);
+            } else if (action == "ChangeDifficulty") {
+                std::printf("cakes: Change Difficulty -> the chooser\n");
+                game_to_menu();
+                picker_cakes = true;
+                build_difficulty();
+            } else {
+                std::printf("cakes: Main Menu -> main menu\n");
+                game_to_menu();
+            }
+            return true;
+        }
+        if (action == "PlayAgain") {
+            std::printf("pairs: New Game -> a new %s round\n", picker_choice.c_str());
+            ++seed_for_pairs;
+            start_game(picker_choice, true);
+        } else if (action == "ChangeDifficulty") {
+            std::printf("pairs: Change Difficulty -> the chooser\n");
+            hide_tip();
+            free_direct(result_draws);
+            result_buttons.clear();
+            result_shown = false;
+            rebuild_overlay();
+            build_difficulty();
+        } else {
+            std::printf("pairs: Main Menu -> main menu\n");
+            game_to_menu();
+        }
         return true;
     }
     if (screen == Screen::Menu && menu_ready) {
@@ -102,12 +164,14 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             // The shipped build reaches the game through its own "Select Difficulty" dialog;
             // this opens the in-canvas chooser instead.
             std::printf("menu: ConcentrationButton -> Purble Pairs difficulty chooser\n");
+            picker_cakes = false;
             build_difficulty();
         } else if (hit->name == "ComfyCakesButton") {
             // PurblePlaceManager::Init sets its state to 2 for this house (0x100071A00 /
             // 0x100071A1A), which is what starts ComfyCakesGame::LoadGameUI.
-            std::printf("menu: ComfyCakesButton -> Comfy Cakes\n");
-            start_cakes(0);
+            std::printf("menu: ComfyCakesButton -> Comfy Cakes difficulty chooser\n");
+            picker_cakes = true;
+            build_difficulty();
         } else if (hit->name == "ExitButton") {
             std::printf("menu: ExitButton clicked - exiting, as the game does\n");
             return false;
@@ -144,10 +208,7 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         if (hit == nullptr) return true;
         if (hit->name == "ReturnToMainMenu") {
             std::printf("cakes: ReturnToMainMenu -> main menu\n");
-            cakes_ready = false;
-            screen = Screen::Menu;
-            menu_hover_name.clear();
-            build_menu();
+            game_to_menu();
             return true;
         }
         if (hit->name == "SlideLeftButton") {
@@ -172,50 +233,6 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
         return true;
     }
     if (!pairs_ready) return true;
-    // The end-of-round panel stands in for OnWinAnimStop's dialog box, so it is modal: only its
-    // own buttons act and every other click is swallowed.
-    if (result_shown) {
-        const UiButton* hit = nullptr;
-        for (const UiButton& button : result_buttons) {
-            const SDL_FRect& r = button.rect;
-            if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
-                hit = &button;
-                break;
-            }
-        }
-        // The chooser highlights on motion, so this panel does too; only the draws are rebuilt.
-        bool hover_changed = false;
-        for (UiButton& button : result_buttons) {
-            const bool hover = hit != nullptr && button.id == hit->id;
-            if (button.hover == hover) continue;
-            button.hover = hover;
-            hover_changed = true;
-        }
-        if (hover_changed) draw_result_panel();
-        // The panel stands in for a modal dialog, so the board behind it holds no focus.
-        if (motion_only) {
-            update_hover(-1.0f, -1.0f);
-            return true;
-        }
-        if (hit == nullptr) return true;
-        if (hit->id == "PlayAgain") {
-            std::printf("pairs: New Game -> a new %s round\n", picker_choice.c_str());
-            ++seed_for_pairs;
-            start_game(picker_choice, true);
-        } else if (hit->id == "ChangeDifficulty") {
-            std::printf("pairs: Change Difficulty -> the chooser\n");
-            hide_tip();
-            free_direct(result_draws);
-            result_buttons.clear();
-            result_shown = false;
-            rebuild_overlay();
-            build_difficulty();
-        } else {
-            std::printf("pairs: Main Menu -> main menu\n");
-            game_to_menu();
-        }
-        return true;
-    }
     // A tip bubble with <CaptureGlobalClick> (the default) takes the click, which is how the
     // intro's "How To Play" bubbles are dismissed in the shipped game.  It takes the click only:
     // the engine's mouse-move handler runs whatever is on screen, so the board behind the bubble

@@ -75,7 +75,7 @@ for mode, score in (("Beginner", 410), ("Intermediate", 1180), ("Advanced", 4040
     assert f"solve: WON, score {score}" in text, mode
     print("pairs-" + mode + ": PASS")
 
-text = run("cakes-menu", ["--menu", "--script-click", "330,250;50,465", "--shot", str(output / "cakes-menu.ppm")])
+text = run("cakes-menu", ["--menu", "--script-click", "330,250;400,170;50,465", "--shot", str(output / "cakes-menu.ppm")])
 assert "ComfyCakesButton -> Comfy Cakes" in text
 assert "cakes: ReturnToMainMenu -> main menu" in text
 print("cakes menu roundtrip: PASS")

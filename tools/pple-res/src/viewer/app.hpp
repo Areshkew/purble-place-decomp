@@ -143,6 +143,8 @@ private:
     // board dealt for it.
     std::string resume_difficulty;
     void build_difficulty();
+    // The shared chooser keeps its destination across hover and DPI rebuilds.
+    bool picker_cakes = false;
     void draw_difficulty();
     void start_game(const std::string& difficulty, bool intro);
     void game_to_menu();

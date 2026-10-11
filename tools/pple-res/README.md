@@ -235,9 +235,13 @@ are in, through the click path and `--cakes-solve`.
 
 ### Comfy Cakes: the round
 
-`--cakes [Beginner|Intermediate|Advanced]` starts a round; the menu's Comfy Cakes house starts a
-Beginner one, and `ReturnToMainMenu` and **ESC** leave.  `src/viewer/cakes_play.cpp` owns the play
-state over the SDL-free model in `src/cakes.cpp`:
+`--cakes [Beginner|Intermediate|Advanced]` starts a round directly (the analysis hook). The menu's
+Comfy Cakes house now opens **Select Difficulty**, with cake-specific descriptions rather than
+Pairs grid descriptions. `ReturnToMainMenu` and **ESC** leave. Wins and losses show Game Points,
+Final Score, the moves bonus, and **New Game / Change Difficulty / Main Menu** buttons; the panel
+is modal while dispatch animations continue behind it. This replaces the previous keyboard-only
+round end. [cakes_play.cpp](src/viewer/cakes_play.cpp) owns play state over the SDL-free
+[model](src/cakes.cpp); [overlays.cpp](src/viewer/overlays.cpp) draws the shared chooser/result UI:
 
 | Piece | Engine | Model |
 |---|---|---|
@@ -357,6 +361,23 @@ changing targets, reset/navigation and Pairs (23 runs). [cakes_animation_regress
 samples all six machines, roller motion, wrapping/dispatch/trash, reset and hover in both DPI modes
 (42 normal-click captures). Arguments: build directory, local sample directory, output directory.
 Timing samples are tolerant and are not a claim of original-game pixel/timing parity.
+
+#### Comfy Cakes UI/visual corrections (session 36)
+
+- The TV frame's already-qualified key is not qualified twice. It now draws **before** its purple
+  screen and glass, rather than painting opaque black over them; there is still one frame owner.
+- Each `LAYERS.XML/Shape` retains its own delta: round/rectangle batter **-23**, heart **-19**.
+  Drawing, tool effect endpoints and model replacement/removal use the selected shape, fixing the
+  4 px-per-layer gap under icing/decoration (3.2 px on the TV).
+- Dispatch platform/right-belt frames use shipping phases, not unrelated main-belt/chute updates.
+  The platform still resets at the end of its own animation. Exact platform cue timing is approximate.
+- Arrow focus halos are centred on their button rectangles; this placement is a requested visual
+  correction, not a newly observed original-game coordinate. Only the focused control glows.
+- [cakes_ui_regression.py](tests/cakes_ui_regression.py) checks 30 local-asset runs in both DPI modes:
+  chooser choices, modal win/loss actions, actual post-navigation captures, purple TV pixels,
+  stable idle dispatch-platform UVs through slides/hover, and centred/exclusive arrow focus.
+  CTest also covers per-shape heights and replacement. `--cakes-solve` is now one-shot so its
+  result-panel New Game starts a playable round rather than solving it again.
 
 Remaining Comfy Cakes gaps: automatic/time-attack timers, simultaneous belt cakes/line-clog loss,
 full removal/replacement choreography, exact sound mapping, decoration placement/orientation,

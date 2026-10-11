@@ -125,7 +125,8 @@ bool CakeModel::load_layers(const std::vector<std::uint8_t>& xml, std::string& e
             for (const XmlNode& shape : layer.children) {
                 if (shape.name != "Shape") continue;
                 const XmlNode* sd = child_ci(shape, "Delta");
-                def.delta = sd == nullptr ? 0 : std::atoi(sd->text.c_str());
+                def.shape_deltas.push_back(sd == nullptr ? 0 : std::atoi(sd->text.c_str()));
+                if (shapes == 0) def.delta = def.shape_deltas.front();
                 const XmlNode* ss = child_ci(shape, "Sprite");
                 def.shapes.push_back(ss == nullptr ? std::string{} : ss->text);
                 ++shapes;
@@ -237,7 +238,7 @@ CakeUse CakeModel::use_tool(Cake& cake, int station, int index, CakeLayer& added
     const int op = cake.layers.empty() ? 6 : kLayerOperation[static_cast<std::size_t>(current)]
                                                        [static_cast<std::size_t>(station)];
     const CakeLayerDef* def = layer(index);
-    const int delta = def == nullptr ? 0 : def->delta;
+    const int delta = def == nullptr ? 0 : def->delta_for(added.shape);
     switch (op) {
         case 0:
             return CakeUse::Refused;
@@ -248,7 +249,7 @@ CakeUse CakeModel::use_tool(Cake& cake, int station, int index, CakeLayer& added
             // The top layer is replaced.  ComfyCakesGame::GenerateCorrectCake's own sequence
             // starts with a pan, so a first-use pan on an empty platter is the same path.
             if (!cake.layers.empty()) {
-                cake.height_delta -= delta_of(cake.layers.back().index);
+                cake.height_delta -= delta_of(cake.layers.back());
                 cake.layers.pop_back();
             }
             break;

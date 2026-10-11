@@ -426,6 +426,11 @@ void App::cakes_judge() {
         std::printf("cakes: LOST after %d mistake(s), final score %d\n", cakes_missed,
                     cakes_final);
     }
+    if (cakes_over) {
+        hide_tip();
+        cakes_chef_pending_tip.clear();
+        build_result_panel(cakes_won);
+    }
 }
 
 // ComfyCakesGame::ComputeScore (0x10005CC4C).  The moves bonus comes from the difficulty's
@@ -461,7 +466,7 @@ float App::cakes_cake_top_y(const pple::Cake& cake, int hide_top) const {
                                     : 0;
     for (std::size_t i = 0; i < visible; ++i) {
         const pple::CakeLayerDef* def = cakes_model.layer(cake.layers[i].index);
-        y += static_cast<float>(def == nullptr ? 0 : def->delta);
+        y += static_cast<float>(def == nullptr ? 0 : def->delta_for(cake.layers[i].shape));
     }
     return y;
 }
@@ -521,7 +526,7 @@ void App::cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y, in
                           fw * scale, fh * scale};
         scene_draws.push_back(d);
         cakes_draw_names.push_back(sprite);
-        y += static_cast<float>(def->delta);
+        y += static_cast<float>(def->delta_for(layer.shape));
     }
 }
 

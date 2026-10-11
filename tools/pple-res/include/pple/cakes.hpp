@@ -35,6 +35,13 @@ struct CakeLayerDef {
     int delta = 0;
     std::string sprite;                 // the single-sprite form
     std::vector<std::string> shapes;    // one per pan shape, in round/rectangle/heart order
+    std::vector<int> shape_deltas;      // each Shape owns its own height, not the last Shape's
+    int delta_for(int shape) const {
+        if (shape_deltas.empty()) return delta;
+        const std::size_t at = shape < 0 || static_cast<std::size_t>(shape) >= shape_deltas.size()
+                                  ? 0 : static_cast<std::size_t>(shape);
+        return shape_deltas[at];
+    }
 };
 
 // The per-difficulty variables.  The field offsets are the TweakVars::Bind targets in
@@ -182,12 +189,12 @@ class CakeModel {
         bool vars_ok_ = false;
         bool layers_ok_ = false;
         // A layer's LAYERS.xml <Delta>.
-        int delta_of(int index) const {
-            const CakeLayerDef* def = layer(index);
-            return def == nullptr ? 0 : def->delta;
+        int delta_of(const CakeLayer& value) const {
+            const CakeLayerDef* def = layer(value.index);
+            return def == nullptr ? 0 : def->delta_for(value.shape);
         }
         void pop_delta(Cake& cake) const {
-            cake.height_delta -= delta_of(cake.layers.back().index);
+            cake.height_delta -= delta_of(cake.layers.back());
             cake.layers.pop_back();
         }
 };
