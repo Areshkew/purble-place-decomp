@@ -234,9 +234,9 @@ and one of the six `UI\BuildAPurble\PurbleFaceTemplate*.xml` files (`Face::SetTe
 `0x100069444`) and draws:
 
 * the room background (`UI\BuildAPurble\Background.png`, which already contains the cabinet panel
-  and the colour-count panel), the curtain rod, the curtain at its own frame (7 is open, 15
-  closed), the two spotlights and the dark **mystery head** that stands in for the hidden purble
-  until the reveal;
+  and the colour-count panel), the curtain rod and animated curtain (0 closed, 7 open,
+  15 closed again), the two spotlights and the dark **mystery head** shown during the intro;
+  the curtain closes after the intro and hides the answer while guessing;
 * the cabinet: the colour stones of the current difficulty, that difficulty's shelves, and for
   every colour the **one visible variant** of each shelf (the round picks one of three variants per
   colour and feature) with its check box (empty, green check or red X);
@@ -247,8 +247,25 @@ and one of the six `UI\BuildAPurble\PurbleFaceTemplate*.xml` files (`Face::SetTe
 The rules live in `pple::ShopModel` (`src/shop.cpp`): a round keeps 3, 4 or 5 colours and feature
 slots, the player picks a colour per shelf, and `Face::Compare` (`0x100069F18`) scores the guess as
 *right colour/right feature* and *right colour/wrong feature* over the hidden face's colour
-multiset.  A won or lost round reveals the hidden purble, opens the curtain, plays the round's own
-sounds and raises the same end-of-round panel the other two games use.
+multiset. Each shelf owns exactly one selected colour: another part replaces it, and clicking
+that part again clears the shelf. The selected cabinet item fades to alpha 128, as in the shipped
+`FadeOutAnimation.xml`; checkboxes on Intermediate/Advanced are independent deduction notes.
+Old colour counts disappear when a part changes. Incomplete and duplicate guesses show a HUD
+message. A won or lost round opens the curtain on the actual hidden face. The answer stays visible
+until the next click, which raises the shared end-of-round panel. This click-to-continue is a
+reconstruction usability extension; the original puts up its dialog after its win animation.
+`N`/`R` restarts; `1`/`2`/`3` changes difficulty and cancels the old reveal.
+
+[shop_flow.hpp](src/viewer/shop_flow.hpp) owns the SDL-free curtain timeline: the shipped intro
+opens in 0.5 s, holds for 3 s and closes in 0.5 s; answer opening takes 0.5 s. Animated ticks only
+change a cached source rectangle; room rebuilds occur at phase boundaries, not every tick.
+[shop_regression.py](tests/shop_regression.py) runs local-assets normal-click and screenshot checks:
+`shop_regression.py BUILD_DIR SAMPLE_DIR FRESH_TRACE_DIR`. CTest `shop-rules` also covers rapid
+replacement, removal and the curtain/restart timeline. Section 49 evidence:
+`C:\re\traces\cpp\bs\s48-regression-verified` — **62 Shop runs PASS**, all difficulties in both
+DPI modes; **2 Shop navigation**, **27 Cakes/menu/Pairs**, **8 eye-reward** runs and **5/5 CTest**
+also PASS. Overlapping Advanced buttons now hit-test in reverse creation order, including their
+checkboxes, rather than letting an earlier neighbour steal a click.
 
 
 ### Comfy Cakes
@@ -1069,9 +1086,11 @@ these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
   the cabinet with one visible variant per colour, the guess purble, the counts, the history strip,
   the Beginner check-box marks, the reveal, the round's own sounds and the shared end-of-round
   panel.  The history strip scrolls (its arrows' own sounds and ghosting) and
-  Intermediate/Advanced items can be tagged.  Not done there yet: the curtain/stage intro
-  animations, the win and inflate animations, the game's own tips and the save files; see sections
-  40 and 41 of `D:\Development\re\notes\purbleplace.md`.
+  Intermediate/Advanced items can be tagged. The curtain intro/answer opening and selected-item
+  ghosting are corrected in section 49. Not done there yet: the stage intro, win/inflate animations,
+  the game's own tips and save files. Item fading uses the authored endpoint immediately rather
+  than its 0.2 s interpolation; HUD guidance and click-to-continue are reconstruction extensions.
+  See sections 40, 41 and 49 of `D:\Development\re\notes\purbleplace.md`.
   The card deck, board geometry,
   match rule, scoring, placement, container parenting, flip animation, sound map, progress
   meter, multi-level rounds, special cards, sneak peek, per-level card back, the jar's tray

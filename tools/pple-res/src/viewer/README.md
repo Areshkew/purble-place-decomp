@@ -26,6 +26,7 @@ checks normal clicks, inventory pixels, saved tokens and token use/expiry in bot
 | Comfy Cakes: the round's state over the SDL-free model | [cakes_play.cpp](cakes_play.cpp): `cakes_new_game`, `cakes_use_tool`, `cakes_slide_to`, `cakes_slide_left`, `cakes_slide_right`, `cakes_judge`, `cakes_compute_score`, `cakes_draw_cake`, `cakes_refresh`, `cakes_redraw`, `cakes_solve` |
 | Comfy Cakes: difficulty-specific machine visibility/slots, idle parts and tool animations | [cakes_tools.cpp](cakes_tools.cpp): `cakes_tool_visible`, `cakes_tool_slot_for`, `cakes_tools_load`, `cakes_tools_start`, `cakes_tools_shake`, `cakes_tools_advance`, `cakes_tools_draw` |
 | Purble Shop: the room, its documents and the cabinet | [shop_screen.cpp](shop_screen.cpp): `start_shop`, `build_shop`, `shop_refresh`, `shop_append`, `shop_draw_cabinet`, `shop_draw_face`; records in [shop_screen.hpp](shop_screen.hpp) |
+| Purble Shop: curtain/feedback timeline | [shop_flow.hpp](shop_flow.hpp): App-owned `ShopFlow`; `shop_advance` in [shop_screen.cpp](shop_screen.cpp), called by [loop.cpp](loop.cpp); tests in [shop_test.cpp](../../tests/shop_test.cpp) and [shop_regression.py](../../tests/shop_regression.py) |
 | Purble Shop: the round over the SDL-free model | [shop_screen.cpp](shop_screen.cpp): `shop_new_game`, `shop_select`, `shop_guess`, `shop_draw_history`, `shop_draw_counts`; rules in [shop.cpp](../shop.cpp) |
 | Comfy Cakes: normal-round timer, indicator, inlet spawn schedule and line-clog check | [cakes_clock.cpp](cakes_clock.cpp): `cakes_clock_advance`, `cakes_add_paper`; SDL-free state in [cakes_clock.hpp](cakes_clock.hpp), owned by `App`, reset only on a new round; tests in [cakes_clock_test.cpp](../../tests/cakes_clock_test.cpp) and [cakes_clock_regression.py](../../tests/cakes_clock_regression.py) |
 | Comfy Cakes: belt/roller clocks, independent inlet motion, wrapping, dispatch, trash and shipping readouts | [cakes_transport.cpp](cakes_transport.cpp): `cakes_transport_advance`, `cakes_transport_draw`, `cakes_transport_finish_slide`, `cakes_next_target`; state owned by `App::cakes_transport` in [cakes_transport.hpp](cakes_transport.hpp) |
@@ -430,8 +431,8 @@ pixel comparisons.
   [shop.cpp](../../src/shop.cpp)) and the viewer only moves and draws it: `shop_select` is
   `OnSetFeature`'s toggle plus the item's own `<SoundID>`, `shop_guess` is `MakeGuess` (counts,
   score, history, Beginner's check-box marks, the reveal and the end-of-round panel).
-  `shop_refresh` = `build_shop` + the HUD; it runs on a click, a hover or a screen rebuild, never
-  per tick.
+  `shop_refresh` = `build_shop` + the HUD; it runs on a click, a hover, a screen rebuild or a
+  curtain phase boundary, never per animation tick.
 - The screen is `Screen::Shop`: the menu's `BuildAPurbleButton` opens the shared chooser with
   `picker_shop` (the shop's own background and option text), the choice calls `start_shop`, and
   `ESC`, `ReturnToMainMenu` or the result panel's Main Menu leave through `game_to_menu`.
@@ -445,14 +446,26 @@ pixel comparisons.
 - The history strip is `HistoryWindow+4` (`App::shop_history_first`): `shop_draw_history` draws
   from it and ghosts an arrow at alpha 32 exactly where `UpdateSlots` does, `shop_history_slide`
   is the arrows' own action (`LEFT_BUTTON`/`RIGHT_BUTTON`, older/newer), and a new entry parks the
-  window at `count - 6`. Each visible item registers **two** hot-spots, its check box first and
-  the item second, because `FaceFeatureButton::Init` (0x10006A434) creates the box after the item
+  window at `count - 6`. Each visible item registers **two** hot-spots in creation order,
+  the item first and its check box second. Input tests the entire list backwards, because `FaceFeatureButton::Init` (0x10006A434) creates the box after the item
   and `RenderManager::HitTestTopLevel` (0x10008F3D0) walks the render list backwards, so the
   topmost node wins; `shop_tag` is `FaceFeatureCheckBox::HandleEvent`'s 1 -> 3 -> 2 cycle
   (Intermediate and Advanced only). `--shop-guess "c0,..,c4;..."` judges selections through the
   same `shop_guess` a click reaches.
-  Not implemented yet: the curtain/stage intro animations, the win animation, the inflate
-  animation, the game's own tips and the save files.
+  Correction (section 49): testing only the first matching hot-spot handled each checkbox but
+  let an earlier neighbour steal clicks on overlapping Advanced mouths. Full reverse ordering
+  now agrees with drawing order while keeping checkboxes above their own item.
+- [shop_flow.hpp](shop_flow.hpp) owns the SDL-free curtain/feedback timeline, reset only by
+  `shop_new_game`. `App::shop_advance` updates a cached curtain source rectangle, rebuilding once
+  at phase boundaries. Intro opens/holds/closes (0.5/3/0.5 s); guessing rests closed; win/loss opens
+  in 0.5 s on the real answer. The answer remains until a click opens the result panel.
+  Selection uses one slot per shelf, ghosts its cabinet item to the authored alpha 128 endpoint,
+  and hides stale counts. Checkbox tags are notes, not selected parts. Model and flow tests live
+  in [shop_test.cpp](../../tests/shop_test.cpp); normal-click/pixel checks in both DPI modes are
+  [shop_regression.py](../../tests/shop_regression.py).
+  Not implemented yet: the stage intro, win/inflate animation, the game's own tips and save files.
+  Item alpha currently snaps to its endpoint rather than interpolating over 0.2 s; the HUD
+  guidance and persistent answer/click-to-continue are reconstruction usability extensions.
 
 ### Comfy Cakes hover correction (session 42)
 

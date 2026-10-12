@@ -1,6 +1,7 @@
 // Purble Shop model test: the engine's comparison rule, the per-difficulty setup, the selection
 // toggle, the score arithmetic and the end conditions.  No assets, no SDL.
 #include "pple/shop.hpp"
+#include "../src/viewer/shop_flow.hpp"
 
 #include <cstdio>
 #include <cstdlib>
@@ -179,6 +180,46 @@ int main() {
         require(outcome.accepted && !outcome.won, "a rotation is not the exact face");
         require(model.rcwf() == 5 && model.rcrf() == 0, "every colour is right, in the wrong place");
         require(model.score() == 100 + 5 * 5, "RCWFPoints on Advanced");
+    }
+
+    // Fast replacements never add extra face parts: each shelf has exactly one slot.
+    for (int difficulty = 0; difficulty < 3; ++difficulty) {
+        pple::ShopModel model;
+        model.new_game(difficulty, 1);
+        for (int feature = model.feature_begin(); feature <= model.feature_end(); ++feature) {
+            for (int color = 0; color < model.count(); ++color) {
+                model.select(feature, color);
+                require(model.selected(feature) == color, "replacement owns one feature slot");
+            }
+            model.select(feature, model.count() - 1);
+            require(model.selected(feature) == -1, "click selected part clears only that shelf");
+        }
+    }
+    // Curtain timeline and count-feedback lifetime are independent of model guesses.
+    {
+        using Flow = pple::viewer::ShopFlow;
+        Flow flow;
+        require(flow.curtain_frame() == 0 && flow.mystery_visible(), "intro starts closed");
+        flow.advance(0.5f);
+        require(flow.curtain_frame() == 7 && flow.mystery_visible(), "intro opens on mystery");
+        flow.advance(3.25f);
+        require(flow.curtain_frame() == 11, "intro closes after hold");
+        flow.advance(0.25f);
+        require(flow.phase == Flow::Phase::Playing && flow.curtain_frame() == 0 &&
+                !flow.mystery_visible() && !flow.answer_visible(), "guessing hides mystery and answer");
+        flow.counts_visible = true;
+        flow.reveal();
+        require(flow.answer_visible() && flow.curtain_frame() == 0, "answer behind closed curtain");
+        flow.advance(0.25f);
+        require(flow.curtain_frame() == 3 && flow.moving(), "answer opening in progress");
+        flow.advance(0.25f);
+        require(flow.phase == Flow::Phase::Answer && flow.curtain_frame() == 7 &&
+                !flow.moving(), "answer remains visible until player continues");
+        flow.advance(20.0f);
+        require(flow.answer_visible(), "answer does not disappear on a timer");
+        flow.reset();
+        require(!flow.counts_visible && !flow.answer_visible() && flow.curtain_frame() == 0,
+                "restart cancels old reveal and feedback");
     }
 
     // Names: the face template calls the fifth slot Extras, the cabinet calls it Accessory.

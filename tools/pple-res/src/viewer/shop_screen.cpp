@@ -261,8 +261,9 @@ void App::start_shop(int difficulty) {
 void App::shop_new_game(int difficulty) {
     shop_difficulty = std::clamp(difficulty, 0, 2);
     shop_model.new_game(shop_difficulty, shop_seed);
-    shop_reveal = false;
-    shop_curtain_frame = 7;  // the intro opens the curtain; the room rests open
+    shop_flow.reset();
+    shop_message.clear();
+    shop_tick_at = SDL_GetTicks();
     shop_history_first = 0;
     for (int color = 0; color < 5; ++color)
         for (int feature = 0; feature < 5; ++feature)
@@ -419,7 +420,11 @@ void App::shop_draw_cabinet() {
             // The button is drawn first (the check box sits over it) but the check box wins the
             // click where they overlap: the engine hit-tests the topmost node and
             // FaceFeatureButton::Init (0x10006A434) creates the box after the button.
-            shop_append(button->sprite, x, y, 1.0f, -1, hovered ? 1 : 0, std::string(), false);
+            // OnSetFeature ghosts exactly the selected button on each shelf. Check boxes
+            // are independent deduction notes, not a second set of selected face parts.
+            const int alpha = shop_model.selected(feature) == button->color ? 128 : 255;
+            shop_append(button->sprite, x, y, 1.0f, -1, hovered ? 1 : 0, std::string(), false,
+                        alpha);
             // The check box: state 0 shows nothing, 1 the empty box, 2 the green check and
             // 3 the red X (FaceFeatureCheckBox::SetState).
             const int state = shop_check[button->color][button->feature];
@@ -435,16 +440,16 @@ void App::shop_draw_cabinet() {
                     shop_append("UI/BuildAPurble/Cabinet/RedX.xml", cx, cy, 1.0f, 0, 0,
                                 std::string(), false);
             }
-            // The check box is a NodeButton of its own, created after the item's (so it is both
-            // drawn over it and hit-tested first): its hot-spot goes in before the item's.
+            // Keep creation order here; input tests the list backwards. The checkbox
+            // is above its item, and a later shelf item is above an overlapping neighbour.
             const Sprite art = resolve_sprite(bundle, button->sprite, hovered ? 1 : 0);
+            shop_hotspot(button->name, node_rect(x, y, art, 1.0f));
             if (state != 0) {
                 const Sprite box = resolve_sprite(bundle, "UI/BuildAPurble/Cabinet/CheckBox.xml", 0);
                 shop_hotspot(button->name + "/CheckBox",
                              node_rect(slot_x + static_cast<float>(button->check_x),
                                        slot_y + static_cast<float>(button->check_y), box, 1.0f));
             }
-            shop_hotspot(button->name, node_rect(x, y, art, 1.0f));
         }
     }
 }
@@ -538,7 +543,7 @@ void App::shop_tag(int feature, int color) {
 // numbers and their labels come from UI\BuildAPurble\ColorCountTemplate.xml, whose RCRF/RCWF
 // entries ColorCountWidget::Init creates and SetCount shows or hides.
 void App::shop_draw_counts() {
-    if (shop_model.guesses() == 0) return;
+    if (!shop_flow.counts_visible) return;
     const float x = 252.0f, y = 85.0f;
     std::vector<std::uint8_t> data;
     pple::XmlNode root;
@@ -577,11 +582,8 @@ void App::shop_draw_counts() {
     }
 }
 
-// The room.  BuildAPurbleGame::LoadGameUI's own order, with the two faces at the end because
-// their features are created after every other node.  The visible set is the state a round is
-// played in: the intro has opened the curtain and Stage::OnIntroAnimComplete (0x100074368) has
-// hidden the stage and shown the guess purble, while the hidden purble's own node stays hidden
-// behind the mystery head until the win or the loss shows it.
+// The room: mystery head only during the intro; closed curtain during guessing;
+// the answer is drawn behind the opening curtain, never over it.
 void App::build_shop() {
     release_draws();
     shop_hotspots.clear();
@@ -600,16 +602,40 @@ void App::build_shop() {
     // the head container sits at the document's <HeadX>/<HeadY> (75, 70) and the question mark
     // at (101, 102), both in room coordinates.  The mystery head then covers exactly where the
     // 42%-scale hidden purble's head is (86.9, 96.9).
-    if (face != nullptr && !shop_reveal) {
+    if (face != nullptr && shop_flow.mystery_visible()) {
         shop_append(face->mystery_sprite, 75.0f + static_cast<float>(face->mystery_x),
                     70.0f + static_cast<float>(face->mystery_y), 1.0f);
     }
+    if (shop_flow.answer_visible() && face != nullptr) {
+        float hx = 97.0f, hy = 120.0f, hscale = 0.42f;
+        if (const ShopNodeDef* hidden = node("HiddenPurble")) {
+            hx = hidden->x;
+            hy = hidden->y;
+            if (hidden->has_scale) hscale = hidden->scale;
+        }
+        int colors[5];
+        for (int slot = 0; slot < 5; ++slot) colors[slot] = shop_model.hidden(slot);
+        shop_draw_face(*face, hx, hy, hscale, colors, true);
+    }
     if (const ShopNodeDef* rod = node("CurtainRod")) shop_append(rod->sprite, rod->x, rod->y);
+    shop_curtain_cached = false;
     if (curtain != nullptr) {
-        shop_append(curtain->sprite, curtain->x, curtain->y, 1.0f, shop_curtain_frame);
-        // The question mark hangs in the arch while the curtain is closed; the round's intro
-        // opens the curtain, so it is not drawn over an open one.
-        if (shop_curtain_frame == 15)
+        shop_curtain_draw = scene_draws.size();
+        if (shop_append(curtain->sprite, curtain->x, curtain->y, 1.0f,
+                        shop_flow.curtain_frame())) {
+            const Sprite sprite = resolve_sprite(bundle, curtain->sprite, 0);
+            pple::SceneItem geometry;
+            geometry.src_x = sprite.src.x; geometry.src_y = sprite.src.y;
+            geometry.src_w = sprite.src.w; geometry.src_h = sprite.src.h;
+            geometry.frames = sprite.frames; geometry.per_row = sprite.per_row;
+            geometry.prepped = sprite.prepped;
+            for (int i = 0; i < 16; ++i) {
+                auto& r = shop_curtain_sources[i];
+                pple::sprite_frame_rect(geometry, i, r.x, r.y, r.w, r.h);
+            }
+            shop_curtain_cached = true;
+        }
+        if (shop_flow.mystery_visible())
             shop_append("UI/BuildAPurble/question_mark.xml", 101.0f, 102.0f, 1.0f, 0);
     }
     if (const ShopNodeDef* spot = node("Spotlight")) shop_append(spot->sprite, spot->x, spot->y);
@@ -635,18 +661,6 @@ void App::build_shop() {
         for (int slot = 0; slot < 5; ++slot) colors[slot] = shop_model.selected(slot);
         shop_draw_face(*face, gx, gy, gscale, colors, true);
     }
-    // The reveal after a win or a loss: the hidden purble's own node.
-    if (shop_reveal && face != nullptr) {
-        float hx = 97.0f, hy = 120.0f, hscale = 0.42f;
-        if (const ShopNodeDef* hidden = node("HiddenPurble")) {
-            hx = hidden->x;
-            hy = hidden->y;
-            if (hidden->has_scale) hscale = hidden->scale;
-        }
-        int colors[5];
-        for (int slot = 0; slot < 5; ++slot) colors[slot] = shop_model.hidden(slot);
-        shop_draw_face(*face, hx, hy, hscale, colors, true);
-    }
     if (const ShopNodeDef* back = node("ReturnToMainMenu"))
         shop_append_button(back->button.empty() ? back->sprite : back->button, "ReturnToMainMenu",
                            back->x, back->y);
@@ -655,6 +669,12 @@ void App::build_shop() {
 // The whole screen, from the same entry point for a rebuild, a click and a hover.
 void App::shop_refresh() {
     build_shop();
+    if (shop_dump)
+        std::printf("  shop state: selected %d %d %d %d %d; counts %s; curtain %d; answer %s\n",
+                    shop_model.selected(0), shop_model.selected(1), shop_model.selected(2),
+                    shop_model.selected(3), shop_model.selected(4),
+                    shop_flow.counts_visible ? "shown" : "hidden", shop_flow.curtain_frame(),
+                    shop_flow.answer_visible() ? "shown" : "hidden");
     if (shop_dump)
         for (const Hotspot& spot : shop_hotspots)
             std::printf("  shop spot %-18s %.0f,%.0f %.0fx%.0f\n", spot.name.c_str(),
@@ -668,7 +688,34 @@ void App::shop_refresh() {
             ", score " + std::to_string(shop_model.score()) +
             (shop_model.over() ? (shop_model.won() ? ", won" : ", lost") : ""),
     };
+    hud_lines.push_back(shop_flow.answer_visible()
+        ? "Answer revealed. Click to continue; N starts a new round."
+        : !shop_message.empty() ? shop_message
+        : shop_difficulty == 0 ? "Pick one part per shelf, then Guess. Faded parts are selected."
+        : "Pick one part per shelf, then Guess. Faded parts selected; checkboxes are notes.");
     rebuild_hud();
+}
+
+// Only rewrite the cached curtain source rectangle while moving. Rebuild once on a
+// phase boundary to remove the intro head/question mark or update the reveal prompt.
+void App::shop_advance() {
+    const Uint64 now = SDL_GetTicks();
+    const float dt = static_cast<float>(now - shop_tick_at) / 1000.0f;
+    shop_tick_at = now;
+    if (!shop_flow.moving()) return;
+    const auto before = shop_flow.phase;
+    const float old_time = shop_flow.elapsed;
+    shop_flow.advance(dt);
+    if (before == ShopFlow::Phase::Intro && old_time < 3.5f && shop_flow.elapsed >= 3.5f)
+        play_shop_sfx("BAP_CURTAIN_CLOSE");
+    if (before != shop_flow.phase) {
+        std::printf("shop: curtain %s, frame %d\n",
+                    shop_flow.answer_visible() ? "answer revealed" : "closed for guessing",
+                    shop_flow.curtain_frame());
+        shop_refresh();
+    } else if (shop_curtain_cached && shop_curtain_draw < scene_draws.size()) {
+        scene_draws[shop_curtain_draw].src = shop_curtain_sources[shop_flow.curtain_frame()];
+    }
 }
 
 // A click on a visible cabinet item: BuildAPurbleGame::OnSetFeature (0x100053C5C) toggles the
@@ -678,6 +725,14 @@ void App::shop_refresh() {
 void App::shop_select(int feature, int color) {
     const int before = shop_model.selected(feature);
     shop_model.select(feature, color);
+    if (shop_model.selected(feature) != before) {
+        shop_flow.counts_visible = false;
+        shop_message.clear();
+    }
+    std::printf("shop: selected %d %d %d %d %d, counts %s\n",
+                shop_model.selected(0), shop_model.selected(1), shop_model.selected(2),
+                shop_model.selected(3), shop_model.selected(4),
+                shop_flow.counts_visible ? "shown" : "hidden");
     if (shop_model.selected(feature) != before && shop_model.selected(feature) != -1) {
         const ShopFaceTemplate* face = shop_face();
         if (face != nullptr) {
@@ -698,8 +753,12 @@ void App::shop_guess() {
         std::printf("shop: guess refused (%s)\n",
                     outcome.duplicate ? "the same guess was already made" : "not every shelf is set");
         if (!outcome.duplicate) play_shop_sfx("BAD_MOVE");
+        shop_message = outcome.duplicate ? "That guess is already in the history. Change a part."
+                                        : "Choose a part on every shelf before clicking Guess.";
+        shop_refresh();
         return;
     }
+    shop_flow.counts_visible = true;
     // The guess face inflates its features as they are judged (proto 8, BAP_FACE_INFLATE).
     play_shop_sfx("BAP_FACE_INFLATE");
     // The Beginner hint: the shelves whose colour was right are marked green/red for every item,
@@ -722,25 +781,23 @@ void App::shop_guess() {
     if (entries > 6) shop_history_first = entries - 6;
     if (outcome.won) {
         std::printf("shop: won in %d guess(es)\n", shop_model.guesses());
-        shop_reveal = true;
+        shop_flow.reveal();
+        shop_tick_at = SDL_GetTicks();
         // OnEnterWonGameState plays proto 0x51 (BAP_FEATURE_WIN) and opens the curtain; the
         // "you won" event itself is proto 6, which OnWinAnimStop plays with the dialog.
         play_shop_sfx("BAP_FEATURE_WIN");
         play_shop_sfx("BAP_CURTAIN_WIN_OPEN");
     } else if (outcome.lost) {
         std::printf("shop: lost after %d guess(es)\n", shop_model.guesses());
-        shop_reveal = true;
+        shop_flow.reveal();
+        shop_tick_at = SDL_GetTicks();
         // OnEnterLoseGameState: proto 2, LOSE_GAME, then the curtain opens on the answer.
         play_shop_sfx("LOSE_GAME");
         play_shop_sfx("BAP_CURTAIN_WIN_OPEN");
     }
     shop_refresh();
-    if (outcome.won || outcome.lost) {
-        // The shipped build puts up its own dialog here (OnWinAnimStop 0x100053A4C plays proto 6
-        // first); the viewer uses the same end-of-round panel the other two games do.
-        if (outcome.won) play_shop_sfx("BAP_WIN_GAME");
-        build_result_panel(outcome.won);
-    }
+    // Keep the answer on screen. The next click after the curtain opens brings up
+    // the result panel; do not replace the room before the player can see the answer.
 }
 
 }  // namespace pple::viewer

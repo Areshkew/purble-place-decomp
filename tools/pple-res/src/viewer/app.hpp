@@ -4,6 +4,7 @@
 #include "cakes_transport.hpp"
 #include "cakes_clock.hpp"
 #include "shop_screen.hpp"
+#include "shop_flow.hpp"
 #include "pple/cakes.hpp"
 #include "pple/shop.hpp"
 
@@ -618,10 +619,13 @@ private:
     std::map<std::string, ShopFaceTemplate> shop_templates;
     // The template this round uses and the items of the two faces.
     std::string shop_template_doc;
-    // Which sprite frame the curtain and the question mark draw.  7 is the open curtain and 15
-    // the closed one (OpenAnimation 0->7, CloseAnimation 7->15); the round plays the intro, so
-    // the room rests with the curtain open and the mystery head behind it.
-    int shop_curtain_frame = 7;
+    void shop_advance();
+    ShopFlow shop_flow;
+    std::string shop_message;
+    Uint64 shop_tick_at = 0;
+    std::size_t shop_curtain_draw = 0;
+    std::array<SDL_FRect, 16> shop_curtain_sources{};
+    bool shop_curtain_cached = false;
     // Per (colour, feature) check box state: 0 nothing, 1 the empty box, 2 the green check,
     // 3 the red X (FaceFeatureCheckBox::SetState 0x10007AD78).
     int shop_check[5][5] = {};
@@ -630,7 +634,6 @@ private:
     int shop_history_first = 0;
     std::vector<Hotspot> shop_hotspots;
     std::string shop_hover_name;
-    bool shop_reveal = false;   // the win/lose reveal: the hidden purble replaces the mystery head
     bool menu_ready = false;
     std::string menu_hover_name;
     // Hover.  The engine's focus follows the mouse: UserInterface::ProcessMouseMove (0x100098498)

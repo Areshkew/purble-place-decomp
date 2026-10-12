@@ -266,10 +266,12 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
     // (0x1000527CC), and ReturnToMainMenu leaves for the menu.
     if (screen == Screen::Shop) {
         const Hotspot* hit = nullptr;
-        for (const Hotspot& spot : shop_hotspots) {
-            const SDL_FRect& r = spot.rect;
+        // Later-created nodes are on top. Cabinet sprite boxes can overlap (notably
+        // Advanced mouths); the visible front item must win, not an earlier neighbour.
+        for (auto it = shop_hotspots.rbegin(); it != shop_hotspots.rend(); ++it) {
+            const SDL_FRect& r = it->rect;
             if (sx >= r.x && sx < r.x + r.w && sy >= r.y && sy < r.y + r.h) {
-                hit = &spot;
+                hit = &*it;
                 break;
             }
         }
@@ -279,6 +281,13 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             shop_hover_name = want;
             std::printf("  hover: %s\n", want.empty() ? "nothing" : want.c_str());
             shop_refresh();
+            return true;
+        }
+        if (!motion_only && shop_model.over()) {
+            if (shop_flow.phase == ShopFlow::Phase::Answer) {
+                if (shop_model.won()) play_shop_sfx("BAP_WIN_GAME");
+                build_result_panel(shop_model.won());
+            }
             return true;
         }
         if (hit == nullptr) return true;

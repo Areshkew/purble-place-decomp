@@ -265,6 +265,7 @@ int App::run_loop() {
             cakes_tick = 0.0f;
             if (chef_moved || tools_moved || transport_moved || clock_moved) cakes_redraw();
         }
+        if (screen == Screen::Shop) shop_advance();
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {
             const Uint64 now = SDL_GetTicks();
