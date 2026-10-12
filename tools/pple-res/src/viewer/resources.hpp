@@ -126,6 +126,10 @@ namespace pple::viewer {
         // so the drawn corner is (x, y) - reg * scale / 100, not (x, y) + reg.
         float reg_x = 0.0f;
         float reg_y = 0.0f;
+        // PurblePlaceUILoader::LoadButton (0x1000737B0) reads only /Button, /Alpha, the material,
+        // the position and /Visible, and "OverrideBB" appears nowhere in either DLL's strings, so
+        // a button's hit area is its own sprite box (x - registration, SourceWidth x SourceHeight)
+        // and the authored <OverrideBB> is dead data in this build.
         std::string note;
     };
 

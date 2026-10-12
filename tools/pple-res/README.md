@@ -905,6 +905,16 @@ these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
 - Audio: the viewer reported `audio shop wasapi: 12/12 events decoded`, and a scripted win queued
   `BAP_CURTAIN_CLOSE`, `BAP_FEATURE_INTRO`, the three picked items' own `<SoundID>` events,
   `BAP_FACE_INFLATE`, `BAP_FEATURE_WIN`, `BAP_CURTAIN_WIN_OPEN` and `BAP_WIN_GAME`.
+- Session 41 (history scrolling and check-box tagging): `ctest` **3/3** and
+  `tests/cakes_regression.py` **23/23** again.  Advanced with eight judged guesses through
+  `--shop-guess` then `--script-click '48,430;48,430;48,430;772,430'` walks the window
+  `3..8 -> 2..7 -> 1..6 -> 2..7` and ghosts an arrow at alpha 32 exactly where
+  `HistoryWindow::UpdateSlots` does (`shop-adv-history.png`, `shop-history-scroll.png`).  Four
+  clicks on one check box cycle wrong -> right -> untagged -> wrong, and
+  `shop-inter-tag.png` / `shop-tags.png` show the tags.  The evidence also corrects an earlier
+  claim: `<OverrideBB>` is dead data (`LoadButton` 0x1000737B0 reads no hit box and the string does
+  not exist in either DLL); `RenderManager::HitTestTopLevel` (0x10008F3D0) walks the render list
+  backwards, so a button's own rect is what a click tests.
 
 ## Known gaps
 
@@ -937,10 +947,10 @@ these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
   round too (`--shop [Beginner|Intermediate|Advanced]`, or the menu's Purble Shop house): the room,
   the cabinet with one visible variant per colour, the guess purble, the counts, the history strip,
   the Beginner check-box marks, the reveal, the round's own sounds and the shared end-of-round
-  panel.  Not done there yet: the curtain/stage intro
-  animations, the win and inflate animations, history scrolling, the Intermediate/Advanced
-  check-box tagging, the tips and the save files; see section 40 of
-  `D:\Development\re\notes\purbleplace.md`.
+  panel.  The history strip scrolls (its arrows' own sounds and ghosting) and
+  Intermediate/Advanced items can be tagged.  Not done there yet: the curtain/stage intro
+  animations, the win and inflate animations, the game's own tips and the save files; see sections
+  40 and 41 of `D:\Development\re\notes\purbleplace.md`.
   The card deck, board geometry,
   match rule, scoring, placement, container parenting, flip animation, sound map, progress
   meter, multi-level rounds, special cards, sneak peek, per-level card back, the jar's tray

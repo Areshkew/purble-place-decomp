@@ -56,7 +56,10 @@ bool parse_shelf_name(const std::string& name, int& feature, int& difficulty) {
     return false;
 }
 
-// The `OverridBB`-less hot-spot a button uses: (x - registration, SourceWidth x SourceHeight).
+// The rectangle a click tests: the node's own sprite box, (x, y) - registration and
+// SourceWidth x SourceHeight.  PurblePlaceUILoader::LoadButton (0x1000737B0) reads no hit box of
+// its own, and "OverrideBB" is not a string in either DLL, so the authored <OverrideBB> values
+// are dead data in this build.
 SDL_FRect node_rect(float x, float y, const Sprite& sprite, float scale) {
     return SDL_FRect{x - sprite.reg_x * scale, y - sprite.reg_y * scale, sprite.src.w * scale,
                      sprite.src.h * scale};
@@ -68,7 +71,7 @@ SDL_FRect node_rect(float x, float y, const Sprite& sprite, float scale) {
 // sprite, the last frame for a button's hover art, which is what NodeButton::HandleEvent resumes
 // (0x1000AA985).
 bool App::shop_append(const std::string& sprite_xml, float x, float y, float scale, int frame,
-                      int state, const std::string& name) {
+                      int state, const std::string& name, bool hotspot, int alpha) {
     if (sprite_xml.empty()) return false;
     const Sprite sprite = resolve_sprite(bundle, sprite_xml, state);
     if (!sprite.ok) return false;
@@ -94,17 +97,19 @@ bool App::shop_append(const std::string& sprite_xml, float x, float y, float sca
     d.src = SDL_FRect{fx, fy, fw, fh};
     d.dst = SDL_FRect{x - sprite.reg_x * scale, y - sprite.reg_y * scale, fw * scale,
                       fh * scale};
-    d.alpha = 255;
+    d.alpha = alpha;
     scene_draws.push_back(d);
-    if (!name.empty()) {
-        Hotspot spot;
-        spot.name = name;
-        spot.rect = node_rect(x, y, sprite, scale);
-        shop_hotspots.push_back(spot);
-    }
+    if (!name.empty() && hotspot) shop_hotspot(name, node_rect(x, y, sprite, scale));
     scene_w = std::max(scene_w, d.dst.x + d.dst.w);
     scene_h = std::max(scene_h, d.dst.y + d.dst.h);
     return true;
+}
+
+void App::shop_hotspot(const std::string& name, const SDL_FRect& rect) {
+    Hotspot spot;
+    spot.name = name;
+    spot.rect = rect;
+    shop_hotspots.push_back(spot);
 }
 
 bool App::shop_append_button(const std::string& sprite_xml, const std::string& name, float x,
@@ -258,6 +263,7 @@ void App::shop_new_game(int difficulty) {
     shop_model.new_game(shop_difficulty, shop_seed);
     shop_reveal = false;
     shop_curtain_frame = 7;  // the intro opens the curtain; the room rests open
+    shop_history_first = 0;
     for (int color = 0; color < 5; ++color)
         for (int feature = 0; feature < 5; ++feature)
             // FeatureSet::Reset's own default: on Beginner the box is not drawn at all, on the
@@ -410,18 +416,35 @@ void App::shop_draw_cabinet() {
             const float x = slot_x + static_cast<float>(button->x);
             const float y = slot_y + static_cast<float>(button->y);
             const bool hovered = button->name == shop_hover_name;
-            shop_append(button->sprite, x, y, 1.0f, -1, hovered ? 1 : 0, button->name);
+            // The button is drawn first (the check box sits over it) but the check box wins the
+            // click where they overlap: the engine hit-tests the topmost node and
+            // FaceFeatureButton::Init (0x10006A434) creates the box after the button.
+            shop_append(button->sprite, x, y, 1.0f, -1, hovered ? 1 : 0, std::string(), false);
             // The check box: state 0 shows nothing, 1 the empty box, 2 the green check and
             // 3 the red X (FaceFeatureCheckBox::SetState).
             const int state = shop_check[button->color][button->feature];
-            if (state == 0) continue;
-            const float cx = slot_x + static_cast<float>(button->check_x);
-            const float cy = slot_y + static_cast<float>(button->check_y);
-            shop_append("UI/BuildAPurble/Cabinet/CheckBox.xml", cx, cy, 1.0f, 0, 0);
-            if (state == 2)
-                shop_append("UI/BuildAPurble/Cabinet/GreenCheck.xml", cx, cy, 1.0f, 0, 0);
-            else if (state == 3)
-                shop_append("UI/BuildAPurble/Cabinet/RedX.xml", cx, cy, 1.0f, 0, 0);
+            if (state != 0) {
+                const float cx = slot_x + static_cast<float>(button->check_x);
+                const float cy = slot_y + static_cast<float>(button->check_y);
+                shop_append("UI/BuildAPurble/Cabinet/CheckBox.xml", cx, cy, 1.0f, 0, 0,
+                            std::string(), false);
+                if (state == 2)
+                    shop_append("UI/BuildAPurble/Cabinet/GreenCheck.xml", cx, cy, 1.0f, 0, 0,
+                                std::string(), false);
+                else if (state == 3)
+                    shop_append("UI/BuildAPurble/Cabinet/RedX.xml", cx, cy, 1.0f, 0, 0,
+                                std::string(), false);
+            }
+            // The check box is a NodeButton of its own, created after the item's (so it is both
+            // drawn over it and hit-tested first): its hot-spot goes in before the item's.
+            const Sprite art = resolve_sprite(bundle, button->sprite, hovered ? 1 : 0);
+            if (state != 0) {
+                const Sprite box = resolve_sprite(bundle, "UI/BuildAPurble/Cabinet/CheckBox.xml", 0);
+                shop_hotspot(button->name + "/CheckBox",
+                             node_rect(slot_x + static_cast<float>(button->check_x),
+                                       slot_y + static_cast<float>(button->check_y), box, 1.0f));
+            }
+            shop_hotspot(button->name, node_rect(x, y, art, 1.0f));
         }
     }
 }
@@ -441,18 +464,19 @@ void App::shop_draw_history() {
     // frame to (entry index * last frame) / the difficulty's guess limit, and that limit is
     // MaxGuessesINT (7) on Beginner and Intermediate and MaxGuessesADV (13) on Advanced.
     const int limit = shop_difficulty == 2 ? 13 : 7;
+    // HistoryWindow+4 is the first entry the strip shows; AddEntry parks it at count - 6 and the
+    // arrows move it by one.
+    const std::size_t offset = shop_history_first < 0 ? 0
+                               : static_cast<std::size_t>(shop_history_first) > history.size()
+                                   ? history.size()
+                                   : static_cast<std::size_t>(shop_history_first);
     for (const pple::XmlNode& slot : root.children) {
         if (slot.name != "HistorySlot") continue;
         const float x = static_cast<float>(xml_int(slot, "X"));
         const float y = static_cast<float>(xml_int(slot, "Y"));
-        // The newest guesses fill the slots left to right; the arrows scroll the window, which
-        // this reconstruction does not model yet, so only the last six are drawn.
-        const std::size_t offset = history.size() > 6 ? history.size() - 6 : 0;
-        if (shown + offset >= history.size()) {
-            ++shown;
-            continue;
-        }
         const std::size_t index = offset + shown;
+        ++shown;
+        if (index >= history.size()) continue;
         const pple::ShopGuess& entry = history[index];
         const int frame = static_cast<int>((index * 12) / static_cast<std::size_t>(limit));
         shop_append("UI/BuildAPurble/HistoryWindow/Thermometer.xml", x + 3.0f, y - 2.0f, 1.0f,
@@ -463,12 +487,50 @@ void App::shop_draw_history() {
         shop_append("UI/BuildAPurble/GreenNumbers.xml", x + 105.0f, y + 47.0f, 0.5f, entry.rcrf);
         if (shop_difficulty == 2)
             shop_append("UI/BuildAPurble/RedNumbers.xml", x + 105.0f, y + 70.0f, 0.5f, entry.rcwf);
-        ++shown;
     }
+    // The two arrows are ghosted (alpha 32, HistoryWindow::SetGhosted 0x10006EAFC, reached from
+    // UpdateSlots' own tail) when there is nothing to scroll that way: both when the strip holds
+    // six guesses or fewer, the left one at the start of the window and the right one at its end.
+    const bool too_few = history.size() <= 6;
+    const bool left_ghost = too_few || offset == 0;
+    const bool right_ghost = too_few || offset + 6 >= history.size();
     shop_append("UI/BuildAPurble/HistoryWindow/GreenArrowSpriteLeft.xml", 36.0f, 393.0f, 1.0f, -1,
-                0, "LeftHistoryButton");
+                0, "LeftHistoryButton", true, left_ghost ? 32 : 255);
     shop_append("UI/BuildAPurble/HistoryWindow/GreenArrowSpriteRight.xml", 741.0f, 393.0f, 1.0f,
-                -1, 0, "RightHistoryButton");
+                -1, 0, "RightHistoryButton", true, right_ghost ? 32 : 255);
+}
+
+// HistoryWindow::HandleEvent's arrow branches: the left arrow (this+10, "Scroll Left") walks the
+// window down towards older guesses and plays proto 4, the right one (this+11) towards newer ones
+// and plays proto 5.
+void App::shop_history_slide(int direction) {
+    const int count = static_cast<int>(shop_model.history().size());
+    const int last = count > 6 ? count - 6 : 0;
+    if (direction < 0) {
+        if (shop_history_first <= 0) return;
+        --shop_history_first;
+        play_shop_sfx("LEFT_BUTTON");
+    } else {
+        if (shop_history_first >= last) return;
+        ++shop_history_first;
+        play_shop_sfx("RIGHT_BUTTON");
+    }
+    std::printf("shop: history window shows %d..%d of %d\n", shop_history_first + 1,
+                shop_history_first + 6, count);
+    shop_refresh();
+}
+
+// A click on an item's check box: FaceFeatureCheckBox::HandleEvent's own cycle, which exists only
+// on Intermediate and Advanced (`difficulty != 0`) and only while the item is not locked.
+void App::shop_tag(int feature, int color) {
+    if (shop_difficulty == 0) return;
+    if (feature < 0 || feature >= 5 || color < 0 || color >= 5) return;
+    int& state = shop_check[color][feature];
+    state = state == 1 ? 3 : state == 3 ? 2 : state == 2 ? 1 : 1;
+    std::printf("shop: tagged %s %s as %s\n", pple::shop_color_name(color),
+                pple::shop_feature_name(feature),
+                state == 2 ? "right" : state == 3 ? "wrong" : "untagged");
+    shop_refresh();
 }
 
 // The colour-count widget (ColorCountWidget::SetCount 0x100059470): Beginner and Intermediate
@@ -655,6 +717,9 @@ void App::shop_guess() {
     std::printf("shop: guess %d -> right colour/right feature %d, right colour/wrong feature %d, "
                 "score %d\n",
                 shop_model.guesses(), shop_model.rcrf(), shop_model.rcwf(), shop_model.score());
+    // HistoryWindow::AddEntry parks the window on the newest entry once there are more than six.
+    const int entries = static_cast<int>(shop_model.history().size());
+    if (entries > 6) shop_history_first = entries - 6;
     if (outcome.won) {
         std::printf("shop: won in %d guess(es)\n", shop_model.guesses());
         shop_reveal = true;

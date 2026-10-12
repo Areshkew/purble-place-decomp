@@ -288,8 +288,27 @@ bool App::click_scene(float sx, float sy, bool motion_only) {
             return true;
         }
         if (hit->name == "GuessButton") {
+            play_shop_sfx("UI_BUTTON");
             shop_guess();
             return true;
+        }
+        if (hit->name == "LeftHistoryButton") {
+            shop_history_slide(-1);
+            return true;
+        }
+        if (hit->name == "RightHistoryButton") {
+            shop_history_slide(1);
+            return true;
+        }
+        // An item's check box ("RedEye2/CheckBox"): the player's own tag, Intermediate and
+        // Advanced only.
+        if (hit->name.size() > 9 && hit->name.compare(hit->name.size() - 9, 9, "/CheckBox") == 0) {
+            const std::string item = hit->name.substr(0, hit->name.size() - 9);
+            for (const ShopButtonDef& button : shop_buttons)
+                if (button.name == item) {
+                    shop_tag(button.feature, button.color);
+                    return true;
+                }
         }
         // A cabinet item: its own FaceFeature (feature and colour) selects that shelf's colour.
         for (const ShopButtonDef& button : shop_buttons)

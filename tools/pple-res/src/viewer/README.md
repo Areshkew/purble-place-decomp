@@ -404,8 +404,17 @@ pixel comparisons.
 - Regression: [shop_test.cpp](../../tests/shop_test.cpp) (CTest `shop-rules`) covers the
   comparison rule, the per-difficulty setup, the toggle, the score arithmetic and both end
   conditions; `tests/cakes_regression.py` still passes over the menu/chooser/loop changes.
+- The history strip is `HistoryWindow+4` (`App::shop_history_first`): `shop_draw_history` draws
+  from it and ghosts an arrow at alpha 32 exactly where `UpdateSlots` does, `shop_history_slide`
+  is the arrows' own action (`LEFT_BUTTON`/`RIGHT_BUTTON`, older/newer), and a new entry parks the
+  window at `count - 6`. Each visible item registers **two** hot-spots, its check box first and
+  the item second, because `FaceFeatureButton::Init` (0x10006A434) creates the box after the item
+  and `RenderManager::HitTestTopLevel` (0x10008F3D0) walks the render list backwards, so the
+  topmost node wins; `shop_tag` is `FaceFeatureCheckBox::HandleEvent`'s 1 -> 3 -> 2 cycle
+  (Intermediate and Advanced only). `--shop-guess "c0,..,c4;..."` judges selections through the
+  same `shop_guess` a click reaches.
   Not implemented yet: the curtain/stage intro animations, the win animation, the inflate
-  animation, history scrolling, check-box tagging, the tips and the save files.
+  animation, the game's own tips and the save files.
 
 Keep this map current. Add behavior to the owning module, not the entry point or
 a catch-all helper. Split a module further only at a cohesive boundary; keep state

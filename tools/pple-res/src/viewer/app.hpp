@@ -293,6 +293,10 @@ private:
     bool shop_mode = false;
     // 0 Beginner, 1 Intermediate, 2 Advanced, for --shop's optional difficulty.
     int shop_difficulty_choice = 0;
+    // --shop-guess "c0,c1,c2,c3,c4;..." sets a selection per feature and judges it, the way
+    // --pairs-click and --cakes-solve drive their own screens: the verification hook that does
+    // not depend on the cabinet's hit geometry.
+    std::string shop_guess_spec;
     // --shop-seed N picks the round's template, its variants and its hidden face.
     unsigned shop_choice_seed = 1;
     // --shop-dump prints every hot-spot of the room after a build, for scripted runs.
@@ -565,11 +569,22 @@ private:
     void shop_refresh();
     void shop_draw_round();
     // One sprite of the room: its <Animation> state, an explicit frame (-1 = the state's own),
-    // and a scale.  Returns false when the sheet or the frame cannot be resolved.
+    // and a scale.  Returns false when the sheet or the frame cannot be resolved.  A non-empty
+    // `name` registers a hot-spot over the drawn rect unless `hotspot` is false (the cabinet's
+    // check box has to win the overlap with its own item button).
     bool shop_append(const std::string& sprite_xml, float x, float y, float scale = 1.0f,
-                     int frame = -1, int state = 0, const std::string& name = std::string());
-    // The same, but as a hot-spot.  A button's <OverrideBB> is not read: the rect is the node's
-    // own (x - registration, SourceWidth x SourceHeight), as it is for every other screen.
+                     int frame = -1, int state = 0, const std::string& name = std::string(),
+                     bool hotspot = true, int alpha = 255);
+    // A hot-spot with no draw of its own (the check box under its item's button).
+    void shop_hotspot(const std::string& name, const SDL_FRect& rect);
+    // The history strip's own arrows: HistoryWindow::HandleEvent's SlideLeft (older, proto 4) and
+    // SlideRight (newer, proto 5).  `direction` is -1 or +1.
+    void shop_history_slide(int direction);
+    // A click on an item's check box: FaceFeatureCheckBox::HandleEvent's 1 -> 3 -> 2 cycle, which
+    // exists on Intermediate and Advanced only.
+    void shop_tag(int feature, int color);
+    // The same, but as a hot-spot.  The rect is the node's own (x - registration,
+    // SourceWidth x SourceHeight), as it is for every other screen.
     bool shop_append_button(const std::string& sprite_xml, const std::string& name, float x,
                             float y, float scale = 1.0f, int state = 0);
     // A whole purble: body, head and the feature sprites of `colors` (one per slot, -1 = none).
@@ -603,6 +618,9 @@ private:
     // Per (colour, feature) check box state: 0 nothing, 1 the empty box, 2 the green check,
     // 3 the red X (FaceFeatureCheckBox::SetState 0x10007AD78).
     int shop_check[5][5] = {};
+    // The first history entry the strip shows (HistoryWindow+4).  AddEntry keeps it at
+    // count - 6 once there are more than six, and the arrows move it by one.
+    int shop_history_first = 0;
     std::vector<Hotspot> shop_hotspots;
     std::string shop_hover_name;
     bool shop_reveal = false;   // the win/lose reveal: the hidden purble replaces the mystery head

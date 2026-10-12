@@ -17,6 +17,7 @@ namespace pple::viewer {
         "  --shop [D]        start a Purble Shop round: D = Beginner|Intermediate|Advanced\n"
         "  --shop-seed N     the round's template, variants and hidden face (default 1)\n"
         "  --shop-dump       print the room's hot-spots after every build\n"
+        "  --shop-guess S    judge a selection per feature: \"c0,c1,c2,c3,c4;...\"\n"
                  "  --intro           with --pairs, also run the Professor's entrance and intro tips\n"
                  "  --no-intro        never run them (an explicit --pairs start skips them anyway)\n"
                  "  --no-tips         do not draw the Professor's TIPS.XML speech bubbles\n"
@@ -80,6 +81,7 @@ int App::run(int argc, char** argv) {
         else if (a == "--shop-seed" && i + 1 < args.size())
             shop_choice_seed = static_cast<unsigned>(std::strtoul(args[++i].c_str(), nullptr, 10));
         else if (a == "--shop-dump") shop_dump = true;
+        else if (a == "--shop-guess" && i + 1 < args.size()) shop_guess_spec = args[++i];
         else if (a == "--intro") intro_wanted = true;        else if (a == "--no-intro") intro_wanted = false;
         else if (a == "--deal") deal_enabled = true;
         else if (a == "--no-deal") deal_enabled = false;
@@ -307,6 +309,26 @@ int App::run(int argc, char** argv) {
         // BuildAPurbleGame::LoadGameUI followed by NewGame, not a layout to be measured.
         shop_seed = shop_choice_seed;
         start_shop(shop_difficulty_choice);
+        // --shop-guess drives the round through the same shop_guess a click reaches.
+        if (!shop_guess_spec.empty()) {
+            std::size_t at = 0;
+            while (at < shop_guess_spec.size()) {
+                const std::size_t semi = shop_guess_spec.find(';', at);
+                const std::string entry = shop_guess_spec.substr(at, semi - at);
+                int colors[5] = {-1, -1, -1, -1, -1};
+                std::size_t next = 0;
+                int feature = 0;
+                while (next < entry.size() && feature < 5) {
+                    const std::size_t comma = entry.find(',', next);
+                    colors[feature++] = std::atoi(entry.substr(next, comma - next).c_str());
+                    if (comma == std::string::npos) break;
+                    next = comma + 1;
+                }
+                for (int slot = 0; slot < 5; ++slot) shop_model.set_selected(slot, colors[slot]);
+                shop_guess();
+                at = semi == std::string::npos ? shop_guess_spec.size() : semi + 1;
+            }
+        }
     } else if (scene_xml == "UI\\COMFYCAKES\\COMFYCAKESGAME.XML") {
         // The Comfy Cakes document is the game screen itself, not a layout to be measured: it is
         // reached as a round, exactly as PurblePlaceManager::Show reaches it from the menu house
