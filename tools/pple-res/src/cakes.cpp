@@ -46,8 +46,8 @@ bool bool_ci(const XmlNode& node, const std::string& name, bool fallback) {
 // 0 is a batter ("IllegalMoveBatterOnBatter" fires when the top layer is class 0) and 1 is a pan
 // ("IllegalMoveFillingOnPanOrEmpty" fires when it is class 1), and Cake::Compare's decoration
 // branch tests class 2 while its final-touch branch tests 4.  Filling shares the batter's class 0,
-// which is why a filling sits under icing, and station 3 is never a row of the matrix at all --
-// rows 2 and 3 of the shipped table are the two all-zero rows, so only class 3 is unreachable.
+// which is why a filling sits under icing, and station 3 is never a row of the matrix at all.
+// Rows 2 and 3 are identical topping rows, NOT all-zero rows.
 int layer_class(int station) {
     switch (station) {
         case 0: return 0;  // batter
@@ -140,6 +140,13 @@ bool CakeModel::load_layers(const std::vector<std::uint8_t>& xml, std::string& e
         return false;
     }
     layers_ok_ = true;
+    return true;
+}
+
+bool CakeModel::load_glazes(const std::vector<std::uint8_t>& xml, std::string& error) {
+    CakeModel definitions;
+    if (!definitions.load_layers(xml, error)) return false;
+    glazes_ = std::move(definitions.layers_);
     return true;
 }
 
@@ -264,10 +271,35 @@ CakeUse CakeModel::use_tool(Cake& cake, int station, int index, CakeLayer& added
             while (!cake.layers.empty() && cake.layers.back().station == 2) pop_delta(cake);
             break;
         case 5:
-            // The final-touch path: a glaze (13) or sugar (14) replaces what is on top.
-            if (index != 13 && index != 14) return CakeUse::Refused;
-            while (!cake.layers.empty() && cake.layers.back().station == 2) pop_delta(cake);
-            break;
+            // Cake::AddLayer (0x100056939): glaze replaces icing in place, leaving
+            // decorations above it. Sugar is inserted below the top decoration (0x100056C75).
+            if (index == 13) {
+                for (std::size_t i = cake.layers.size(); i-- > 0;) {
+                    auto& top = cake.layers[i];
+                    if (layer_class(top.station) == 0) break;
+                    if (top.station != 5) continue;
+                    added.glaze_icing = top.index;
+                    added.shape = top.shape;
+                    cake.height_delta -= delta_of(top);
+                    top = added;
+                    cake.height_delta += delta_of(top);
+                }
+                return CakeUse::Replaced;
+            }
+            if (index != 14) return CakeUse::Refused;
+            for (std::size_t i = cake.layers.size(); i-- > 0;) {
+                if (layer_class(cake.layers[i].station) == 0) break;
+                if (cake.layers[i].index != 14) continue;
+                cake.height_delta -= delta_of(cake.layers[i]);
+                cake.layers.erase(cake.layers.begin() + static_cast<std::ptrdiff_t>(i));
+            }
+            {
+                const auto at = cake.layers.end() -
+                    (!cake.layers.empty() && cake.layers.back().station == 2 ? 1 : 0);
+                cake.layers.insert(at, added);
+                cake.height_delta += delta;
+                return CakeUse::Added;
+            }
         default:
             return CakeUse::Refused;
     }
@@ -308,7 +340,8 @@ CakeCompare CakeModel::compare(const Cake& a, const Cake& b) const {
             }
             in_deco = false;
         }
-        if (x.station != y.station || x.index != y.index) return CakeCompare::Mismatch;
+        if (x.station != y.station || x.index != y.index || x.glaze_icing != y.glaze_icing)
+            return CakeCompare::Mismatch;
         if (x.station == 4) {
             if (x.orientation % 2 != y.orientation % 2) return CakeCompare::WrongOrientation;
         }

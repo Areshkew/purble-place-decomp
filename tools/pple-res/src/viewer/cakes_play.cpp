@@ -106,6 +106,11 @@ void App::cakes_load_model() {
         std::fprintf(stderr, "cakes layers: %s\n", error.c_str());
         return;
     }
+    if (!fetch("UI\\COMFYCAKES\\GLAZELAYERS.XML", layers) ||
+        !cakes_model.load_glazes(layers, error)) {
+        std::fprintf(stderr, "cakes glaze layers: %s\n", error.c_str());
+        return;
+    }
     std::printf("cakes: %zu layer definition(s) from LAYERS.XML, %d difficulty setting(s) from "
                 "COMFYCAKESVARS.XML\n",
                 cakes_model.layer_defs().size(), pple::CakeModel::kDifficultyCount);
@@ -493,7 +498,7 @@ float App::cakes_cake_top_y(const pple::Cake& cake, int hide_top) const {
                                     ? cake.layers.size() - static_cast<std::size_t>(std::max(0, hide_top))
                                     : 0;
     for (std::size_t i = 0; i < visible; ++i) {
-        const pple::CakeLayerDef* def = cakes_model.layer(cake.layers[i].index);
+        const pple::CakeLayerDef* def = cakes_model.layer(cake.layers[i]);
         y += static_cast<float>(def == nullptr ? 0 : def->delta_for(cake.layers[i].shape));
     }
     return y;
@@ -512,7 +517,7 @@ void App::cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y, in
                                     : 0;
     for (std::size_t i = 0; i < visible; ++i) {
         const pple::CakeLayer& layer = cake.layers[i];
-        const pple::CakeLayerDef* def = cakes_model.layer(layer.index);
+        const pple::CakeLayerDef* def = cakes_model.layer(layer);
         if (def == nullptr) continue;
         const std::string& sprite = def->shapes.empty()
                                         ? def->sprite

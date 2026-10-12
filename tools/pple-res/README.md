@@ -282,7 +282,7 @@ round end. [cakes_play.cpp](src/viewer/cakes_play.cpp) owns play state over the 
 | Piece | Engine | Model |
 |---|---|---|
 | the difficulty variables | `COMFYCAKESVARS.XML`, bound by `TweakVars::Bind` in `ComfyCakesGame::Init` (`0x100059F9C`) | `CakeModel::load_vars` |
-| the layer table | `UI\ComfyCakes\Layers.xml`, read through `ComfyCakesGame::GetGlazeXML` (`0x10005CAA8`) | `CakeModel::load_layers` |
+| the layer tables | `UI\ComfyCakes\Layers.xml` and `GlazeLayers.xml`; `ComfyCakesGame::GetGlazeXML` (`0x10005CAA8`) selects glaze by icing colour and pan shape | `CakeModel::load_layers` / `load_glazes` |
 | the tool stations | each tool document's `<Station>`: CakePan 1, Batter 0, Decoration 2, Filling 3, FinalTouch 4, Icing 5 | `App::cakes_tool_station` |
 | what a button does | `Tool::UseTool` (`0x1000751CC`) → `Cake::CanAddLayer` / `CanRemoveAndAddLayer` / `AddLayer` | `CakeModel::use_tool` |
 | the target | `ComfyCakesGame::GenerateCorrectCake` (`0x100060460`) | `CakeModel::generate_correct` |
@@ -295,11 +295,10 @@ round end. [cakes_play.cpp](src/viewer/cakes_play.cpp) owns play state over the 
 `--cakes-solve` plays a whole round out through the same click path the mouse uses, the way
 `--pairs-solve` does for Purble Pairs. After correcting target generation, measured default-seed
 rounds are **Beginner 5 correct, 20 moves, final 1650**; **Intermediate 5 correct, 35 moves,
-2250**; **Advanced 6 correct, 66 moves, 2600** — all WON, with zero missed cakes in both art modes.
-Session 35 regenerates each successful order and accumulates its move minimum; Advanced now has
-57 minimum moves, superseding session 34's fixed-target 54 / final 1600. The earlier session-33
-950 / 1750 / 2600 fixtures used the incorrect extra filling/icing sequence; the current Advanced
-2600 is a different, corrected fixture. These are test scores, not original-game scoring parity.
+2250**; **Advanced 6 correct, 66 moves, 3600** — all WON, with zero missed cakes in both art modes.
+Section 44 corrects the decoration operation row and final-touch handling; Advanced now has
+62 minimum moves, superseding section 35's 57 / final 2600 and section 34's 54 / final 1600.
+These are test scores, not original-game scoring parity.
 
 The Chef's states are 0 hidden, 1 idle, 2 entering, 3 leaving, 4 talking, 5 win, 6 lose; his six
 movies are `Chef{Idle,Enter,Leave,Talk,Win,Lose}Movie.xml`, and his bubbles are his own
@@ -366,6 +365,15 @@ The matrix row is the top layer's **class**, not the tool station; filling share
 `Cake::AddLayer` (`0x1000567EC`) confirms operation 2 consumes the replaced layer, so batter removes
 its pan. The older claim that this was still unsettled is superseded by sections 31 and 34 of the
 RE notes. A second batter layer needs a new pan first, recorded in the target's move sequence.
+
+**Final-touch correction (section 44):** decoration row 2 is `0,2,4,3,5,3`, not all zero.
+The Advanced last machine now accepts a decorated cake. Glaze replaces its icing in place with
+`GlazeLayers.xml` art for the same colour/shape; powdered sugar sits below the top decoration.
+Both finishes preserve the decoration and appear on generated TV orders as well as belt cakes.
+`tests/cakes_regression.py` now checks **27 viewer runs**, including normal clicks on both
+last-machine buttons and Advanced finish art in both DPI modes; CTest still checks 3000 generated
+buildable targets plus explicit decoration/final-touch fixtures. Evidence:
+`C:\re\traces\cpp\cc\s44`; the separate Cakes UI regression passes **30 runs**.
 
 Idle bodies and bases are visible; falling pans/batter/decorations, splats, streams and batter
 fills are hidden until their machine runs. Both idle and animated machines belong to one dynamic

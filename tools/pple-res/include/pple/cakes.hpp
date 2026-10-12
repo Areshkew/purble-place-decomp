@@ -69,6 +69,7 @@ struct CakeLayer {
     int station = -1;    // 0 batter, 1 pan, 2 decoration, 3 filling, 4 final touch, 5 icing
     int index = -1;      // the LAYERS.xml entry
     int shape = -1;      // 0 round, 1 rectangle, 2 heart; -1 when the layer is shape-independent
+    int glaze_icing = -1; // index 15..17 whose icing the glaze replaces; -1 otherwise
     int orientation = 0; // 0..3, the quarter turn a decoration or final touch was placed at
 };
 
@@ -109,11 +110,11 @@ inline constexpr int kLayerOperation[6][6] = {
         2, 6, 0, 0, 0, 0
     },                                                                       // cur pan
     {
-        0, 0, 0, 0, 0, 0
+        0, 2, 4, 3, 5, 3
     },                                                                       // cur decoration
     {
-        0, 0, 0, 0, 0, 0
-    },                                                                       // cur filling
+        0, 2, 4, 3, 5, 3
+    },                                                                       // unused class 3 (filling uses class 0)
     {
         0, 2, 4, 3, 5, 3
     },                                                                       // cur final touch
@@ -145,6 +146,13 @@ class CakeModel {
 
         bool load_vars(const std::vector<std::uint8_t>& xml, std::string& error);
         bool load_layers(const std::vector<std::uint8_t>& xml, std::string& error);
+        bool load_glazes(const std::vector<std::uint8_t>& xml, std::string& error);
+        const CakeLayerDef* layer(const CakeLayer& value) const {
+            const int at = value.glaze_icing - 15;
+            if (value.index == 13 && at >= 0 && at < static_cast<int>(glazes_.size()))
+                return &glazes_[static_cast<std::size_t>(at)];
+            return layer(value.index);
+        }
 
         const CakeVars& vars(int difficulty) const {
             return vars_[difficulty < 0 || difficulty >= kDifficultyCount ? 0 : difficulty];
@@ -186,11 +194,12 @@ class CakeModel {
     private:
         CakeVars vars_[kDifficultyCount];
         std::vector<CakeLayerDef> layers_;
+        std::vector<CakeLayerDef> glazes_;
         bool vars_ok_ = false;
         bool layers_ok_ = false;
         // A layer's LAYERS.xml <Delta>.
         int delta_of(const CakeLayer& value) const {
-            const CakeLayerDef* def = layer(value.index);
+            const CakeLayerDef* def = layer(value);
             return def == nullptr ? 0 : def->delta_for(value.shape);
         }
         void pop_delta(Cake& cake) const {

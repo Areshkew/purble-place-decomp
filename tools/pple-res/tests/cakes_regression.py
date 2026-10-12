@@ -56,6 +56,12 @@ for mode, count, pan_x, batter_x, layers in (
         assert len(orders) == (6 if mode == 'Advanced' else 5), (name, 'new order per correct cake')
         assert all(a != b for a, b in zip(orders, orders[1:])), (name, 'adjacent TV orders differ visibly')
         assert 'node has no <Animation>' not in solve, (name, 'machine sprite state')
+        if mode == 'Advanced':
+            assert 'station 4 (final touch), LAYERS 13 -> replaced' in solve, name
+            assert 'station 4 (final touch), LAYERS 14 -> added' in solve, name
+            assert 'draw UI\\ComfyCakes\\Layers\\FinalTouchBurntGlazeVanillaHeart.xml' in solve, name
+            assert 'draw UI\\ComfyCakes\\Layers\\FinalTouchSugarHeartSprite.xml' in solve, name
+            assert 'final score 3600' in solve, name
         # Normal mouse/script hit testing, not the solve hook. Slide before batter so both
         # machine positions and ingredient visibility are exercised on every difficulty.
         click = run(name + "-click", ["--cakes", mode, "--no-tips", "--" + dpi,
@@ -68,6 +74,21 @@ for mode, count, pan_x, batter_x, layers in (
         assert "Layers\\BatterChocolateRoundSprite.xml" in click, name
         assert "there is no cake under it" not in click, name
         print(name + ": layout, solve, normal clicks PASS")
+
+for dpi in ("no-hidpi", "hidpi"):
+    for finish, y, sprite in ((13, 320, "FinalTouchBurntGlazeChocolateRound.xml"),
+                              (14, 375, "FinalTouchSugarRoundSprite.xml")):
+        name = f"cakes-final-{finish}-{dpi}"
+        text = run(name, ["--cakes", "Advanced", "--no-tips", "--" + dpi,
+                   "--script-click", f"100,315;260,440;205,315;260,440;260,440;405,315;260,440;530,330;260,440;610,{y};move:750,300",
+                   "--shot-delay", "1500", "--width", "800", "--height", "576",
+                   "--shot", str(output / (name + ".ppm"))])
+        assert f"station 4 (final touch), LAYERS {finish} ->" in text, name
+        assert "station 4 (final touch) finished" in text, name
+        assert sprite in text, name
+        assert "draw UI\\ComfyCakes\\Layers\\DecorationHeartSprite.xml" in text, name
+        assert "there is no cake under it" not in text, name
+        print(name + ": normal last-machine click and finish artwork PASS")
 
 for mode, score in (("Beginner", 410), ("Intermediate", 1180), ("Advanced", 4040)):
     text = run("pairs-" + mode, ["--scene", "UI\\CONCENTRATION\\CONCENTRATIONGAME.XML",
@@ -94,4 +115,4 @@ try:
         Image.open(path).save(path.with_suffix(".png"))
 except ImportError:
     pass
-print("PASS: 23 integration runs")
+print("PASS: 27 integration runs")

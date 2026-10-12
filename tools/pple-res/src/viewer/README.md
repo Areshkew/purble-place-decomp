@@ -192,6 +192,13 @@ chooser and the end-of-round panel keep using.
 
 ## Comfy Cakes
 
+Final-touch rules and glaze-colour identity belong to [cakes.cpp](../cakes.cpp) and
+[cakes.hpp](../../include/pple/cakes.hpp). `cakes_load_model` loads `GlazeLayers.xml` once;
+`cakes_draw_cake` resolves each layer through the model's colour/shape-aware definition for both
+TV and belt drawing. No new per-tick asset loading or room rebuilding. The
+[cakes_regression.py](../../tests/cakes_regression.py) matrix now has 27 runs, including normal
+Advanced glaze/sugar clicks in both DPI modes and regenerated TV finish-art checks.
+
 `cakes_screen.cpp` owns the second game's room.  Its document is not a pure layout document:
 `ComfyCakesGame::InitGameUI` (`0x10005D018`) looks each element up by name and creates the node
 itself, so the module carries the engine's **creation order** as its draw order and adds the few

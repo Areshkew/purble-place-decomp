@@ -33,6 +33,35 @@ int main() {
     std::string error;
     require(model.load_vars(bytes(vars), error), "load variables");
     require(model.load_layers(bytes(layers), error), "load layer definitions");
+    std::string glazes = "<Root>";
+    for (int i = 0; i < 3; ++i)
+        glazes += "<Layer><Delta>-16</Delta><Sprite>glaze" + std::to_string(i) + ".xml</Sprite></Layer>";
+    glazes += "</Root>";
+    require(model.load_glazes(bytes(glazes), error), "load glaze definitions");
+    for (int kind : {13, 14}) {
+        pple::Cake cake;
+        pple::CakeLayer added;
+        const auto rng = [] { return 0; };
+        model.use_tool(cake, 1, 3, added, rng);
+        model.use_tool(cake, 0, 0, added, rng);
+        model.use_tool(cake, 5, 15, added, rng);
+        model.use_tool(cake, 2, 6, added, rng);
+        require(model.use_tool(cake, 4, kind, added, rng) != pple::CakeUse::Refused,
+                "last machine works after decoration");
+        require(cake.layers.back().index == 6, "final touch preserves visible decoration");
+        require(cake.layers[cake.layers.size() - 2].index == kind, "finish below decoration");
+        if (kind == 13) {
+            require(cake.layers[1].glaze_icing == 15, "glaze remembers icing colour");
+            require(model.layer(cake.layers[1])->sprite == "glaze0.xml", "glaze uses separate artwork");
+            auto wrong_colour = cake;
+            wrong_colour.layers[1].glaze_icing = 16;
+            require(model.compare(cake, wrong_colour) != pple::CakeCompare::Exact,
+                    "glazed icing colour matters to judging");
+        }
+        const auto size = cake.layers.size();
+        model.use_tool(cake, 4, kind, added, rng);
+        require(cake.layers.size() == size, "repeated final touch does not duplicate finish");
+    }
     for (int d = 0; d < 3; ++d) {
         for (std::uint32_t seed = 1; seed <= 1000; ++seed) {
             std::uint32_t state = seed;
@@ -47,7 +76,7 @@ int main() {
             }
             require(model.compare(built, target) == pple::CakeCompare::Exact, "target is buildable");
             int height = 0;
-            for (const auto& layer : target.layers) height += model.layer(layer.index)->delta;
+            for (const auto& layer : target.layers) height += model.layer(layer)->delta_for(layer.shape);
             require(height == target.height_delta, "generated height counted exactly once");
             if (d < 2) require(target.layers.size() == std::size_t(d == 0 ? 3 : 5), "difficulty layer count");
         }
