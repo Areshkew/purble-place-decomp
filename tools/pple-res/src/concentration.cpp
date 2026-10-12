@@ -634,6 +634,9 @@ ClickResult ConcentrationBoard::click(int index) {
     const bool icon_a = a < static_cast<int>(sneak_icon_.size()) && sneak_icon_[a];
     const bool icon_b = b < static_cast<int>(sneak_icon_.size()) && sneak_icon_[b];
     if (icon_a || icon_b) {
+        // SneakPeakArea::AddPeak (0x100085040, increment at 0x10008508D):
+        // Round+0x11C gains one usable peek, unless all three token slots are full.
+        if (tokens_ < 3) ++tokens_;
         score_ += constants_.sneak_match_bonus;
         result.sneak_get = true;
     }

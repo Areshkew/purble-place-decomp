@@ -8,6 +8,20 @@ cmake -S tools/pple-res -B build/pple-res -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/pple-res
 ```
 
+## Eye-card reveal reward (section 47)
+
+Matching the card carrying the golden eye now adds one usable sneak-peek token, capped at
+three, as in `SneakPeakArea::AddPeak` (`0x100085040`). Previously only its score bonus and
+reward event were emitted; inventory never increased. Bonus scoring, reveal duration and
+peek time cost are unchanged. The existing inventory draw/hit-test and save/resume paths
+use the corrected model count; no per-tick rebuild was added.
+
+CTest includes `concentration-eye-reward` (zero through three starting tokens, either eye
+position, mismatch, ordinary/wild match, use and expiry). The local-assets viewer regression
+is `tests/concentration_reward_regression.py BUILD_DIR SAMPLE_DIR FRESH_TRACE_DIR`:
+eight normal-click runs in both DPI modes, with saved-token, inventory-pixel and earned-peek
+use/expiry assertions. Evidence: `C:\re\traces\cpp\s47-reward-verified`.
+
 ## How to run it
 
 The asset DLLs and the `.mui` are not part of this repository; they live in the game's working

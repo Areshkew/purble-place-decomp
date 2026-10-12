@@ -4,6 +4,15 @@ Start here, then search the relevant module. Do not read the whole viewer to cha
 one feature. All files here use the internal `pple::viewer` namespace; command-line
 flags and the core library's public interfaces are unchanged.
 
+## Focused Pairs reward checks
+
+The eye-card token reward belongs to `ConcentrationBoard::click` in
+[concentration.cpp](../concentration.cpp). `SneakPeakArea::AddPeak` caps inventory at three.
+[concentration_test.cpp](../../tests/concentration_test.cpp) covers reward/cap/mismatch/wild
+matching and earned-peek duration/cost. [concentration_reward_regression.py](../../tests/concentration_reward_regression.py)
+checks normal clicks, inventory pixels, saved tokens and token use/expiry in both DPI modes:
+`concentration_reward_regression.py BUILD_DIR SAMPLE_DIR FRESH_TRACE_DIR`.
+
 ## Where to look
 
 | Responsibility | File and entry points |
