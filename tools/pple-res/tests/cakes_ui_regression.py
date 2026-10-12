@@ -38,6 +38,12 @@ def platform_sources(text):
     return re.findall(r'  source ConveyorPlatform\s+([\d.-]+),([\d.-]+) alpha (\d+)', text)
 
 
+def last_sources(text):
+    text = text[text.rfind('  draw Root/Background'):]
+    return {n: (float(x), float(y)) for n, x, y, a in re.findall(
+        r'  source (\S+)\s+([\d.-]+),([\d.-]+) alpha (\d+)', text)}
+
+
 for dpi in ('no-hidpi', 'hidpi'):
     text, idle = run('idle-' + dpi, dpi, ['--cakes', 'Beginner'])
     draws = last_draws(text)
@@ -99,16 +105,18 @@ for dpi in ('no-hidpi', 'hidpi'):
                    '--script-click', '260,440;wait:180;move:410,315', '--shot-delay', '60'])
     assert len(set(platform_sources(hover))) == 1, 'hover cannot start the dispatch platform'
 
-    # Both arrow halos are centred on their corresponding button, and focus stays exclusive.
+    # A hovered arrow draws its own second <Animation>; no halo is drawn at all, because the
+    # shipped *HighlightSprite glow is CCTipManager's instructional cue rather than focus art.
+    idle_src = last_sources(text)
     for side, x in (('Left', 200), ('Right', 270)):
         focused, _ = run('arrow-' + side + '-' + dpi, dpi, ['--cakes', 'Beginner',
                          '--script-click', f'move:{x},440'])
         items = last_draws(focused)
-        face = items['Slide' + side + 'Button']
-        halo = items['Slide' + side + 'HighlightSprite']
-        assert abs((face[0] + face[2] / 2) - (halo[0] + halo[2] / 2)) <= 1
-        assert abs((face[1] + face[3] / 2) - (halo[1] + halo[3] / 2)) <= 1
         other = 'Right' if side == 'Left' else 'Left'
+        assert 'Slide' + side + 'HighlightSprite' not in items
         assert 'Slide' + other + 'HighlightSprite' not in items
-    print(dpi + ': chooser, win/loss actions, purple TV, stable platform and centred focus PASS')
+        focus_src = last_sources(focused)
+        assert focus_src['Slide' + side + 'Button'] != idle_src['Slide' + side + 'Button']
+        assert focus_src['Slide' + other + 'Button'] == idle_src['Slide' + other + 'Button']
+    print(dpi + ': chooser, win/loss actions, purple TV, stable platform and button-only focus PASS')
 print(f'PASS: {runs} UI regression runs')

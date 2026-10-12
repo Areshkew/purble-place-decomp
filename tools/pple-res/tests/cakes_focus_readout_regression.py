@@ -50,6 +50,11 @@ def slots(text):
     return values
 
 
+def sources(text):
+    return {n: (float(x), float(y)) for n, x, y, _ in re.findall(
+        r'  source (\S+)\s+([\d.-]+),([\d.-]+) alpha (\d+)', last(text))}
+
+
 def check_success(text, count):
     values = slots(text)
     assert values[:count] == [(990.0, 829.0, 255)] * count, values
@@ -71,16 +76,16 @@ for dpi in ('no-hidpi', 'hidpi'):
             x, y, w, h = rect
             text = run('focus-' + difficulty + '-' + prefix + '-' + dpi, dpi, difficulty,
                        f'move:{x + w / 2},{y + h / 2}')
-            halos = [r for n, r in draws(text) if n == 'HighlightSprite']
-            assert len(halos) == 1, (difficulty, prefix, halos)
-            left = min(r[0] for n, r in buttons)
-            top = min(r[1] for n, r in buttons)
-            right = max(r[0] + r[2] for n, r in buttons)
-            bottom = max(r[1] + r[3] for n, r in buttons)
-            hx, hy, hw, hh = halos[0]
-            assert abs(hx + hw / 2 - (left + right) / 2) <= 1, (prefix, halos, buttons)
-            assert abs(hy + hh / 2 - (top + bottom) / 2) <= 1, (prefix, halos, buttons)
+            # The pointer draws the button's own focus art (its second <Animation>) and nothing
+            # else. The shipped *HighlightSprite glow is CCTipManager's instructional cue, so no
+            # halo may appear over the hovered group or over either belt arrow.
+            assert all(n != 'HighlightSprite' for n, rect in draws(text))
             assert 'SlideLeftHighlightSprite' not in last(text) and 'SlideRightHighlightSprite' not in last(text)
+            idle_src, focus_src = sources(idle), sources(text)
+            assert focus_src[name] != idle_src[name], (difficulty, prefix, name)
+            for other, other_rect in buttons:
+                if other != name:
+                    assert focus_src[other] == idle_src[other], (prefix, other)
             # Focus never moves the buttons or creates extra focused buttons.
             focused_buttons = [(n, r) for n, r in draws(text) if n.startswith(prefix) and n.endswith('Button')]
             assert focused_buttons == buttons
@@ -113,5 +118,5 @@ for dpi in ('no-hidpi', 'hidpi'):
         solved = run('solved-' + difficulty + '-' + dpi, dpi, difficulty, solve=True)
         assert 'cakes solve: finished, WON' in solved
         check_success(solved, count)  # includes the second row and final modal panel
-    print(dpi + ': centred/exclusive tool focus, correct/rejected/queued/reset readouts PASS')
+    print(dpi + ': button-art-only tool focus, correct/rejected/queued/reset readouts PASS')
 print(f'PASS: {runs} focus/readout regression runs')

@@ -53,13 +53,15 @@ fallback.
 
 On the Comfy Cakes screen: **left click** `ReturnToMainMenu` (or **ESC**) leaves, a **tool button**
 or a **belt arrow** builds the cake or slides the belt, and the pointer's focus follows the mouse
-exactly as it does on the Pairs board — a focused tool or arrow draws its highlight, and the target
-cake on the TV and the cake on the belt stay on screen while the pointer moves. Each tool works on
+exactly as it does on the Pairs board — a focused tool button or belt arrow draws its own second
+`<Animation>`, and the target cake on the TV and the cake on the belt stay on screen while the
+pointer moves. Each tool works on
 the belt slot its own machine stands over, so the cake is slid from machine to machine: a button
 whose machine has no cake under it shakes and refuses, and a button that has one plays that
 machine's own animation before the ingredient appears on the cake. The rules, the machines, the
-Chef and the score are in; see section 33 of `D:\Development\re\notes\purbleplace.md` for what the
-room checks and what it still does not do.
+Chef and the score are in; see section 42 of `D:\Development\re\notes\purbleplace.md` for what the
+room checks and what it still does not do. The glow the machines' `*HighlightSprite`s draw is the
+game's instructional cue, not a hover, and is not modelled.
 
 Headless equivalents that need no window (useful for checking a change):
 
@@ -414,9 +416,11 @@ all three difficulties and both DPIs (36 captures; same directory arguments).
   The platform still resets at the end of its own animation. Exact platform cue timing is approximate.
 - Arrow focus halos are centred on their button rectangles; this placement is a requested visual
   correction, not a newly observed original-game coordinate. Only the focused control glows.
+  **Superseded in session 42:** the arrow and tool `*HighlightSprite`s are the tip manager's
+  instructional cue, not focus art, and no glow is drawn for the pointer any more.
 - [cakes_ui_regression.py](tests/cakes_ui_regression.py) checks 30 local-asset runs in both DPI modes:
   chooser choices, modal win/loss actions, actual post-navigation captures, purple TV pixels,
-  stable idle dispatch-platform UVs through slides/hover, and centred/exclusive arrow focus.
+  stable idle dispatch-platform UVs through slides/hover, and button-art-only arrow focus.
   CTest also covers per-shape heights and replacement. `--cakes-solve` is now one-shot so its
   result-panel New Game starts a playable round rather than solving it again.
 
@@ -425,6 +429,8 @@ all three difficulties and both DPIs (36 captures; same directory arguments).
 - Tool halos are centred on the combined visible button rectangles, including sprite registration
   and Beginner's 100 px shift. Buttons and hit tests do not move; one group is highlighted at a time.
   Like the arrow correction, this is a requested visual alignment, not original-coordinate parity.
+  **Superseded in session 42:** the tool glow is not drawn for the pointer at all, so nothing is
+  centred and no group is highlighted on hover.
 - The top-right readout now uses **frames** of `ScreenSlotSprite`'s single animation, not animation
   indices: frame 2 stays visible after a correct cake; frame 1 flashes on the next empty slot after
   a rejected cake. Unfilled slots are transparent, removing the two rows of permanent dashes.
@@ -434,9 +440,10 @@ all three difficulties and both DPIs (36 captures; same directory arguments).
   This corrects session 35's overly broad claim that the readout was already working.
 - [cakes_focus_readout_regression.py](tests/cakes_focus_readout_regression.py) checks every visible
   tool group on all difficulties, correct/wrong/queued/expired/reset readouts, and both rows in
-  full solves, with both DPI modes (**54 runs PASS**). It uses the same three directory arguments
-  as the other tests. Existing UI/gameplay/animation regressions also pass: **149 viewer runs total**
-  plus **2 CTests**, evidence under `C:\re\traces\cpp\cc\s37-*`.
+  full solves, with both DPI modes (**54 runs PASS**). Its focus check is "the hovered button draws
+  its own second `<Animation>` and no glow" since session 42. It uses the same three directory
+  arguments as the other tests. Existing UI/gameplay/animation regressions also pass: **149 viewer
+  runs total** plus **2 CTests**, evidence under `C:\re\traces\cpp\cc\s37-*`.
 
 #### Comfy Cakes sound effects (session 39)
 
@@ -454,9 +461,39 @@ checks also pass (**23 runs**, including both DPI modes and three Pairs solves),
 Evidence is under `C:\re\traces\cpp\cc\s39-audio` and `cc\s39-general`.
 It does not establish listening or exact original timing parity.
 
-Remaining Comfy Cakes gaps: automatic/time-attack timers, simultaneous belt cakes/line-clog loss,
-full removal/replacement choreography, exact audio cue timing/buffer limits, decoration placement/orientation,
-TV transition/highlight behavior and persisted round state.
+#### Comfy Cakes hover correction (session 42)
+
+The machine, arrow and TV glow the room was drawing on hover is not hover art: it is the
+`CCTipManager`'s **instructional cue**, the blink that points at the control the player should
+click next. Each `/HighlightSprite` is created hidden with its animation stopped (`InitGameUI`
+`0x10005D449`/`0x10005D5D5`, `Tool::Init` `0x100074EDD`, `CakeScreen::Init` `0x100057A9C`), and
+the only code that resumes one is the tip manager, beside the tip that says what to do:
+`OnIdleTimerFired` `0x100058438` resumes the pan tool's glow and `CakeScreen`'s
+(`CakeScreen::PlayHighlightAnimation` `0x100057C64`) with
+`GamePlayIdleStart` ("Start your cake here!") and the slide-right glow with `GamePlayCakePanIdle`
+("Use the RIGHT ARROW"); `OnToolButtonClick` `0x10005869C` and `OnArrowButtonClick` `0x1000585FC`
+do the same. `Tool::UseTool` stops the glow on the click that uses the tool (`0x100075246`) and
+`Tool::HandleEvent` restarts it on every `Event_AnimationComplete` (`0x10007550A`), so the 2 s
+four-pulse `*HighlightAnim` loops — no focus art behaves that way. A tool button's and a belt
+arrow's own focus art is `<Animation>` 1 of their three (`NodeButton::HandleEvent`'s FocusGot case
+`0x1000AAC92`), which `build_cakes`/`cakes_append` still draws. `build_cakes` no longer draws any
+`/HighlightSprite`; the instructional cue itself is not modelled, so no glow appears at all.
+
+Measured on the default Beginner room at 1:1: idle and hovered dumps both draw **43 sprites** and
+zero `HighlightSprite` lines; the hovered pan-round button's source moves from **799,398** to
+**799,435** and the hovered left arrow's from **955,558** to **717,853**, with the neighbouring
+buttons unchanged. The hover diff against idle is the button's own rect only — `(186,298)-(239,333)`
+for the pan button, `(171,416)-(236,466)` for the arrow — where the shipped glow previously added
+`(173,285)-(251,417)`. Regressions after the change, both DPI modes: focus/readout **54 PASS**,
+UI **30 PASS**, animation **42 PASS**, belt alignment **36 PASS**, gameplay/layout/Pairs **23 PASS**,
+**CTest 3/3**, and `cakes_compare.py` still reports 0 uncovered pixels differing and 0 strays.
+Evidence: `C:\re\traces\cpp\hover` (logs and captures `fix-{tool,arrow,idle}.{log,ppm,png}`).
+
+Remaining Comfy Cakes gaps: the tip manager's instructional state machine (its 30 s idle timer, the
+`GamePlayIdleStart`/`GamePlayCakePanIdle`/`GamePlayDoubleCakePan`/`GamePlayDoubleBatter` tips and
+the glow each one plays), automatic/time-attack timers, simultaneous belt cakes/line-clog loss,
+full removal/replacement choreography, exact audio cue timing/buffer limits, decoration
+placement/orientation, TV transition behavior and persisted round state.
 
 Regression checks: `ctest --test-dir build/pple-res --output-on-failure` checks 3000 generated
 cakes and widget ownership. `tests/cakes_regression.py BUILD_DIR SAMPLE_DIR TRACE_DIR` checks all

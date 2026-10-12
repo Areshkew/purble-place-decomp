@@ -262,12 +262,20 @@ rebuilds through `cakes_refresh`, so the rebuild re-appends the Chef, the TV's t
 the belt cakes and they survive the pointer moving over the room; the draw dump
 (`cakes_dump_draws`) runs for every `cakes_refresh` and again for a `--shot` capture.
 
-The room's `/HighlightSprite`s are **focus art**: the engine creates each one hidden and shows it
-while the button it belongs to has the focus (`InitGameUI` `0x10005D449`/`0x10005D5D5`,
-`Tool::Init` `0x100074EDD`, `CakeScreen::Init` `0x100057A9C` all clear the node's visible flag at
-+64 and stop the 0.25 s `HighlightAnim` fade-in), so `build_cakes` draws one only for the control
-under the pointer — a tool's for its own buttons, the slide highlight for its own button, and the
-TV's never at rest.
+The room's `/HighlightSprite`s are **not focus art**, and `build_cakes` never draws them.  They are
+`CCTipManager`'s instructional cue: a glow that blinks over the control the player should click
+next.  Each is created hidden with its `HighlightAnim` stopped (`InitGameUI`
+`0x10005D449`/`0x10005D5D5` and `0x10005D4FD`, `Tool::Init` `0x100074EDD`/`0x100074F8A`,
+`CakeScreen::Init` `0x100057A9C`), and the only code that resumes one is the tip manager, beside a
+tip that says what to do: `OnIdleTimerFired` resumes the pan tool's glow and the TV's with
+`GamePlayIdleStart` ("Start your cake here!", `0x100058494`/`0x1000584AA`, the latter into
+`CakeScreen::PlayHighlightAnimation` `0x100057C64`) and the slide-right glow
+with `GamePlayCakePanIdle` ("Use the RIGHT ARROW", `0x1000584E0`), and `OnToolButtonClick` /
+`OnArrowButtonClick` do the same (`0x100058742`, `0x100058659`).  `Tool::UseTool` stops the glow on
+the click that uses the tool (`0x100075246`) and `Tool::HandleEvent` restarts it whenever its 2 s
+four-pulse blink completes (`0x10007550A`), which no focus art does.  A tool button's or belt
+arrow's own hover is `<Animation>` 1 of its three, which `cakes_append` draws from
+`cakes_hover_name`.  The instructional cue itself is not modelled, so no glow is drawn at all.
 
 Both slides move each cake exactly one slot: left ascends, right descends, which is
 `ConveyorBelt::SlideLeft`'s own `for (v4 = 1; v4 < v3; ++v4)` order.  Ascending on the left slide
@@ -342,21 +350,22 @@ pixel comparisons.
 - [overlays.cpp](overlays.cpp) owns the shared chooser/result draws. `App::picker_cakes` keeps
   the chooser destination across hover/DPI rebuilds; [input.cpp](input.cpp) dispatches the choice
   and routes modal result input before room controls. New Game/menu transitions release old panels.
-- [cakes_screen.cpp](cakes_screen.cpp) qualifies widget keys once for TV frame/screen order and
-  centres arrow focus halos. [cakes_transport.cpp](cakes_transport.cpp) keeps the dispatch platform
+- [cakes_screen.cpp](cakes_screen.cpp) qualifies widget keys once for TV frame/screen order.
+  [cakes_transport.cpp](cakes_transport.cpp) keeps the dispatch platform
   and right-belt frames on shipping phases instead of the main-belt/chute clock.
 - [cakes.hpp](../../include/pple/cakes.hpp) retains each shaped layer's height delta; model mutation,
   cake drawing and tool endpoints use `CakeLayerDef::delta_for(shape)`.
 - [cakes_ui_regression.py](../../tests/cakes_ui_regression.py): 30 local-asset runs, both DPIs,
   all chooser options, modal win/loss actions, correct navigation captures, purple TV screen pixels,
-  stable idle dispatch UVs and centred/exclusive arrow focus. Same three directory arguments as
+  stable idle dispatch UVs and button-art-only arrow focus. Same three directory arguments as
   the other integration scripts. [cakes_test.cpp](../../tests/cakes_test.cpp) adds shaped-height
   and replacement assertions. Script navigation restarts frame layout before capture.
 
 ### Tool focus and shipping readout correction (session 37)
 
-- `build_cakes` in [cakes_screen.cpp](cakes_screen.cpp) centres each tool's halo on its combined
-  visible button rects, including registration and the Beginner shift. Button geometry is unchanged.
+- This section's tool-halo centring is superseded by session 42: the tool and arrow
+  `*HighlightSprite`s are the tip manager's instructional cue, not focus art, and are no longer
+  drawn for the pointer at all. Button geometry was and is unchanged.
 - [cakes_transport.cpp](cakes_transport.cpp) draws ScreenSlot **frames** 2 (permanent success) / 1
   (rejection flash) from its single sprite animation; empty slots have alpha 0. Its dedicated
   `CakeTransport::readout_time/readout_slot` start in `cakes_judge` and reset in `cakes_new_game`
@@ -365,7 +374,8 @@ pixel comparisons.
 - [cakes_focus_readout_regression.py](../../tests/cakes_focus_readout_regression.py) covers every
   visible tool group on all three difficulties, success, rejection, expiration, queued gifts,
   hover/reset persistence and final readouts across both rows in both DPI modes. Arguments:
-  `BUILD_DIR SAMPLE_DIR TRACE_DIR`.
+  `BUILD_DIR SAMPLE_DIR TRACE_DIR`. Its focus check is now "the hovered button draws its own second
+  `<Animation>` and no glow" (session 42).
 
 ### Cake/conveyor alignment correction (session 38)
 
@@ -415,6 +425,18 @@ pixel comparisons.
   same `shop_guess` a click reaches.
   Not implemented yet: the curtain/stage intro animations, the win animation, the inflate
   animation, the game's own tips and the save files.
+
+### Comfy Cakes hover correction (session 42)
+
+- `build_cakes` no longer draws any `/HighlightSprite`. The tool, both arrow and the TV glow are
+  `CCTipManager`'s instructional cue (see the Comfy Cakes section above); a hovered tool button or
+  belt arrow shows only its own `<Animation>` 1 through `cakes_append`/`cakes_hover_name`.
+- [cakes_focus_readout_regression.py](../../tests/cakes_focus_readout_regression.py) (**54 runs**)
+  and [cakes_ui_regression.py](../../tests/cakes_ui_regression.py) (**30 runs**) now assert the
+  button-art-only hover and the absence of every glow in both DPI modes;
+  [cakes_animation_regression.py](../../tests/cakes_animation_regression.py) (**42**) and
+  [cakes_belt_alignment_regression.py](../../tests/cakes_belt_alignment_regression.py) (**36**)
+  still pass over the change.
 
 Keep this map current. Add behavior to the owning module, not the entry point or
 a catch-all helper. Split a module further only at a cohesive boundary; keep state
