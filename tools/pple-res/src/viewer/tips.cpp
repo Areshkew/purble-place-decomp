@@ -159,7 +159,20 @@ bool App::load_tip_slice(TipSlice& slice, const std::string& xml_name, int state
     std::string note;
     slice.tex = load_sheet_texture(sprite.requested, slot->entry->name, note);
     if (slice.tex == nullptr) return false;
-    slice.src = sprite.src;
+    // Panel pieces are atlas sprites too. PreppedForFilter reserves a one-pixel
+    // gutter around each frame; reading the slot origin draws that gutter as a
+    // seam when the back and borders are stretched. Use the same UV calculation
+    // as scene sprites, without changing the piece's authored layout size.
+    pple::SceneItem geometry;
+    geometry.src_x = sprite.src.x;
+    geometry.src_y = sprite.src.y;
+    geometry.src_w = sprite.src.w;
+    geometry.src_h = sprite.src.h;
+    geometry.frames = sprite.frames;
+    geometry.per_row = sprite.per_row;
+    geometry.prepped = sprite.prepped;
+    pple::sprite_frame_rect(geometry, 0, slice.src.x, slice.src.y,
+                            slice.src.w, slice.src.h);
     slice.w = sprite.src.w;
     slice.h = sprite.src.h;
     return true;

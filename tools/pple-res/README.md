@@ -525,6 +525,12 @@ are stretched between fixed-size corner sprites. The style's top and bottom bord
 14 px, so 27 px of a 60 px button is frame and the name and its description are centred in the
 rest — at the Media Center button art's 51 px the two lines ran over the bottom border.
 
+The shared panel loader uses `sprite_frame_rect` for every piece (including close/check buttons),
+so `<PreppedForFilter>` frames start one pixel inside their atlas slots. The previous raw slot
+origins included the filter gutters and produced dark stripes/broken joins on dialog corners and
+buttons. This fixes the white/red/green styles in all three games, including the difficulty and
+result panels, without changing layout, hit boxes, scaling or texture ownership.
+
 Two engine details the bubbles follow: a tip with `<NoTimeout>` waits for a click and the
 `<CaptureGlobalClick>` default is what makes the first click anywhere advance it, while a tip
 with a `<Duration>` expires on its own and does not swallow clicks. `--no-tips` draws no bubbles;
@@ -952,6 +958,18 @@ these numbers are `s28-verify-all.ps1`, `s28-run.ps1`, `s28-extra-probes.ps1`,
   claim: `<OverrideBB>` is dead data (`LoadButton` 0x1000737B0 reads no hit box and the string does
   not exist in either DLL); `RenderManager::HitTestTopLevel` (0x10008F3D0) walks the render list
   backwards, so a button's own rect is what a click tests.
+
+### Session 43: shared dialog/button seams
+
+- [tests/ui_panels_regression.py](tests/ui_panels_regression.py) `BUILD_DIR SAMPLE_DIR TRACE_DIR`:
+  **42 viewer runs PASS**. Checks the three games' choosers at 800x496, 1000x700 and 1400x900,
+  button-only focus differences, selection clicks, all three win panels, and white/red help tips,
+  in both DPI modes. Join probes are above the labels; they reject the old filter-gutter stripe.
+- Baseline at 1000x700: a button join pixel `(358,230)` was RGB **194,194,194**; with corrected
+  frame UVs it is **255,255,255**. Before/after captures and the matrix are under
+  `C:\re\traces\cpp\ui-clean`. Layout and click rectangles are unchanged.
+- Existing checks after the fix: `cakes_ui_regression.py` **30 PASS**, `cakes_regression.py`
+  **23 PASS**, and CTest **3/3 PASS**. No game rules or per-tick rendering paths changed.
 
 ## Known gaps
 

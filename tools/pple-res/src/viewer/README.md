@@ -37,7 +37,7 @@ flags and the core library's public interfaces are unchanged.
 | Board completion, score/rank, settings save | [pairs_round.cpp](pairs_round.cpp): `finish_board_end`, `report_round_end` |
 | Resumable round: state XML, RGMH container, board thumbnail | [pairs_state.cpp](pairs_state.cpp): `read_pair_state`, `load_pair_state`, `write_pair_state`, `render_board_thumbnail` |
 | Professor state machine, tips, transitions | [professor.cpp](professor.cpp): `professor_show`, `professor_display_tip`, `professor_tip_closed`, `professor_advance`, `professor_round_end`, `professor_intro_begin`, `professor_level_tip` |
-| Tip panel: TIPS.XML, the green 9-slice, text and fonts | [tips.cpp](tips.cpp): `load_tips`, `load_tip_style`, `show_tip`, `append_panel`, `append_text`, `face_font`, `rebuild_overlay` |
+| Shared white/red/green nine-slice panels, atlas frame UVs, tip text and fonts | [tips.cpp](tips.cpp): `load_tips`, `load_tip_slice`, `load_tip_style`, `show_tip`, `append_panel`, `append_text`, `face_font`, `rebuild_overlay`; three-game seam/focus checks in [ui_panels_regression.py](../../tests/ui_panels_regression.py) |
 | In-canvas difficulty chooser and end-of-round panel | [overlays.cpp](overlays.cpp): `build_difficulty`, `draw_difficulty`, `append_button`, `build_result_panel`, `draw_result_panel`, `start_game`, `game_to_menu` |
 | State and small rendering records | [app.hpp](app.hpp), [types.hpp](types.hpp) |
 | Game rules (no SDL) | [concentration.cpp](../concentration.cpp), [concentration.hpp](../../include/pple/concentration.hpp) |
