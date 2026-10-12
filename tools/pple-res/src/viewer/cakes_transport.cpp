@@ -173,6 +173,7 @@ void App::cakes_transport_draw(bool foreground) {
     const float shipping = cakes_transport.shipping_time;
     const bool dispatch = shipping >= 0;
     const float wrap = cakes_transport.animations["BoxDrop"].total;
+    const bool delivery = dispatch && cakes_transport.correct && shipping >= wrap;
     if (foreground && dispatch && (!cakes_transport.correct || shipping < wrap)) {
         const auto& anim = cakes_transport.animations[cakes_transport.correct ? "CakeFadeOut" : "CakeMoveToTrash"];
         const auto value = pple::animation_value(anim, shipping);
@@ -214,9 +215,11 @@ void App::cakes_transport_draw(bool foreground) {
                 frame = 1;
                 item.alpha = static_cast<int>(pple::animation_value(node.animation, cakes_transport.readout_time).alpha);
             }
+            // Delivery and score are alternative contents of the same TV.
+            // Preserve the earned marks/flash clock, but do not composite them over delivery.
+            if (delivery) item.alpha = 0;
             ++readout;
         } else if (node.key == "ShippingSign") {
-            const bool delivery = dispatch && cakes_transport.correct && shipping >= wrap;
             const auto& anim = cakes_transport.animations[delivery ? "ShippingSignDelivery" : "ShippingSignNoDelivery"];
             state = delivery ? 1 : 0;
             frame = static_cast<int>(pple::animation_value(anim, delivery ? shipping - wrap : anim.total).frame);

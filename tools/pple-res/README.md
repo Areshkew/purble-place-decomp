@@ -541,6 +541,20 @@ Measured automatic steps: Intermediate **5.004–5.006 s**, Advanced **4.003 s**
 Single-cake solve scores remain **1650 / 2250 / 3600**. Evidence: `C:\re\traces\cpp\cc\s46`.
 These are reconstruction measurements, not newly observed original-game runtime timings.
 
+#### TV layering and exclusive contents (session 48)
+
+Both TVs now composite above the moving wax papers and dispatched gifts. The target cake stays
+above its purple screen and below the glass. Frames restore an immutable cached room before
+updating transport, so TV reordering cannot corrupt subsequent frames or hover/DPI refreshes.
+The shipping TV shows delivery **or** score marks, never both: delivery hides all eight marks,
+then restores the earned score when dispatch ends. Rejection clocks keep advancing while hidden.
+These are reconstruction fixes for the reported defects, not new original-game timing evidence.
+Regression captures/logs: `C:\re\traces\cpp\cc\s47` (this Cakes run started before the concurrent
+Pairs milestone claimed section 47). Verification: **42** animation captures, **56** focus/readout
+runs and **27** gameplay/layout/Pairs runs PASS (**125** total), both DPI modes; CTest **5/5 PASS**.
+The queued-readout regression now asserts hidden score/rejection art during delivery and earned
+marks restored afterward, correcting its old expectation that both states were visible together.
+
 Remaining Comfy Cakes gaps: the tip manager's instructional state machine (its 30 s idle timer, the
 `GamePlayIdleStart`/`GamePlayCakePanIdle`/`GamePlayDoubleCakePan`/`GamePlayDoubleBatter` tips and
 the glow each one plays), the optional time-attack mode and its accelerating spawn timer,

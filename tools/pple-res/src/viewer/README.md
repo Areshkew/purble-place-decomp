@@ -202,6 +202,14 @@ chooser and the end-of-round panel keep using.
 
 ## Comfy Cakes
 
+`cakes_redraw` restores an immutable room draw/name cache before updating transport, then
+composites both TVs above papers and gifts. The target sits between ScreenSprite and GlassSprite.
+Transport draw indices always refer to the original cached room, never the reordered frame.
+`cakes_transport_draw` hides ScreenSlot score marks during delivery and restores earned marks
+afterward; score/flash clocks continue independently. Both DPI modes are covered by
+[cakes_animation_regression.py](../../tests/cakes_animation_regression.py) and
+[cakes_focus_readout_regression.py](../../tests/cakes_focus_readout_regression.py).
+
 Final-touch rules and glaze-colour identity belong to [cakes.cpp](../cakes.cpp) and
 [cakes.hpp](../../include/pple/cakes.hpp). `cakes_load_model` loads `GlazeLayers.xml` once;
 `cakes_draw_cake` resolves each layer through the model's colour/shape-aware definition for both

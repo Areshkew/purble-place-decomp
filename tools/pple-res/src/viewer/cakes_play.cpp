@@ -584,15 +584,13 @@ void App::cakes_draw_cake(const pple::Cake& cake, float base_x, float base_y, in
     }
 }
 
-// One frame of the room with the cakes on it: the static room first, then the Chef, the TV's
-// target, every cake on the belt, and finally the machines of the tool animation in flight.
-// build_cakes is the expensive half (the scene load and its sheet textures), so it is only run by
-// cakes_refresh; this is the per-frame half and it rewrites everything after the static room, so
-// a machine's animation and the Chef's movie play without rebuilding the room.
+// Restore the immutable room, update transport and append animated contents, then composite
+// both TVs in front. The target stays between its screen and glass. build_cakes remains the
+// expensive scene/texture half, used only on refresh; frame layering never mutates its cache.
 void App::cakes_redraw() {
     if (!cakes_ready) return;
-    scene_draws.resize(cakes_room_at);
-    cakes_draw_names.resize(cakes_room_at);
+    scene_draws = cakes_room_draws;
+    cakes_draw_names = cakes_room_names;
     cakes_transport_draw(false);
     cakes_draw_chef();
     // CakeScreen::SetCake (0x100057C78) scales each layer to 80% and offsets the
@@ -600,7 +598,9 @@ void App::cakes_redraw() {
     int target_y = 104;
     for (const pple::CakeLayer& layer : cakes_target.layers)
         if (layer.station == 0 || layer.station == 3) target_y += layer.shape == 2 ? -1 : 3;
+    const std::size_t target_begin = scene_draws.size();
     cakes_draw_cake(cakes_target, 65.0f, static_cast<float>(target_y), 0, 0.8f);
+    const std::size_t target_end = scene_draws.size();
     for (std::size_t p = 0; p < cakes_belt.size(); ++p) {
         if (p >= cakes_belt_present.size() || !cakes_belt_present[p]) continue;
         // Cake::Init (0x100055E9C) creates visible wax paper even before a pan is added.
@@ -622,6 +622,29 @@ void App::cakes_redraw() {
     }
     cakes_tools_draw();
     cakes_transport_draw(true);
+    // Both TVs occlude transport, including the inlet paper and outgoing gift.
+    // Keep the target inside its TV (above the screen, below the glass), and keep
+    // the shipping readout above its own background. Never reorder the room cache.
+    std::vector<std::size_t> order(scene_draws.size());
+    for (std::size_t i = 0; i < order.size(); ++i) order[i] = i;
+    const auto rank = [&](std::size_t i) {
+        if (i >= target_begin && i < target_end) return 3;
+        const auto& name = cakes_draw_names[i];
+        if (name == "CakeScreen/BackgroundSprite") return 1;
+        if (name == "ScreenSprite") return 2;
+        if (name == "GlassSprite") return 4;
+        if (name == "ShippingSignBackground") return 5;
+        if (name == "ShippingSign") return 6;
+        if (name == "ScreenSlot") return 7;
+        return 0;
+    };
+    std::stable_sort(order.begin(), order.end(), [&](auto a, auto b) { return rank(a) < rank(b); });
+    const auto frame_draws = scene_draws;
+    const auto frame_names = cakes_draw_names;
+    for (std::size_t i = 0; i < order.size(); ++i) {
+        scene_draws[i] = frame_draws[order[i]];
+        cakes_draw_names[i] = frame_names[order[i]];
+    }
     std::size_t belt_cakes = 0;
     for (bool present : cakes_belt_present)
         if (present) ++belt_cakes;
@@ -642,7 +665,8 @@ void App::cakes_redraw() {
 void App::cakes_refresh() {
     if (!cakes_ready) return;
     build_cakes();
-    cakes_room_at = scene_draws.size();
+    cakes_room_draws = scene_draws;
+    cakes_room_names = cakes_draw_names;
     cakes_redraw();
     cakes_dump_draws();
 }

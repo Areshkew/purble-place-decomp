@@ -25,6 +25,14 @@ def run(name, dpi, script='', delay=0, difficulty='Beginner'):
         subprocess.run(args, stdout=stream, stderr=subprocess.STDOUT, timeout=90, check=True)
     text = (output / (name + '.log')).read_text(encoding='utf-8')
     assert 'node has no <Animation>' not in text and 'not found' not in text, name
+    captured = text[text.rfind('  draw Root/Background'):]
+    names = re.findall(r'  draw (\S+)', captured)
+    tv = names.index('CakeScreen/BackgroundSprite')
+    assert tv < names.index('ScreenSprite') < names.index('GlassSprite'), (name, 'target TV stack')
+    assert all(i < tv for i, n in enumerate(names) if n == 'WaxPaper'), (name, 'paper behind TV')
+    right_tv = names.index('ShippingSignBackground')
+    assert right_tv < names.index('ShippingSign'), (name, 'shipping TV stack')
+    assert all(i < right_tv for i, n in enumerate(names) if n in ('CakeBox', 'DroppingBox')), (name, 'gift behind TV')
     Image.open(output / (name + '.ppm')).save(output / (name + '.png'))
     runs += 1
     return text
@@ -88,9 +96,17 @@ for dpi in ('no-hidpi', 'hidpi'):
     gift = draws(gift_text)
     assert 'CakeBox' in gift and 'DroppingBox' not in gift
     assert gift['CakeBox'][0] > 687 and gift['CakeBox'][1] < 155, 'gift must move along the dispatch belt'
+    gift_slots = re.findall(r'  source ScreenSlot\s+[\d.-]+,[\d.-]+ alpha (\d+)',
+                            gift_text[gift_text.rfind('  draw Root/Background'):])
+    assert gift_slots == ['0'] * 8, 'delivery must hide every score mark'
     done_text = run('dispatch-done-' + dpi, dpi, ship, 5100)
     done = draws(done_text)
     assert 'cakes dispatch: complete' in done_text and 'CakeBox' not in done and 'DroppingBox' not in done
+    done_slots = re.findall(r'  source ScreenSlot\s+[\d.-]+,[\d.-]+ alpha (\d+)',
+                            done_text[done_text.rfind('  draw Root/Background'):])
+    assert done_slots == ['255'] + ['0'] * 7, 'earned score returns after delivery'
+    assert gift['ShippingSign'][4:6] != idle['ShippingSign'][4:6]
+    assert done['ShippingSign'][4:6] == idle['ShippingSign'][4:6]
     trash_text = run('trash-' + dpi, dpi, wrong, 850)
     trash = draws(trash_text)
     assert 'cake judged wrong (1)' in trash_text and 'next target cake' not in trash_text

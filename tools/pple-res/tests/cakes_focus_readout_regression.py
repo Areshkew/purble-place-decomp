@@ -108,9 +108,14 @@ for dpi in ('no-hidpi', 'hidpi'):
                  script=ship + ';' + ';'.join(['260,440'] * 8), delay=720)
     assert 'cakes dispatch: queued' in queued and 'cake judged wrong (1)' in queued
     values = slots(queued)
-    assert values[0] == (990.0, 829.0, 255), values
-    assert values[1][:2] == (990.0, 807.0) and values[1][2] > 0, values
-    assert all(a == 0 for x, y, a in values[2:])
+    # A previous gift is on the shipping TV now: score and rejection art retain
+    # their frame/clock, but neither is visible over the delivery animation.
+    assert values[0] == (990.0, 829.0, 0), values
+    assert values[1][:2] == (990.0, 807.0) and values[1][2] == 0, values
+    assert all(a == 0 for x, y, a in values)
+    restored = run('queued-delivery-done-' + dpi, dpi,
+                   script=ship + ';' + ';'.join(['260,440'] * 8), delay=6000)
+    check_success(restored, 1)
     reset = run('readout-reset-' + dpi, dpi, script=ship + ';key:n', delay=720)
     assert reset.count('cakes: new Beginner game') == 2
     check_success(reset, 0)

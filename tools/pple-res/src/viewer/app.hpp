@@ -262,9 +262,10 @@ private:
     int cakes_machine_type[6] = {};
     float cakes_tool_reveal_at = 0;
     bool cakes_tool_replacing = false;
-    // Where the static room ends in scene_draws, so the per-frame half of a refresh can rewrite
-    // everything after it (the Chef, the cakes and the machines) without rebuilding the room.
-    std::size_t cakes_room_at = 0;
+    // Immutable borrowed-texture room cache. Frame layering must not reorder this baseline;
+    // transport node indices refer to its original order.
+    std::vector<DrawItem> cakes_room_draws;
+    std::vector<std::string> cakes_room_names;
 
     std::vector<std::string> modules;
     std::string want_resource;
