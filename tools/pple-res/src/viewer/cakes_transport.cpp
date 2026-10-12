@@ -39,7 +39,7 @@ bool App::cakes_transport_node(const pple::SceneItem& item, int state) {
     else if (key == "TrashCan") anim = "TrashCake";
     else if (key == "ShippingSign") anim = "ShippingSignNoDelivery";
     else if (key == "ScreenSlot") anim = "ScreenSlot";
-    else return false;
+    else if (key != "TimerBarSprite") return false;
     const bool foreground = key == "CakeBox" || key == "DroppingBox";
     cakes_transport.nodes.push_back({item, key, cakes_transport.animations[anim],
         foreground ? -1 : static_cast<int>(scene_draws.size()), state});
@@ -51,6 +51,12 @@ void App::cakes_transport_position(int slot, float& x, float& y) const {
         x = cakes_transport.positions[slot].first;
         y = cakes_transport.positions[slot].second;
     }
+    if (slot == 0 && cakes_transport.inlet_time >= 0) {
+        const auto value = pple::animation_value(cakes_transport.animations.at("CakeSlideDownLeft"),
+                                               cakes_transport.inlet_time);
+        x = 100 + value.dx; y = -115 + value.dy;
+        return;
+    }
     if (cakes_transport.belt_time < 0) return;
     for (const auto& motion : cakes_transport.motion) {
         if (motion.slot != slot) continue;
@@ -61,6 +67,12 @@ void App::cakes_transport_position(int slot, float& x, float& y) const {
     }
 }
 void App::cakes_transport_finish_slide() {
+    if (cakes_transport.inlet_time >= 0) {
+        const auto& anim = cakes_transport.animations["CakeSlideDownLeft"];
+        const auto value = pple::animation_value(anim, anim.total);
+        cakes_transport.positions[0] = {100 + value.dx, -115 + value.dy};
+        cakes_transport.inlet_time = -1;
+    }
     if (cakes_transport.belt_time < 0) return;
     for (const auto& motion : cakes_transport.motion) {
         const auto value = pple::animation_value(motion.animation, motion.animation.total);
@@ -73,15 +85,14 @@ void App::cakes_transport_finish_slide() {
     cakes_transport.judge_after_slide = false;
     if (judge) cakes_judge();
 }
-void App::cakes_transport_slide(int direction) {
+void App::cakes_transport_slide(int direction, const std::vector<int>& moved_slots) {
     cakes_transport.motion.clear();
     cakes_transport.reverse = direction < 0;
     cakes_transport.belt_time = 0;
     cakes_transport.belt_total = cakes_transport.animations["MainConveyorBelt"].total;
     if (cakes_transport.belt_total <= 0) cakes_transport.belt_total = 0.5f;
-    for (std::size_t slot = 0; slot < cakes_belt.size(); ++slot) {
-        if (!cakes_belt_present[slot]) continue;
-        const int from = static_cast<int>(slot) - direction;
+    for (const int slot : moved_slots) {
+        const int from = slot - direction;
         float x, y;
         x = cakes_transport.positions[from].first;
         y = cakes_transport.positions[from].second;
@@ -115,8 +126,17 @@ void App::cakes_transport_ship(const pple::Cake& cake, bool correct, float x, fl
         correct ? "box drop -> wrapped gift -> shipping" : "red light -> trash");
 }
 bool App::cakes_transport_advance(float dt) {
-    const bool moved = cakes_transport.belt_time >= 0 || cakes_transport.shipping_time >= 0 ||
-                       cakes_transport.readout_time >= 0;
+    const bool moved = cakes_transport.belt_time >= 0 || cakes_transport.inlet_time >= 0 ||
+                       cakes_transport.shipping_time >= 0 || cakes_transport.readout_time >= 0;
+    if (cakes_transport.inlet_time >= 0) {
+        cakes_transport.inlet_time += dt;
+        const auto& anim = cakes_transport.animations["CakeSlideDownLeft"];
+        if (cakes_transport.inlet_time >= anim.total) {
+            const auto value = pple::animation_value(anim, anim.total);
+            cakes_transport.positions[0] = {100 + value.dx, -115 + value.dy};
+            cakes_transport.inlet_time = -1;
+        }
+    }
     if (cakes_transport.readout_time >= 0) {
         cakes_transport.readout_time += dt;
         if (cakes_transport.readout_time >= cakes_transport.animations["ScreenSlot"].total)
@@ -167,7 +187,9 @@ void App::cakes_transport_draw(bool foreground) {
         if ((node.draw_at < 0) != foreground) continue;
         pple::SceneItem item = node.item;
         int state = node.state, frame = 0;
-        if (node.key == "CakeBox") {
+        if (node.key == "TimerBarSprite") {
+            item.x += cakes_clock.indicator_offset(cakes_model.vars(cakes_difficulty));
+        } else if (node.key == "CakeBox") {
             if (!dispatch || !cakes_transport.correct || shipping < wrap || shipping >= wrap + node.animation.total) continue;
             const auto value = pple::animation_value(node.animation, shipping - wrap);
             item.x += value.dx; item.y += value.dy;

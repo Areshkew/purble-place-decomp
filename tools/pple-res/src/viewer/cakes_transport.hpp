@@ -33,6 +33,7 @@ struct CakeTransport {
     std::vector<CakeBeltMotion> motion;
     std::vector<std::pair<float, float>> positions;
     float belt_time = -1, belt_total = 0;
+    float inlet_time = -1; // new paper's chute motion is independent of existing belt cakes
     bool reverse = false, judge_after_slide = false;
     // Rejection flash starts at judging, independently of queued gift dispatch.
     float readout_time = -1;

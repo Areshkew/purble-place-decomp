@@ -25,9 +25,11 @@ def run(name, dpi, difficulty, script, slot, delay=800, between=None):
         subprocess.run(args, stdout=stream, stderr=subprocess.STDOUT, timeout=90, check=True)
     text = (output / (name + '.log')).read_text(encoding='utf-8')
     last = text[text.rfind('  draw Root/Background'):]
-    paper = re.search(r'  draw WaxPaper\s+([\d.-]+),([\d.-]+) ([\d.-]+)x([\d.-]+)', last)
-    assert paper, name
-    x, y, w, h = map(float, paper.groups())
+    papers = re.findall(r'  draw WaxPaper\s+([\d.-]+),([\d.-]+) ([\d.-]+)x([\d.-]+)', last)
+    assert papers, name
+    # Normal timed rounds can now have trailing papers. Check the leading cake,
+    # not whichever inlet paper happens to be first in draw order.
+    x, y, w, h = max(tuple(map(float, paper)) for paper in papers)
     # WaxPaper registration is (53,23); container origin is (0,220).
     if between is None:
         assert abs(x - (98 * slot - 66 - 53)) < 0.1, (name, x, slot)
@@ -51,9 +53,10 @@ for dpi in ('no-hidpi', 'hidpi'):
         x0 = 98 * start - 119
         run(prefix + 'moving-hover', dpi, difficulty, right + ';move:410,315', start + 1,
             delay=180, between=(x0, x0 + 98))
-        # Empty first cake is rejected; replacement enters from the chute, then travels
-        # to slot 3. Its arrival must match an initial cake's slot, including its y.
-        replacement = ';'.join([right] * (8 - start)) + ';wait:900;' + ';'.join([right] * 3)
+        # Beginner replaces a judged cake immediately. Timed difficulties add
+        # on the seventh right slide, then three further slides carry it to slot 3.
+        entry_slides = 3 if difficulty == 'Beginner' else 4
+        replacement = ';'.join([right] * (8 - start)) + ';wait:900;' + ';'.join([right] * entry_slides)
         run(prefix + 'replacement', dpi, difficulty, replacement, 3)
     print(dpi + ': fixed slots, reversals, repeated slides, moving hover and chute entry PASS')
 print(f'PASS: {runs} belt alignment captures')

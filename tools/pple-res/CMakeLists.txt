@@ -37,6 +37,9 @@ if(BUILD_TESTING)
   add_executable(pple-cakes-test tests/cakes_test.cpp)
   target_link_libraries(pple-cakes-test PRIVATE pple_core)
   add_test(NAME cakes-model-and-widget COMMAND pple-cakes-test)
+  add_executable(pple-cakes-clock-test tests/cakes_clock_test.cpp)
+  target_link_libraries(pple-cakes-clock-test PRIVATE pple_core)
+  add_test(NAME cakes-conveyor-clock COMMAND pple-cakes-clock-test)
   add_executable(pple-animation-test tests/animation_test.cpp)
   target_link_libraries(pple-animation-test PRIVATE pple_core)
   add_test(NAME resource-animation-timeline COMMAND pple-animation-test)
@@ -114,6 +117,7 @@ if(PPLE_BUILD_VIEW)
       src/viewer/cakes_chef.cpp
       src/viewer/cakes_tools.cpp
       src/viewer/cakes_transport.cpp
+      src/viewer/cakes_clock.cpp
       src/viewer/cakes_play.cpp
       src/viewer/card_assets.cpp
       src/viewer/hud.cpp

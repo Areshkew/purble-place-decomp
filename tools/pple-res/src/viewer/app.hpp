@@ -2,6 +2,7 @@
 #include "types.hpp"
 #include "cakes_tools.hpp"
 #include "cakes_transport.hpp"
+#include "cakes_clock.hpp"
 #include "shop_screen.hpp"
 #include "pple/cakes.hpp"
 #include "pple/shop.hpp"
@@ -167,11 +168,16 @@ private:
     void cakes_transport_draw(bool foreground);
     bool cakes_transport_advance(float dt);
     void cakes_transport_finish_slide();
-    void cakes_transport_slide(int direction);
+    void cakes_transport_slide(int direction, const std::vector<int>& moved_slots);
+    bool cakes_clock_advance(float dt);
+    void cakes_add_paper();
     void cakes_transport_position(int slot, float& x, float& y) const;
     void cakes_transport_ship(const pple::Cake& cake, bool correct, float x, float y);
     void cakes_next_target();
     CakeTransport cakes_transport;
+    CakeClock cakes_clock;
+    bool cakes_automatic_slide = false;
+    bool cakes_single_cake = false; // original RoundData+16 option, used by deterministic solve hook
     int cakes_minimum_moves = 0;
     // ---- Comfy Cakes: the tool machines -------------------------------------------
     // The six <Tool> machines of COMFYCAKESGAME.XML, their parts and the animations a button

@@ -504,9 +504,32 @@ UI **30 PASS**, animation **42 PASS**, belt alignment **36 PASS**, gameplay/layo
 **CTest 3/3**, and `cakes_compare.py` still reports 0 uncovered pixels differing and 0 strays.
 Evidence: `C:\re\traces\cpp\hover` (logs and captures `fix-{tool,arrow,idle}.{log,ppm,png}`).
 
+#### Automatic conveyor and multiple wax papers (session 46)
+
+Normal Intermediate/Advanced play now uses the shipped **5 s / 4 s** belt interval.
+The first accepted tool action starts the clock; machine use and conveyor/chute motion pause it.
+The indicator travels **32 px** and resets after a slide. Beginner remains manual, with no timer.
+Timed rounds add another wax paper when the inlet has cleared and the seven-slide spawn counter
+is due, independently of judging. Each paper keeps its own cake and animation position; machines
+still act only on their own slot. A full eight-position working line triggers `GameLoseLineClog`.
+New rounds and difficulty changes discard the old clock and all inlet/belt motion.
+
+Evidence: `RunTimer` (`0x10005BE48`), `UpdateUI` (`0x10005BD30`), `SlideRight`
+(`0x10005C984`), `ConveyorBelt::AddCake` (`0x100062E44`) and the shipped `COMFYCAKESVARS.XML`.
+`TimeAttackAllowed` only permits an optional mode; it does not enable it. The optional accelerating
+2-second time-attack mode is still a gap. `--cakes-solve` explicitly selects the original game's
+single-cake option (`RoundData+16`) for deterministic scoring; normal clicks use the multi-cake line.
+Clock state/ownership and focused tests are listed in `src/viewer/README.md`.
+
+Verification: CTest **4/4 PASS**; **26** real-clock/multiple-paper runs, **27** gameplay/layout/Pairs
+runs, **42** animation runs and **36** alignment runs PASS (**131** viewer runs). Both DPI modes.
+Measured automatic steps: Intermediate **5.004–5.006 s**, Advanced **4.003 s** of unpaused clock.
+Single-cake solve scores remain **1650 / 2250 / 3600**. Evidence: `C:\re\traces\cpp\cc\s46`.
+These are reconstruction measurements, not newly observed original-game runtime timings.
+
 Remaining Comfy Cakes gaps: the tip manager's instructional state machine (its 30 s idle timer, the
 `GamePlayIdleStart`/`GamePlayCakePanIdle`/`GamePlayDoubleCakePan`/`GamePlayDoubleBatter` tips and
-the glow each one plays), automatic/time-attack timers, simultaneous belt cakes/line-clog loss,
+the glow each one plays), the optional time-attack mode and its accelerating spawn timer,
 full removal/replacement choreography, exact audio cue timing/buffer limits, decoration
 placement/orientation, TV transition behavior and persisted round state.
 

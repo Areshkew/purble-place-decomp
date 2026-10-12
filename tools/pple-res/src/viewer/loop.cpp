@@ -259,10 +259,11 @@ int App::run_loop() {
             const bool chef_moved = cakes_chef_advance();
             const bool tools_moved = cakes_tool_busy || cakes_tool_shake >= 0.0f;
             const float dt = std::clamp(cakes_tick, 0.0f, 0.25f);
+            const bool clock_moved = cakes_clock_advance(dt);
             cakes_tools_advance(dt);
             const bool transport_moved = cakes_transport_advance(dt);
             cakes_tick = 0.0f;
-            if (chef_moved || tools_moved || transport_moved) cakes_redraw();
+            if (chef_moved || tools_moved || transport_moved || clock_moved) cakes_redraw();
         }
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {

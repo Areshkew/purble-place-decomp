@@ -155,6 +155,10 @@ void App::cakes_new_game(int difficulty) {
     cakes_missed = 0;
     cakes_moves = 0;
     cakes_slides = 0;
+    cakes_clock = {};
+    cakes_transport.inlet_time = -1;
+    cakes_automatic_slide = false;
+    cakes_single_cake = false;
     cakes_score = 0;
     cakes_bonus = 0;
     cakes_final = 0;
@@ -184,9 +188,8 @@ void App::cakes_new_game(int difficulty) {
                     layer.index, layer.shape);
 }
 
-// Which belt slot holds the cake being built.  The reconstruction holds one cake at a time: a
-// replacement appears on the chute (slot 0) after a judged cake, and the next slide brings it
-// into the line, so the occupied slot is the one that matters.
+// The solve hook follows the leading cake. Normal tool clicks use their own station's
+// slot, so several cakes can be built independently on the belt.
 int App::cakes_working_slot() const {
     for (std::size_t p = cakes_belt.size(); p-- > 0;)
         if (cakes_belt_present[p]) return static_cast<int>(p);
@@ -249,6 +252,9 @@ void App::cakes_use_tool(int station, int index) {
         case 5: event = "CC_FROSTINGBUTTON"; break;
     }
     if (event) play_cake_sfx(event);
+    // Tool::UseTool (0x100075385) releases the initial-cake timer lock only
+    // after an accepted tool action. An idle new round remains safe to inspect.
+    cakes_clock.started = true;
     // The machine plays its own animation and the layer is shown again when it ends: the engine
     // hides the cake's top layer while the machine's fill sprite grows the ingredient in
     // (PlayAddToolAnimation 0x100075F46) and FinishAddTool (0x10007548A) applies the layer.
@@ -287,7 +293,7 @@ void App::cakes_slide_left() {
     cakes_transport_finish_slide();
     if (cakes_over) return;
     cakes_tool_complete();
-    bool moved = false;
+    std::vector<int> moved_slots;
     // Ascending, exactly as ConveyorBelt::SlideLeft's `for (v4 = 1; v4 < v3; ++v4)` loop does:
     // slot p-1 is filled only after it has already been tested, so each cake moves exactly one
     // slot per slide instead of cascading to the end of the line.
@@ -297,10 +303,10 @@ void App::cakes_slide_left() {
             cakes_belt[p - 1].station = static_cast<int>(p - 1);
             cakes_belt_present[p - 1] = true;
             cakes_belt_present[p] = false;
-            moved = true;
+            moved_slots.push_back(static_cast<int>(p - 1));
         }
     }
-    if (!moved) {
+    if (moved_slots.empty()) {
         std::printf("cakes: the belt cannot slide left\n");
         return;
     }
@@ -308,7 +314,8 @@ void App::cakes_slide_left() {
     play_cake_sfx("CC_CONVEYOR");
     ++cakes_slides;
     std::printf("cakes: the belt slid left (%d slide(s))\n", cakes_slides);
-    cakes_transport_slide(-1);
+    cakes_clock.slid(false);
+    cakes_transport_slide(-1, moved_slots);
 }
 
 // ComfyCakesGame::SlideRight (0x10005C984): every cake moves one slot away from index 0, which
@@ -319,7 +326,7 @@ void App::cakes_slide_right() {
     cakes_transport_finish_slide();
     if (cakes_over) return;
     cakes_tool_complete();
-    bool moved = false;
+    std::vector<int> moved_slots;
     // Descending, the mirror of the left slide: slot p is filled only after it has been tested,
     // so each cake moves exactly one slot per slide.
     for (std::size_t p = cakes_belt.size(); p-- > 1;) {
@@ -328,18 +335,29 @@ void App::cakes_slide_right() {
             cakes_belt[p].station = static_cast<int>(p);
             cakes_belt_present[p] = true;
             cakes_belt_present[p - 1] = false;
-            moved = true;
+            moved_slots.push_back(static_cast<int>(p));
         }
     }
-    if (!moved) {
+    // ConveyorBelt::SlideRight marks the inlet available once the first two
+    // slots are clear (three on Beginner). Never overwrite an existing paper.
+    const int entry_slots = cakes_difficulty == 0 ? 3 : 2;
+    if (std::none_of(cakes_belt_present.begin(), cakes_belt_present.begin() + entry_slots,
+                    [](bool present) { return present; })) cakes_clock.entry_clear = true;
+    const bool add = !cakes_single_cake &&
+        cakes_clock.add_due(cakes_difficulty, cakes_model.vars(cakes_difficulty));
+    if (moved_slots.empty() && !add) {
+        // Automatic ticks still count towards the next paper on an empty line.
+        if (cakes_automatic_slide) cakes_clock.slid(true);
         std::printf("cakes: the belt cannot slide right\n");
         return;
     }
-    play_cake_sfx("RIGHT_BUTTON");
+    if (!cakes_automatic_slide) play_cake_sfx("RIGHT_BUTTON");
     play_cake_sfx("CC_CONVEYOR");
     ++cakes_slides;
     std::printf("cakes: the belt slid right (%d slide(s))\n", cakes_slides);
-    cakes_transport_slide(1);
+    cakes_clock.slid(cakes_automatic_slide);
+    cakes_transport_slide(1, moved_slots);
+    if (add) cakes_add_paper();
 }
 
 // Slide the belt until the cake being built sits under `want`.  A cake that reaches the last
@@ -367,6 +385,10 @@ void App::cakes_solve() {
                                       : (cakes_difficulty == 1 ? "Intermediate" : "Expert"),
                 v.cakes_needed);
     int guard = 0;
+    // The original supports single-cake mode (RoundData+16). Keep the
+    // deterministic hook in that mode; normal mouse play always runs the full line.
+    cakes_single_cake = true;
+    std::printf("cakes solve: single-cake verification mode\n");
     while (!cakes_over && guard++ < 400) {
         // Replay the generator's own tool uses.  That is the sequence a player has to follow, and
         // it includes the pans that Cake::AddLayer's replace operation removes again.  Each use
@@ -432,13 +454,12 @@ void App::cakes_judge() {
     // the round is still running; the next right slide carries it into the line at slot 1.
     if (cakes_correct < v.cakes_needed && (cakes_difficulty == 0 || cakes_missed < v.missed_cakes_allowed)) {
         if (right) cakes_next_target(); // wrong cakes retry the existing order
-        cakes_belt_present.front() = true;
-        cakes_belt.front() = pple::Cake {};
-        cakes_belt.front().station = 0;
-        cakes_transport.positions.front() = {100, -115};
-        cakes_transport.motion = {{0, 100, -115, cakes_transport.animations["CakeSlideDownLeft"]}};
-        cakes_transport.belt_time = 0;
-        cakes_transport.belt_total = cakes_transport.animations["CakeSlideDownLeft"].total;
+        // OnCakeDone (0x10005C485): only Beginner/single-cake play replaces
+        // immediately. Timed difficulties use the independent slide/spawn schedule.
+        if (cakes_difficulty == 0 || cakes_single_cake) {
+            cakes_clock.elapsed = 0;
+            cakes_add_paper();
+        }
     }
     if (cakes_correct >= v.cakes_needed) {
         cakes_over = true;
