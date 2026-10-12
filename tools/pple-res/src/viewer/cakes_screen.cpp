@@ -271,44 +271,18 @@ void App::build_cakes() {
     std::stable_sort(entries.begin(), entries.end(),
                      [](const CakesEntry& a, const CakesEntry& b) { return a.rank < b.rank; });
 
-    // The six tools, in x order, each with the prefix its buttons share.  A <Tool> element's own
-    // Name is "CakePanTool" and so on; its buttons are the CakePan*/Batter*/... ones, the same
-    // prefixes cakes_tool_station uses.  The pairings let a tool's highlight know which hovered
-    // button belongs to it.
-    static const struct {
-        const char* tool;
-        const char* prefix;
-    } kToolPrefix[] = {
-        {"CakePanTool", "CakePan"},       {"BatterTool", "Batter"},
-        {"FillingTool", "Filling"},       {"IcingTool", "Icing"},
-        {"DecorationTool", "Decoration"}, {"FinalTouchTool", "Final"},
-    };
-    std::vector<std::pair<float, std::string>> tools;
-    for (const pple::SceneItem& container : scene.containers) {
-        if (!container.widget || container.instance != "Tool") continue;
-        for (const auto& entry : kToolPrefix)
-            if (container.name == entry.tool) {
-                tools.push_back({container.x, entry.prefix});
-                break;
-            }
-    }
-    std::sort(tools.begin(), tools.end());
-    // The machines' own containers.  A <Tool> element's X/Y is where the engine puts its
-    // button-area Base, and every machine part of that tool's document is positioned inside it,
-    // which is what cakes_tools.cpp needs to draw a machine's animation.
+    // Machine anchors use the owning <Tool Name>, never a button prefix: Final* buttons
+    // belong to FinalTouchTool, not FinalTool. Parts draw relative to this container's X/Y.
     cakes_tool_anchor.clear();
-    for (const std::pair<float, std::string>& tool : tools)
-        cakes_tool_anchor[tool.second + "Tool"] = {tool.first, 298.0f};
     for (const pple::SceneItem& container : scene.containers) {
         if (!container.widget || container.instance != "Tool") continue;
-        const auto it = cakes_tool_anchor.find(container.name);
-        if (it != cakes_tool_anchor.end()) {
-            const int station = cakes_tool_station(container.name);
-            const float shift = cakes_difficulty == 0 && (station == 0 || station == 1)
-                                    ? 100.0f : 0.0f;
-            // ShowTools always offsets the pan's machine Base by 25, not its buttons.
-            it->second = {container.x + shift + (station == 1 ? 25.0f : 0.0f), container.y};
-        }
+        const int station = cakes_tool_station(container.name);
+        if (station < 0) continue;
+        const float shift = cakes_difficulty == 0 && (station == 0 || station == 1)
+                                ? 100.0f : 0.0f;
+        // ShowTools always offsets the pan's machine Base by 25, not its buttons.
+        cakes_tool_anchor[container.name] =
+            {container.x + shift + (station == 1 ? 25.0f : 0.0f), container.y};
     }
 
     // The four /HighlightSprite nodes and their *HighlightAnim documents are *not* focus art.

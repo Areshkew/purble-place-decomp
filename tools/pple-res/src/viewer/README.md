@@ -198,6 +198,9 @@ Final-touch rules and glaze-colour identity belong to [cakes.cpp](../cakes.cpp) 
 TV and belt drawing. No new per-tick asset loading or room rebuilding. The
 [cakes_regression.py](../../tests/cakes_regression.py) matrix now has 27 runs, including normal
 Advanced glaze/sugar clicks in both DPI modes and regenerated TV finish-art checks.
+Machine drawing anchors are keyed by the scene container's actual name in `build_cakes`, not
+by a button prefix (`Final*` belongs to `FinalTouchTool`). The Cakes integration/UI suites also
+assert on-screen final-machine action/base placement on direct and menu-started Advanced rounds.
 
 `cakes_screen.cpp` owns the second game's room.  Its document is not a pure layout document:
 `ComfyCakesGame::InitGameUI` (`0x10005D018`) looks each element up by name and creates the node

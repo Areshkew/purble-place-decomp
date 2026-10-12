@@ -62,6 +62,12 @@ for dpi in ('no-hidpi', 'hidpi'):
         assert f'difficulty: {mode} chosen' in selected
         assert f'cakes: new {"Expert" if mode == "Advanced" else mode} game' in selected
         assert 'intro:' not in selected, 'no Pairs intro on Cakes'
+        final_base = 'FinalTouchTool/UI\\ComfyCakes\\Machines\\FinalTouchMachineBaseSprite.xml'
+        final_draws = last_draws(selected)
+        if mode == 'Advanced':
+            assert final_draws.get(final_base) == (598, 0, 100, 133), 'final machine visible after menu selection'
+        else:
+            assert final_base not in final_draws, 'final machine is Advanced-only'
         r, g, b = selected_image.getpixel((15, 130))
         assert min(r, g, b) > 60 and b > g + 5, 'capture must show the game, not the previous chooser'
     chooser, chooser_image = run('chooser-' + dpi, dpi, ['--menu', '--script-click', '330,250'])

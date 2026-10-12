@@ -43,6 +43,10 @@ for mode, count, pan_x, batter_x, layers in (
             assert not re.search(r"draw .*" + effect, text), (name, effect)
         assert ("hot-spot FillingChocolateButton" in text) == (mode != "Beginner"), name
         assert ("hot-spot FinalGlazeButton" in text) == (mode == "Advanced"), name
+        for part, x, height in (("Action", 592, 320), ("Base", 598, 133)):
+            machine = rf"draw FinalTouchTool/UI\\ComfyCakes\\Machines\\FinalTouchMachine{part}Sprite.xml"
+            matches = re.findall(machine + rf"\s+{x},0 100x{height}", text)
+            assert bool(matches) == (mode == "Advanced"), (name, "final machine on-screen anchor", part)
         assert ("draw TimerBarSprite" in text) == (mode != "Beginner"), name
         solve = run(name + "-solve", ["--cakes", mode, "--cakes-solve", "--" + dpi,
                     "--width", "800", "--height", "576", "--shot", str(output / (name + "-solve.ppm"))])

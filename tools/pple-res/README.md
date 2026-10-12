@@ -375,6 +375,13 @@ last-machine buttons and Advanced finish art in both DPI modes; CTest still chec
 buildable targets plus explicit decoration/final-touch fixtures. Evidence:
 `C:\re\traces\cpp\cc\s44`; the separate Cakes UI regression passes **30 runs**.
 
+**Machine-body correction (section 45):** anchors now use the actual tool container name.
+The `Final*` button prefix had produced a nonexistent `FinalTool` anchor, leaving
+`FinalTouchTool` drawn at `(4,-301)` / `(10,-301)`, offscreen. Advanced now draws the action/base
+at `(592,0)` / `(598,0)`; Beginner/Intermediate still hide this machine. Both regression suites
+now assert these positions, including entry from the menu, and all **57 runs** pass again in
+both DPI modes. Before/after captures and logs: `C:\re\traces\cpp\cc\s45`.
+
 Idle bodies and bases are visible; falling pans/batter/decorations, splats, streams and batter
 fills are hidden until their machine runs. Both idle and animated machines belong to one dynamic
 layer, avoiding a second stationary machine behind an animated/shaking copy. Shared effect
