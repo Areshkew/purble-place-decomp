@@ -4,6 +4,13 @@ Start here, then search the relevant module. Do not read the whole viewer to cha
 one feature. All files here use the internal `pple::viewer` namespace; command-line
 flags and the core library's public interfaces are unchanged.
 
+## Clean-play checks
+
+[viewer_cleanup_regression.py](../../tests/viewer_cleanup_regression.py) checks the
+Windows GUI subsystem, clean captures of all screens, diagnostic capture compatibility,
+and idle Pairs HUD texture reuse. Run with build/sample/fresh-trace directories.
+The browser page/checks are mapped in [web/README.md](../../web/README.md).
+
 ## Focused Pairs reward checks
 
 The eye-card token reward belongs to `ConcentrationBoard::click` in
@@ -18,6 +25,7 @@ checks normal clicks, inventory pixels, saved tokens and token use/expiry in bot
 | Responsibility | File and entry points |
 |---|---|
 | Process entry | [view_main.cpp](../view_main.cpp): constructs `App`, calls `run` (a long-lived `App` in the browser build, because the main loop unwinds `main`) |
+| Windows GUI/optional console bootstrap | [windows_entry.cpp](windows_entry.cpp): `WinMain`, preserves inherited redirected output; `--console` opts in to a console |
 | Arguments, DLL/MUI loading, SDL setup, initial screen | [app.cpp](app.cpp): `App::run` |
 | Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown (web VSync only after the first event pump; rAF owns pacing) | [loop.cpp](loop.cpp): `run_loop` (setup and dispatch), `frame_step` (one frame; the browser calls it from `emscripten_set_main_loop`), `finish_loop`, `set_sheet_dpi`, `rebuild_current_screen` |
 | Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
@@ -39,7 +47,7 @@ checks normal clicks, inventory pixels, saved tokens and token use/expiry in bot
 | Skeletal movie evaluation and part placement | [movie.cpp](movie.cpp): `build_movie`, `append_movie` |
 | Individual image/sprite browser | [browser.cpp](browser.cpp): `load_current` |
 | Audio manifest, PCM playback, shared cached Pairs/Cakes sounds | [audio.hpp](audio.hpp), [audio.cpp](audio.cpp): `initialise_pair_audio`, `initialise_cake_audio`, `play_click_sfx`, `play_cake_sfx`, `load_audio_pcm`, `set_sfx_audio_dir`; Cakes dispatch tests in [cakes_audio_regression.py](../../tests/cakes_audio_regression.py) |
-| Fonts and diagnostic HUD | [hud.cpp](hud.cpp): `font_for`, `rebuild_hud`, `refresh_hud` |
+| Fonts and opt-in diagnostic HUD | [hud.cpp](hud.cpp): `font_for`, `rebuild_hud`, `refresh_hud`; App-owned text/texture cache; normal play builds no HUD textures; captures/benchmarks keep the HUD unless `--no-debug` |
 | Pairs setup orchestration, deal/reset, solve/click hooks, scene visibility | [pairs_setup.cpp](pairs_setup.cpp): `build_pairs` |
 | Per-level card back, jar points/coins, arc and burst configuration, animation reset | [level_art.cpp](level_art.cpp): `build_pair_level_art` |
 | Card face/back/outline/blank/spark/glow/sneak-icon cache and time-bar assets | [card_assets.cpp](card_assets.cpp): `build_pair_card_assets` |

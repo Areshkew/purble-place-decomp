@@ -25,6 +25,9 @@ namespace pple::viewer {
                  "  --play NAME       decode and play an AUDIO.XML event key or a resource name\n"
                  "  --volume N        playback volume, 0..100 (default 100)\n"
                  "  --mute            silence Pairs and Comfy Cakes sound effects\n"
+                  "  --debug           show diagnostic HUD (hidden during normal play)\n"
+                  "  --no-debug        hide it even for captures and benchmarks\n"
+                  "  --console         open/attach a Windows console for diagnostics\n"
                  "  --audio-dir PATH  play <Event>.wav from this pack instead of decoding the WMA\n"
                  "                    resources; the browser build needs it, because Media Foundation\n"
                  "                    is the only decoder this project has.  See web/README.md\n"
@@ -44,6 +47,7 @@ int App::run(int argc, char** argv) {
         return args.empty() ? 1 : 0;
     }
 
+    int debug_mode = 0;  // auto: inspection/capture hooks retain their diagnostic HUD
     for (std::size_t i = 0;
     i < args.size();
     ++i) {
@@ -102,6 +106,9 @@ int App::run(int argc, char** argv) {
         else if (a == "--play" && i + 1 < args.size()) play_name = args[++i];
         else if (a == "--volume" && i + 1 < args.size()) play_volume = static_cast<float>(std::atof(args[++i].c_str())) / 100.0f;
         else if (a == "--mute") mute = true;
+        else if (a == "--debug") debug_mode = 1;
+        else if (a == "--no-debug") debug_mode = -1;
+        else if (a == "--console") {}  // Windows bootstrap owns optional console setup
         else if (a == "--audio-dir" && i + 1 < args.size()) audio_dir = args[++i];
         else if (a == "--pairs-click" && i + 1 < args.size()) pairs_click = args[++i];
         else if (a == "--pairs-save" && i + 1 < args.size()) pairs_save_path = args[++i];
@@ -129,6 +136,11 @@ int App::run(int argc, char** argv) {
         usage();
         return 1;
     }
+
+    const bool game_mode = menu_mode || loading_mode || difficulty_mode || cakes_mode ||
+                           shop_mode || !pairs_spec.empty();
+    debug_hud = debug_mode > 0 || (debug_mode == 0 &&
+        (!game_mode || !shot_path.empty() || bench_frames > 0 || bench_build > 0));
 
     // Before any screen is built: the sound pack location is session state, not per-screen.
     set_sfx_audio_dir(audio_dir);
@@ -248,7 +260,14 @@ int App::run(int argc, char** argv) {
         return 1;
     }
     offscreen = !shot_path.empty();
-    window = SDL_CreateWindow("pple-view", width, height,                                         offscreen ? SDL_WINDOW_HIDDEN : SDL_WINDOW_RESIZABLE);
+    SDL_WindowFlags window_flags = offscreen ? SDL_WINDOW_HIDDEN : SDL_WINDOW_RESIZABLE;
+#ifdef __EMSCRIPTEN__
+    // The page fits a fixed canvas with CSS. Letting SDL resize its backing store
+    // from the transformed CSS bounds creates feedback and unnecessary DPI rebuilds.
+    window_flags = offscreen ? SDL_WINDOW_HIDDEN : 0;
+#endif
+    window = SDL_CreateWindow(debug_hud ? "Purble Place — diagnostics" : "Purble Place",
+                              width, height, window_flags);
     if (window == nullptr) {
         std::fprintf(stderr, "SDL_CreateWindow: %s\n", SDL_GetError());
         SDL_Quit();
@@ -281,7 +300,7 @@ int App::run(int argc, char** argv) {
         SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
         const float start_scale =
             std::min(static_cast<float>(out_w) / pple::kScreenWidth,
-                     static_cast<float>(std::max(0, out_h - 100)) / pple::kScreenHeight);
+                     static_cast<float>(std::max(0, out_h - (debug_hud ? 100 : 0))) / pple::kScreenHeight);
         sheet_dpi = start_scale >= hidpi_scale ? SheetDpi::Double : SheetDpi::Base;
     }
 

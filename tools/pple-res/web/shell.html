@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Purble Place reconstruction — web</title>
+<title>Purble Place</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -47,10 +47,17 @@
      that size as the window when something else is sizing the element.  So the page gives the
      canvas an explicit CSS size and never touches it again; fitting to the window is a transform
      on the finished canvas, which leaves the game's pixels one to one with the desktop viewer's. */
-  #framebox { overflow: hidden; }
+  #framebox { overflow: hidden; position: relative; }
+  #stage:fullscreen { background: #14141c; padding: 12px; }
+  body.playing .welcome { display: none; }
+  #toolbar { justify-content: center; margin-bottom: 10px; }
+  #status { color: #c9d7f4; }
+  details > summary { cursor: pointer; color: #b9b9c8; }
+  #diagnostics { margin-top: 12px; }
+  #help { max-width: 650px; margin: 0 auto 10px; }
   #canvas {
-    display: block; margin: 0 auto; background: #000; outline: none;
-    width: 1120px; height: 720px; transform-origin: top center;
+    display: block; position: relative; left: 50%; margin: 0; background: #000; outline: none;
+    width: 1120px; height: 694px; transform-origin: top left; touch-action: none;
   }
   #hint { text-align: center; color: #9a9ab0; margin-top: 6px; font-size: 13px; }
   pre#log {
@@ -67,24 +74,23 @@
   body.shot { background: #000; }
   body.shot #app { max-width: none; padding: 0; margin: 0; }
   body.shot #picker, body.shot h1, body.shot h2, body.shot #log, body.shot .small,
-  body.shot #hint, body.shot #after { display: none !important; }
+  body.shot #hint, body.shot #after, body.shot #toolbar, body.shot #help,
+  body.shot #status, body.shot #diagnostics { display: none !important; }
   body.shot #canvas { border: 0; border-radius: 0; margin: 0; width: 1400px; height: 900px; }
   body.shot #framebox { overflow: visible; }
-  body.shot #canvas { transform: none !important; }
+  body.shot #canvas { transform: none !important; left: 0; }
 </style>
 </head>
 <body>
 <div id="app">
-  <h1>Purble Place reconstruction — web build</h1>
-  <p class="small">
-    This page is the reconstruction's own viewer compiled to WebAssembly. It contains no game
-    art, no sound and no Microsoft code: the game reads the resource files from an installation
-    of Purble Place that <strong>you</strong> select. Nothing is uploaded; the files are read in
-    the browser and written into the page's own memory.
+  <h1 class="welcome">Purble Place</h1>
+  <p class="small welcome">
+    Play this reconstruction with files from your own Purble Place installation.
+    Your files stay in this browser and are not uploaded.
   </p>
 
   <section id="picker" class="panel">
-    <h2>1. Select the game files</h2>
+    <h2>Select your game files</h2>
     <p>
       Pick these files from a Purble Place installation (the three DLLs usually sit next to
       <code>PurblePlace.exe</code>, and the <code>.mui</code> is in its <code>en-US</code> folder):
@@ -96,12 +102,12 @@
     <div class="row" style="margin-top:12px">
       <label class="filebtn">Choose files<input type="file" id="files" multiple></label>
       <label class="filebtn">Choose the game folder<input type="file" id="dir" webkitdirectory directory multiple></label>
-      <button id="start" class="primary" disabled>2. Start the game</button>
+      <button id="start" class="primary" disabled>Start the game</button>
     </div>
     <div id="drop">or drop the files (or the whole game folder) here</div>
     <p class="small" id="pick-status"></p>
 
-    <h2 style="margin-top:22px">2. Sound (optional)</h2>
+    <h2 style="margin-top:22px">Sound (optional)</h2>
     <p>
       The shipped effects are WMA, which only Windows can decode, so the game is silent until it
       is given a sound pack: one <code>WAV</code> per sound, made once by the desktop build.
@@ -113,16 +119,29 @@
     <p class="small" id="audio-status">No sound pack selected; the game will play silently.</p>
   </section>
 
+  <p id="status" role="status" aria-live="polite">Loading the game engine…</p>
   <section id="stage" hidden>
-    <div id="framebox"><canvas id="canvas" tabindex="-1"></canvas></div>
-    <div id="hint">Click the picture first if the keyboard does not answer. ESC leaves a game and quits from the menu.</div>
+    <div class="row" id="toolbar">
+      <button id="back" title="Return to the menu, or exit from the main menu">Back / exit</button>
+      <button id="fullscreen">Full screen</button>
+      <button id="help-toggle" aria-expanded="false" aria-controls="help">How to play</button>
+    </div>
+    <div id="help" class="panel" hidden>
+      Click a building to choose a game, then choose a difficulty.
+      In Purble Pairs, find matching cards. In Comfy Cakes, copy the cake on the TV.
+      In Purble Shop, choose parts and check your guess.
+      <br>Esc: back to the menu. N: new round. 1 / 2 / 3: change difficulty.
+    </div>
+    <div id="framebox"><canvas id="canvas" tabindex="0" aria-label="Purble Place game"></canvas></div>
     <div class="row" id="after" hidden style="justify-content:center;margin-top:10px">
-      <button id="again">Load the page again to play another round</button>
+      <button id="again">Play again</button>
     </div>
   </section>
 
-  <h2>Console</h2>
-  <pre id="log"></pre>
+  <details id="diagnostics">
+    <summary>Diagnostics</summary>
+    <pre id="log"></pre>
+  </details>
 </div>
 
 <script>
@@ -147,10 +166,30 @@
   var SHOT = params.get('shot') === '1';
   if (SHOT) document.body.classList.add('shot');
 
+  var DEBUG = params.get('debug') === '1';
+  var diagnostics = document.getElementById('diagnostics');
+  diagnostics.open = DEBUG;
   var logEl = document.getElementById('log');
+  var logLines = [];
+  var logPending = false;
   function logLine(text) {
-    logEl.textContent += text + '\n';
-    logEl.scrollTop = logEl.scrollHeight;
+    logLines.push(text);
+    if (logLines.length > 300) logLines.shift();
+    if (logPending) return;
+    logPending = true;
+    // Flush per event-loop turn, not per paint: rAF may stop when SDL tears down
+    // its canvas, but the final diagnostics and error details must still appear.
+    queueMicrotask(function () {
+      logPending = false;
+      logEl.textContent = logLines.join('\n') + '\n';
+      if (diagnostics.open) logEl.scrollTop = logEl.scrollHeight;
+    });
+  }
+  function showStatus(text, error) {
+    var status = document.getElementById('status');
+    status.textContent = text;
+    status.hidden = !text;
+    status.classList.toggle('no', !!error);
   }
 
   var chosen = {};        // match name -> {name, size, file|bytes}
@@ -158,6 +197,7 @@
   var audioLoaded = 0;    // how many WAVs actually reached the page's file system
   var runtimeReady = false;
   var sessionStarted = false;
+  var autoLoading = false;
   // A machine-readable state for the headless browser check (web/smoke-browser.mjs), which
   // polls it over the DevTools protocol instead of guessing at timings.
   window.ppleState = 'loading';
@@ -175,7 +215,7 @@
       body.appendChild(tr);
     });
     var missing = WANTED.filter(function (w) { return w.required && !chosen[w.match]; });
-    document.getElementById('start').disabled = missing.length > 0 || !runtimeReady;
+    document.getElementById('start').disabled = missing.length > 0 || !runtimeReady || autoLoading || sessionStarted;
     document.getElementById('pick-status').textContent = missing.length
       ? 'Still needed: ' + missing.map(function (w) { return w.key; }).join(', ')
       : (runtimeReady ? 'Ready. Starting copies the files into the page and runs the game.'
@@ -241,10 +281,15 @@
     noInitialRun: true,
     print: function (text) { logLine(text); },
     printErr: function (text) { logLine(text); },
+    onAbort: function () {
+      window.ppleState = 'error';
+      showStatus('The game could not start. Open Diagnostics for details, then reload to try again.', true);
+    },
     onRuntimeInitialized: function () {
       runtimeReady = true;
       window.ppleState = 'ready';
       logLine('runtime ready');
+      showStatus('Choose your game files, then select Start the game.');
       renderWanted();
       maybeAutoStart();
     }
@@ -268,22 +313,24 @@
   // The canvas keeps the size the page gave it and SDL adopted; only its display is scaled, so
   // the game's pixels stay one to one with what the desktop viewer draws.  A --shot capture is
   // deliberately left at its own size, because it is compared with a desktop capture.
-  var CANVAS_W = 1120, CANVAS_H = 720;
+  var CANVAS_W = 1120, CANVAS_H = 694;
   function fitCanvas() {
-    if (SHOT) return;
+    if (SHOT || document.getElementById('stage').hidden) return;
     var canvas = document.getElementById('canvas');
     var box = document.getElementById('framebox');
-    var scale = Math.min(1, (window.innerWidth - 32) / CANVAS_W,
-                         (window.innerHeight - 200) / CANVAS_H);
-    canvas.style.transform = scale < 1 ? 'scale(' + scale + ')' : 'none';
+    var scale = Math.max(.05, Math.min(1, box.clientWidth / CANVAS_W,
+      (window.innerHeight - box.getBoundingClientRect().top - 32) / CANVAS_H));
+    canvas.style.transform = 'scale(' + scale + ') translateX(-50%)';
     box.style.height = Math.round(CANVAS_H * scale) + 'px';
   }
   window.addEventListener('resize', fitCanvas);
+  new ResizeObserver(fitCanvas).observe(document.getElementById('framebox'));
 
   async function startSession() {
     if (sessionStarted) return;
     sessionStarted = true;
     document.getElementById('start').disabled = true;
+    showStatus('Preparing the game…');
     try {
       ensureAssetDir();
       for (var i = 0; i < WANTED.length; i++) {
@@ -311,6 +358,7 @@
       if (audioLoaded) logLine('sounds: ' + audioLoaded + ' ready');
     } catch (err) {
       logLine('reading the files failed: ' + err);
+      showStatus('Could not read the selected files. Choose them again and retry.', true);
       sessionStarted = false;
       document.getElementById('start').disabled = false;
       return;
@@ -344,17 +392,52 @@
       if (chosen['purbleplace.exe.mui']) args.push('--mui', ASSET_DIR + '/PurblePlace.exe.mui');
       if (audioLoaded) args.push('--audio-dir', AUDIO_DIR);
     }
+    if (DEBUG) args.push('--debug');
     logLine('starting: ' + args.join(' '));
+    showStatus('');
+    document.body.classList.add('playing');
     document.getElementById('picker').hidden = true;
     document.getElementById('stage').hidden = false;
     Module.canvas.focus();
     window.ppleState = 'running';
-    Module.callMain(args);
+    Object.values(chosen).forEach(function (entry) { delete entry.bytes; });
+    audioFiles = [];
+    var result = Module.callMain(args);
+    if (typeof result === 'number' && result !== 0) {
+      window.ppleState = 'error';
+      showStatus('The game could not start. Open Diagnostics for details, then reload to try again.', true);
+      document.getElementById('after').hidden = false;
+    }
     fitCanvas();
   }
   document.getElementById('start').addEventListener('click', startSession);
   document.getElementById('again').addEventListener('click', function () { location.reload(); });
-  Module.canvas.addEventListener('mousedown', function () { Module.canvas.focus(); });
+  Module.canvas.addEventListener('pointerdown', function () { Module.canvas.focus(); });
+  document.getElementById('back').addEventListener('click', function () {
+    Module.canvas.focus();
+    ['keydown', 'keyup'].forEach(function (type) {
+      Module.canvas.dispatchEvent(new KeyboardEvent(type,
+        { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+    });
+  });
+  document.getElementById('help-toggle').addEventListener('click', function () {
+    var help = document.getElementById('help');
+    help.hidden = !help.hidden;
+    this.setAttribute('aria-expanded', String(!help.hidden));
+    fitCanvas();
+  });
+  document.getElementById('fullscreen').addEventListener('click', async function () {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else await document.getElementById('stage').requestFullscreen();
+    } catch (err) { showStatus('Full screen is not available in this browser.', true); }
+    Module.canvas.focus();
+    fitCanvas();
+  });
+  document.addEventListener('fullscreenchange', function () {
+    document.getElementById('fullscreen').textContent = document.fullscreenElement ? 'Exit full screen' : 'Full screen';
+    fitCanvas();
+  });
 
   // A P6 PPM: "P6\n<w> <h>\n255\n" then RGB bytes, which is what the viewer's capture writes.
   function drawPpm(bytes) {
@@ -369,7 +452,12 @@
     var h = parseInt(parts[2], 10);
     var pixels = bytes.subarray(at);
     if (pixels.length < w * h * 3) throw new Error('short PPM: ' + pixels.length + ' of ' + (w * h * 3));
-    var canvas = document.getElementById('canvas');
+    // SDL used WebGL on its canvas; a canvas cannot switch context types, even
+    // after SDL teardown. Paint the captured PPM on a fresh replacement instead.
+    var oldCanvas = document.getElementById('canvas');
+    var canvas = oldCanvas.cloneNode(false);
+    oldCanvas.replaceWith(canvas);
+    Module.canvas = canvas;
     canvas.width = w;
     canvas.height = h;
     var context = canvas.getContext('2d');
@@ -399,6 +487,8 @@
       return;
     }
     window.ppleState = 'ended';
+    showStatus('Thanks for playing. Reload to play again.');
+    document.getElementById('back').disabled = true;
     document.getElementById('after').hidden = false;
   };
 
@@ -422,20 +512,33 @@
       .map(function (line) { return line.trim(); })
       .filter(function (line) { return line.length > 0; });
     logLine('auto: sound pack lists ' + names.length + ' event(s)');
-    for (var i = 0; i < names.length; i++) {
-      var bytes = await fetchInto(names[i] + '.wav', prefix + 'audio/' + names[i] + '.wav');
-      Module.FS.writeFile(AUDIO_DIR + '/' + names[i] + '.wav', bytes);
-      audioLoaded++;
-      if ((i + 1) % 20 === 0) logLine('auto: sounds ' + (i + 1) + '/' + names.length + '...');
+    // Bound concurrent requests so startup does not wait for 146 serial round trips.
+    var next = 0, completed = 0;
+    async function worker() {
+      while (next < names.length) {
+        var name = names[next++];
+        try {
+          if (!/^[A-Za-z0-9_]+$/.test(name)) throw new Error('invalid event name');
+          var bytes = await fetchInto(name + '.wav', prefix + 'audio/' + name + '.wav');
+          Module.FS.writeFile(AUDIO_DIR + '/' + name + '.wav', bytes);
+          audioLoaded++;
+        } catch (err) { logLine('sound skipped: ' + name + ': ' + err.message); }
+        completed++;
+        showStatus('Loading sounds… ' + completed + ' / ' + names.length);
+      }
     }
+    await Promise.all(Array.from({ length: Math.min(6, names.length) }, worker));
     logLine('auto: sounds ready: ' + audioLoaded + ' event(s)');
   }
 
   async function maybeAutoStart() {
     if (params.get('auto') !== '1') return;
+    autoLoading = true;
     var prefix = params.get('assets') || 'game/';
     if (!prefix.endsWith('/')) prefix += '/';
     logLine('auto: fetching the game files from ' + prefix);
+    showStatus('Loading game files…');
+    document.getElementById('start').disabled = true;
     try {
       ensureAssetDir();
       for (var i = 0; i < WANTED.length; i++) {
@@ -454,10 +557,13 @@
       }
       renderWanted();
       await fetchSoundPack(prefix);
-      startSession();
+      autoLoading = false;
+      await startSession();
     } catch (err) {
       logLine('auto: ' + (err && err.message ? err.message : String(err)) +
               ' — select the files by hand instead');
+      autoLoading = false;
+      showStatus('Could not load the game files. Select your local files to continue.', true);
       renderWanted();
     }
   }

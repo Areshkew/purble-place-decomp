@@ -68,6 +68,24 @@ Desktop pacing is unchanged. `--bench` on web also stays rAF-paced.
 intervals and a DevTools CPU profile, and rejects a clock-heavy main loop. Headless
 software-rendered browser FPS is not a measurement of interactive GPU performance.
 
+### Clean normal play
+
+Normal menu/game launches hide the diagnostic HUD. Windows `pple-view` is now a GUI
+application: no extra console window; use `--console` when needed. `--debug` enables
+the HUD, and `--no-debug` hides it even during a capture. Inspection, `--shot` and
+benchmark hooks retain the diagnostic HUD by default for existing regression scripts.
+Unchanged HUD text reuses its textures instead of being rasterized every tick.
+
+The browser page has a closed **Diagnostics** panel, Back / exit, full screen,
+How to play, and visible loading/error status. `?debug=1` enables browser diagnostics.
+The canvas keeps a fixed backing size and fits the available width and height in CSS;
+resizing does not trigger texture/DPI reloads. Served sound packs load with at most six
+concurrent requests, and a missing individual optional sound no longer blocks play.
+See [web/README.md](web/README.md) for the page module map and browser checks.
+
+Focused native check (with local assets):
+`tests/viewer_cleanup_regression.py BUILD_DIR SAMPLE_DIR FRESH_TRACE_DIR [BASELINE_MENU_PPM]`.
+
 ## Eye-card reveal reward (section 47)
 
 Matching the card carrying the golden eye now adds one usable sneak-peek token, capped at

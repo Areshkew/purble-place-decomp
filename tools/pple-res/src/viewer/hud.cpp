@@ -12,11 +12,17 @@ TTF_Font* App::font_for(float size) {
 }
 
 void App::rebuild_hud() {
+    // Normal play never creates diagnostic text textures. In diagnostic mode,
+    // keep the textures until the actual text changes (Pairs calls this at 30 Hz).
+    if (!debug_hud) return;
+    if (hud_lines == rendered_hud_lines) return;
+    rendered_hud_lines = hud_lines;
     for (SDL_Texture* t : hud_textures) SDL_DestroyTexture(t);
     hud_textures.clear();
     hud_w = 0;
     hud_h = 0;
     if (font == nullptr) return;
+    ++hud_builds;
     for (const std::string& line : hud_lines) {
         SDL_Surface* surface =                TTF_RenderText_Blended(font, line.c_str(), line.size(), SDL_Color{
             235, 235, 245, 255

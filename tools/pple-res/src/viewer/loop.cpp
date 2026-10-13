@@ -165,7 +165,9 @@ int App::run_loop() {
 bool App::frame_step() {
     {
         SDL_Event event;
-        while (SDL_PollEvent(&event)) {
+        // Quit is final for this frame: a queued pointer/leave event must not
+        // overwrite running=false with click_scene(..., true)'s normal true result.
+        while (loop.running && SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
                 loop.running = false;
             } else
@@ -667,6 +669,7 @@ bool App::frame_step() {
 // loop returns; the browser build reaches it from the main-loop cancel path, which is why the
 // teardown is a method rather than the loop's tail.
 void App::finish_loop() {
+    std::printf("hud: %zu text rebuild(s)\n", hud_builds);
     std::printf("hidpi: %zu sheet(s) drawn from the x2 resources, %zu fallback(s) to 1x\n",
                 hidpi_sheets, hidpi_fallbacks);
     for (SDL_Texture* t : hud_textures) SDL_DestroyTexture(t);

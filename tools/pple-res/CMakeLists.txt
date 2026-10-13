@@ -151,6 +151,11 @@ set(PPLE_VIEW_SOURCES
 if(PPLE_BUILD_VIEW AND NOT EMSCRIPTEN)
   if(EXISTS "${PPLE_SDL_ROOT}/include/SDL3/SDL.h")
     add_executable(pple-view ${PPLE_VIEW_SOURCES})
+    if(WIN32)
+      # Normal play is a GUI application; CLI tools remain console applications.
+      set_target_properties(pple-view PROPERTIES WIN32_EXECUTABLE TRUE)
+      target_sources(pple-view PRIVATE src/viewer/windows_entry.cpp)
+    endif()
     target_link_libraries(pple-view PRIVATE pple_core ${PPLE_AUDIO_TARGET})
     target_include_directories(pple-view PRIVATE "${PPLE_SDL_ROOT}/include")
     target_link_directories(pple-view PRIVATE "${PPLE_SDL_ROOT}/lib")

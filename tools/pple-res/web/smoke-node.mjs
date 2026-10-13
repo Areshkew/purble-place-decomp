@@ -11,7 +11,7 @@
 // re-requiring the same generated script would hand back the cached module instead of a fresh
 // runtime.
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
@@ -34,7 +34,7 @@ if (one) {
   // The web build emits these tools modularized (see CMakeLists.txt): node's module scope
   // already owns an identifier called Module, so a generated script cannot pick a caller's
   // Module up the way the browser page can.  The factory takes it instead.
-  const factory = require(join(buildDir, one));
+  const factory = require(resolve(buildDir, one));
   await factory({
     print: (line) => console.log(line),
     printErr: (line) => console.log(line),
@@ -57,7 +57,10 @@ const mui = '/assets/PurblePlace.exe.mui';
 function tool(script, args) {
   const result = spawnSync(process.execPath, [import.meta.filename, buildDir, gameDir, script, ...args],
                            { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-  return (result.stdout || '') + (result.stderr || '');
+  const output = (result.stdout || '') + (result.stderr || '');
+  if (result.error || result.status !== 0)
+    throw new Error(`${script} failed (${result.status}): ${result.error || output}`);
+  return output;
 }
 
 let failures = 0;

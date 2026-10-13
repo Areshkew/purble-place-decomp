@@ -379,9 +379,12 @@ private:
     SDL_Texture* texture = nullptr;
     SDL_FRect src_rect{
     };
+    bool debug_hud = false;
     std::vector<std::string> hud_lines;
+    std::vector<std::string> rendered_hud_lines;
     std::vector<SDL_Texture*> hud_textures;
     int hud_w = 0, hud_h = 0;
+    std::size_t hud_builds = 0;
     bool integer_scale = false;
     std::vector<DrawItem> scene_draws;
     float scene_w = 0.0f, scene_h = 0.0f;
