@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <random>
 #include <fstream>
 #include <iostream>
@@ -1058,6 +1059,141 @@ int cmd_asf(const std::vector<std::string>& files, bool list_all) {
     for (const auto& [codec, count] : codecs) std::printf("  codec %-22s %zu\n", codec.c_str(), count);
     return 0;
 }
+// ---------------------------------------------------------------------------------------
+// The sound pack for the browser build.
+//
+// Every shipped sound effect is WMA, and the only decoder this project can rely on is Windows'
+// Media Foundation, which no browser has.  So the desktop build writes the game's own audio out
+// as one WAV per AUDIO.XML event, and the web page plays those (--audio-dir).  The pack is
+// derived from the game's assets: it belongs next to them, never in this repository.
+//
+// Resolution follows the viewer's loader: the resource index spans every module passed in, so an
+// event declared in PurblePlace.dll can name a resource that lives in CardGames.dll.
+int cmd_audio_pack(const std::vector<std::string>& files, const std::string& out_dir, bool force) {
+    if (out_dir.empty()) {
+        std::fprintf(stderr, "audio-pack needs --out DIR\n");
+        return 1;
+    }
+    std::string start_error;
+    if (!pple::mf_start(start_error)) {
+        std::fprintf(stderr, "media foundation: %s\n", start_error.c_str());
+        return 1;
+    }
+
+    std::vector<PeImage> modules;
+    std::map<std::string, const ResourceEntry*> index;
+    for (const std::string& path : files) {
+        std::string error;
+        auto pe = PeImage::load(path, error);
+        if (!pe) {
+            std::fprintf(stderr, "%s: %s\n", path.c_str(), error.c_str());
+            pple::mf_stop();
+            return 1;
+        }
+        for (const ResourceEntry& r : pe->resources()) index.emplace(r.norm, &r);
+        modules.push_back(std::move(*pe));
+    }
+    const auto find = [&](const std::string& name) -> std::pair<const PeImage*, const ResourceEntry*> {
+        std::string norm = name;
+        for (char& c : norm)
+            if (c == '/') c = '\\';
+        std::transform(norm.begin(), norm.end(), norm.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        const auto it = index.find(norm);
+        if (it == index.end()) return {nullptr, nullptr};
+        for (const PeImage& pe : modules)
+            if (pe.find(it->second->name) == it->second) return {&pe, it->second};
+        return {nullptr, nullptr};
+    };
+
+    std::error_code ec;
+    std::filesystem::create_directories(out_dir, ec);
+    if (ec) {
+        std::fprintf(stderr, "%s: %s\n", out_dir.c_str(), ec.message().c_str());
+        pple::mf_stop();
+        return 1;
+    }
+
+    std::size_t written = 0, skipped = 0, unresolved = 0, failed = 0;
+    double seconds = 0.0;
+    std::vector<std::string> events;
+    std::vector<std::string> problems;
+    for (const PeImage& pe : modules) {
+        const auto* xml = pe.find("AUDIO\\AUDIO.XML");
+        if (xml == nullptr) continue;
+        pple::XmlNode root;
+        std::string parse_error;
+        if (!pple::xml_parse(pe.read(*xml), root, parse_error)) {
+            std::fprintf(stderr, "AUDIO\\AUDIO.XML: %s\n", parse_error.c_str());
+            pple::mf_stop();
+            return 1;
+        }
+        const auto walk = [&](const pple::XmlNode& group) {
+            for (const pple::XmlNode& event : group.children) {
+                const pple::XmlNode* file = event.child("File");
+                if (file == nullptr || file->text.empty()) continue;
+                if (std::find(events.begin(), events.end(), event.name) != events.end()) continue;
+                const auto [owner, entry] = find("AUDIO\\SFX\\" + file->text);
+                if (owner == nullptr) {
+                    ++unresolved;
+                    if (problems.size() < 8) problems.push_back(event.name + " -> " + file->text);
+                    continue;
+                }
+                const std::string out = out_dir + "\\" + event.name + ".wav";
+                if (!force && std::filesystem::exists(out)) {
+                    ++skipped;
+                    events.push_back(event.name);
+                    continue;
+                }
+                pple::PcmAudio audio;
+                std::string decode_error;
+                if (!pple::wma_decode(owner->read(*entry), audio, decode_error)) {
+                    ++failed;
+                    if (problems.size() < 8) problems.push_back(event.name + ": " + decode_error);
+                    continue;
+                }
+                if (!pple::wav_write(out, audio)) {
+                    ++failed;
+                    if (problems.size() < 8) problems.push_back(event.name + ": cannot write " + out);
+                    continue;
+                }
+                ++written;
+                seconds += audio.seconds();
+                events.push_back(event.name);
+            }
+        };
+        for (const pple::XmlNode& group : root.children) {
+            if (group.name == "Music" || group.name == "Sounds") walk(group);
+            else if (group.child("File") != nullptr) {
+                const pple::XmlNode wrapper{"", {}, "", {group}};
+                walk(wrapper);
+            }
+        }
+    }
+
+    // The page fetches the pack from this list, so it is part of the pack rather than an extra
+    // file to keep in step by hand.
+    std::sort(events.begin(), events.end());
+    std::ofstream manifest(out_dir + "\\manifest.txt", std::ios::binary);
+    for (const std::string& name : events) manifest << name << "\n";
+
+    // The size that matters is the whole pack on disk, not just what this run wrote.
+    unsigned long long pack_bytes = 0;
+    for (const std::string& name : events) {
+        const auto size = std::filesystem::file_size(out_dir + "\\" + name + ".wav", ec);
+        if (!ec) pack_bytes += size;
+    }
+    std::printf("audio pack: %zu event(s) in %s\n", events.size(), out_dir.c_str());
+    std::printf("  %zu written, %zu already there, %zu unresolved, %zu failed\n", written, skipped,
+                unresolved, failed);
+    std::printf("  %.1f MB of WAV on disk; %.1f s decoded this run\n",
+                static_cast<double>(pack_bytes) / (1024.0 * 1024.0), seconds);
+    std::printf("  manifest: %s\\manifest.txt\n", out_dir.c_str());
+    for (const std::string& p : problems) std::printf("    problem: %s\n", p.c_str());
+    pple::mf_stop();
+    return failed == 0 && !events.empty() ? 0 : 2;
+}
+
 // Decodes WMA through Media Foundation.  `--all` is the verification: every ASF resource is
 // decoded and the decoded length is compared with the duration the container declares.
 int cmd_wma(const std::vector<std::string>& files, const std::string& one, const std::string& out_path,
@@ -1605,6 +1741,8 @@ void usage() {
                  "  pple-res find    <pe>... <text> [--limit N]\n"
                  "  pple-res split   <pe>...\n"
                  "  pple-res wma     <pe>... [--all] [--resource NAME --out FILE.wav]   decode through Media Foundation\n"
+                 "  pple-res audio-pack <pe>... --out DIR [--force]   every AUDIO.XML event as <Event>.wav,\n"
+                 "                    the pack the browser build plays (web/README.md)\n"
                  "  pple-res asf     <pe>... [--list]   every ASF/WMA resource and its codec parameters\n"
                  "  pple-res audio   <pe>... [--list]   AUDIO.XML events and their resources\n"
                  "  pple-res strings <file.mui> [--id N] [--grep TEXT] [--limit N]\n"
@@ -1783,6 +1921,10 @@ int main(int argc, char** argv) {
     if (cmd == "audio") {
         if (positional.empty()) { usage(); return 1; }
         return cmd_audio(positional, has_flag("--list"));
+    }
+    if (cmd == "audio-pack") {
+        if (positional.empty()) { usage(); return 1; }
+        return cmd_audio_pack(positional, flag_value("--out", ""), has_flag("--force"));
     }
     if (cmd == "wma") {
         if (positional.empty()) { usage(); return 1; }

@@ -102,6 +102,32 @@ std::map<std::string, PairSfx> g_sfx;
 bool g_sfx_ready = false;
 bool g_sfx_enabled = true;
 std::string g_sfx_driver;
+std::string g_sfx_audio_dir;
+
+void set_sfx_audio_dir(const std::string& dir) {
+    g_sfx_audio_dir = dir;
+}
+
+// The PCM for one event.  The shipped effects are WMA, and Media Foundation is the only decoder
+// this project can rely on, so the desktop build decodes the resource and the browser build
+// reads the same event out of the WAV pack instead (see web/README.md).  Both return false with
+// a reason, and a missing sound is not fatal: the game plays on in silence.
+bool load_audio_pcm(const Bundle& bundle, const Bundle::Slot& slot, const std::string& event,
+                    pple::PcmAudio& out, std::string& error) {
+#ifdef __EMSCRIPTEN__
+    const std::string dir = g_sfx_audio_dir.empty() ? std::string("/audio") : g_sfx_audio_dir;
+    const std::string path = dir + "/" + event + ".wav";
+    const std::vector<std::uint8_t> bytes = slurp_file(path);
+    if (bytes.empty()) {
+        error = "no sound pack entry at " + path;
+        return false;
+    }
+    return pple::wav_read(bytes, out, error);
+#else
+    (void)event;
+    return pple::wma_decode(bundle.read(slot), out, error);
+#endif
+}
 
 PairSfx& pair_sfx(const std::string& event) {
     static PairSfx missing;
@@ -120,7 +146,7 @@ PairSfx& pair_sfx(const std::string& event) {
     const auto* res = bundle.resolve(resource, how);
     if (res == nullptr) return slot;
     std::string error;
-    if (!pple::wma_decode(bundle.read(*res), slot.audio, error)) return slot;
+    if (!load_audio_pcm(bundle, *res, event, slot.audio, error)) return slot;
     SDL_AudioSpec spec{};
     spec.format = SDL_AUDIO_S16;
     spec.channels = static_cast<int>(slot.audio.channels);

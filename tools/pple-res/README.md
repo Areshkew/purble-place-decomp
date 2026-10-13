@@ -8,6 +8,55 @@ cmake -S tools/pple-res -B build/pple-res -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build/pple-res
 ```
 
+## The browser build
+
+The same sources build a WebAssembly viewer, `pple-view-web`, through Emscripten: SDL3, SDL3_ttf
+and libjpeg come from Emscripten's own ports, and the shipped `.jpg` sheets are decoded by
+[src/viewer/jpeg.cpp](src/viewer/jpeg.cpp) because SDL3_image has no Emscripten port. The game's
+resource DLLs are **not** part of the build — the page asks the player for them and writes them
+into the Emscripten file system before `main` runs, so no game data is ever committed here.
+
+```powershell
+# emsdk is the whole toolchain; the script downloads nothing.
+git clone https://github.com/emscripten-core/emsdk D:\Development\emsdk
+cd D:\Development\emsdk; .\emsdk.bat install latest; .\emsdk.bat activate latest
+
+# builds build\web\index.html + pple-view-web.js/.wasm/.data
+.\tools\pple-res\web\build-wasm.ps1
+
+# optional: stage a served copy of the game files and the sound pack for ?auto=1 runs
+.\tools\pple-res\web\build-wasm.ps1 -CopyAssetsFrom 'C:\re\samples\purbleplace'
+
+python -m http.server 8099 --directory build\web
+# then open http://127.0.0.1:8099/            (pick the game files)
+# or        http://127.0.0.1:8099/?auto=1&assets=game/
+```
+
+**Sound.** Every shipped effect is WMA, and Media Foundation — the project's only decoder — is
+Windows only, so the browser build plays a WAV pack instead: `pple-res audio-pack` decodes every
+`AUDIO.XML` event once on the desktop, and the page fetches that folder and passes `--audio-dir`.
+A missing pack is not an error; the game plays silently. Browsers also block WebAudio until the
+page has been interacted with, so the first click unlocks sound.
+
+```powershell
+$d = 'C:\re\samples\purbleplace'
+.\build\pple-res\pple-res.exe audio-pack "$d\PurblePlace.dll" "$d\PurblePlace2.dll" "$d\CardGames.dll" --out .\build\web\game\audio
+```
+
+Two headless checks back this up, and neither needs a person watching:
+
+```powershell
+# the wasm build of the CLI tools, driven from node: resources, CABs, PNGs, the .mui, the rules
+node tools\pple-res\web\smoke-node.mjs build\web C:\re\samples\purbleplace
+
+# the page in headless Edge, driven over the DevTools protocol: real clicks, then a canvas capture
+node tools\pple-res\web\smoke-browser.mjs --url "http://127.0.0.1:8099/?auto=1&assets=game/" --out shot.png --mode live --click 679,421
+```
+
+Measured numbers and the honest gaps (PNG decoding differs from libpng by ±1 per channel on the
+web path; the pack is fetched whole; no IDBFS save state; no high-pixel-density canvas) are in
+section 50 of `D:\Development\re\notes\purbleplace.md`.
+
 ## Eye-card reveal reward (section 47)
 
 Matching the card carrying the golden eye now adds one usable sneak-peek token, capped at

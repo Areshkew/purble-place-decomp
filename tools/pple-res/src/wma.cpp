@@ -3,7 +3,6 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
-#include <fstream>
 
 #include <mfapi.h>
 #include <mfidl.h>
@@ -251,37 +250,7 @@ bool wma_decode(std::span<const std::uint8_t> data, PcmAudio& out, std::string& 
     return done(out.ok);
 }
 
-bool wav_write(const std::string& path, const PcmAudio& audio) {
-    if (!audio.ok) return false;
-    std::ofstream out(path, std::ios::binary);
-    if (!out) return false;
-    const std::uint32_t data_bytes = static_cast<std::uint32_t>(audio.samples.size() * 2);
-    const std::uint16_t block_align = static_cast<std::uint16_t>(audio.channels * 2);
-    const std::uint32_t byte_rate = audio.sample_rate * block_align;
-    const auto u32 = [&](std::uint32_t v) {
-        const char b[4] = {static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF),
-                           static_cast<char>((v >> 16) & 0xFF), static_cast<char>((v >> 24) & 0xFF)};
-        out.write(b, 4);
-    };
-    const auto u16 = [&](std::uint16_t v) {
-        const char b[2] = {static_cast<char>(v & 0xFF), static_cast<char>((v >> 8) & 0xFF)};
-        out.write(b, 2);
-    };
-    out.write("RIFF", 4);
-    u32(36 + data_bytes);
-    out.write("WAVEfmt ", 8);
-    u32(16);
-    u16(1);  // PCM
-    u16(static_cast<std::uint16_t>(audio.channels));
-    u32(audio.sample_rate);
-    u32(byte_rate);
-    u16(block_align);
-    u16(16);
-    out.write("data", 4);
-    u32(data_bytes);
-    out.write(reinterpret_cast<const char*>(audio.samples.data()),
-              static_cast<std::streamsize>(data_bytes));
-    return out.good();
-}
+// wav_write is not here: it needs nothing from Media Foundation, so it lives in wav.cpp and is
+// compiled into pple_audio on every platform (wma_stub.cpp supplies the rest off Windows).
 
 }  // namespace pple

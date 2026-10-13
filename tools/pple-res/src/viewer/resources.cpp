@@ -117,6 +117,7 @@ std::string mui_resolve(int id, const std::string& fallback, void*) {
             return out;
         }
         if (kind == Kind::Jpeg) {
+#ifdef PPLE_HAVE_SDL_IMAGE
             SDL_IOStream* io = SDL_IOFromConstMem(payload.data(), payload.size());
             if (io == nullptr) {
                 out.note = std::string("SDL_IOFromConstMem: ") + SDL_GetError();
@@ -133,6 +134,11 @@ std::string mui_resolve(int id, const std::string& fallback, void*) {
             out.note = "decoded by SDL3_image";
             out.ok = true;
             return out;
+#else
+            // The web build: SDL3_image has no Emscripten port, so libjpeg does the work.
+            out.ok = jpeg_decode_rgba(payload, out);
+            return out;
+#endif
         }
         out.note = std::string(kind_name(kind)) + " is not an image";
         return out;

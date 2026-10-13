@@ -125,12 +125,39 @@ SDL_Surface* App::load_sheet_surface(const std::string& requested, const std::st
             }
             return SDL_LoadBMP_IO(io, true);
         }
+        // Everything that is not a CAB is one image resource.  The desktop viewer keeps
+        // SDL3_image here, byte for byte as before; the web build has no SDL3_image and goes
+        // through the shared payload decoder, which uses the project's own PNG decoder and
+        // Emscripten's libjpeg.  The two decoders can differ by a unit per channel on a PNG
+        // sheet (measured in notes section 50); keeping the desktop path untouched is what
+        // stops that difference leaking into every existing capture.
+#ifdef PPLE_HAVE_SDL_IMAGE
         SDL_IOStream* io = SDL_IOFromConstMem(payload.data(), payload.size());
         if (io == nullptr) {
             why = std::string("io: ") + SDL_GetError();
             return nullptr;
         }
         return IMG_Load_IO(io, true);
+#else
+        const Decoded decoded = decode_payload(payload, kind);
+        if (!decoded.ok) {
+            why = decoded.note.empty() ? std::string("decode failed") : decoded.note;
+            return nullptr;
+        }
+        SDL_Surface* surface = SDL_CreateSurface(decoded.width, decoded.height,
+                                                 SDL_PIXELFORMAT_RGBA32);
+        if (surface == nullptr) {
+            why = std::string("SDL_CreateSurface: ") + SDL_GetError();
+            return nullptr;
+        }
+        auto* pixels = static_cast<std::uint8_t*>(surface->pixels);
+        for (int y = 0; y < decoded.height; ++y) {
+            std::memcpy(pixels + static_cast<std::size_t>(y) * surface->pitch,
+                        decoded.rgba.data() + static_cast<std::size_t>(y) * decoded.width * 4,
+                        static_cast<std::size_t>(decoded.width) * 4);
+        }
+        return surface;
+#endif
     };
     const bool is_sht = requested.size() > 4 &&
                         requested.compare(requested.size() - 4, 4, ".sht") == 0;

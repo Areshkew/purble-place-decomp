@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Purble Place reconstruction — web</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  /* An author display rule would otherwise beat the UA stylesheet's [hidden] { display: none },
+     which is how the "load again" row stayed visible under a running game. */
+  [hidden] { display: none !important; }
+  body {
+    margin: 0; background: #14141c; color: #e8e8f0;
+    font: 14px/1.5 "Segoe UI", system-ui, sans-serif;
+  }
+  #app { max-width: 1200px; margin: 0 auto; padding: 16px 16px 48px; }
+  h1 { font-size: 18px; margin: 8px 0 2px; }
+  h2 { font-size: 15px; margin: 20px 0 6px; }
+  p, li { color: #b9b9c8; }
+  code { color: #ffd98a; }
+  a { color: #8fc7ff; }
+  .panel {
+    background: #1d1d2a; border: 1px solid #303047; border-radius: 10px;
+    padding: 14px 16px; margin: 12px 0;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button, .filebtn {
+    font: inherit; padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    border: 1px solid #4a4a6a; background: #2b2b40; color: #e8e8f0;
+  }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary:not(:disabled) { background: #2f6f3f; border-color: #46915a; }
+  .filebtn input { display: none; }
+  #drop {
+    border: 2px dashed #44446a; border-radius: 10px; padding: 18px; text-align: center;
+    color: #9a9ab0; margin-top: 10px;
+  }
+  #drop.hot { border-color: #7ea6ff; color: #dce6ff; background: #1b2136; }
+  table { border-collapse: collapse; width: 100%; margin-top: 10px; }
+  td, th { text-align: left; padding: 4px 8px; border-bottom: 1px solid #2b2b40; font-size: 13px; }
+  .ok { color: #7ee29a; }
+  .no { color: #ff9c9c; }
+  .opt { color: #cbb86a; }
+  #stage { margin-top: 12px; }
+  /* SDL sizes the canvas itself: it sets the element to 1x1, reads the CSS size back, and adopts
+     that size as the window when something else is sizing the element.  So the page gives the
+     canvas an explicit CSS size and never touches it again; fitting to the window is a transform
+     on the finished canvas, which leaves the game's pixels one to one with the desktop viewer's. */
+  #framebox { overflow: hidden; }
+  #canvas {
+    display: block; margin: 0 auto; background: #000; outline: none;
+    width: 1120px; height: 720px; transform-origin: top center;
+  }
+  #hint { text-align: center; color: #9a9ab0; margin-top: 6px; font-size: 13px; }
+  pre#log {
+    background: #0e0e16; border: 1px solid #2b2b40; border-radius: 8px; padding: 10px;
+    max-height: 200px; overflow: auto; font-size: 12px; color: #a9a9c0; white-space: pre-wrap;
+  }
+  .small { font-size: 12px; color: #8f8fa6; }
+  pre.cmd {
+    background: #0e0e16; border: 1px solid #2b2b40; border-radius: 6px; padding: 8px 10px;
+    font-size: 12px; color: #a9a9c0; overflow-x: auto; margin: 6px 0;
+  }
+  /* ?shot=1: nothing but the frame the game rendered, at one pixel to one pixel, so a headless
+     browser screenshot is directly comparable with the desktop viewer's own --shot capture. */
+  body.shot { background: #000; }
+  body.shot #app { max-width: none; padding: 0; margin: 0; }
+  body.shot #picker, body.shot h1, body.shot h2, body.shot #log, body.shot .small,
+  body.shot #hint, body.shot #after { display: none !important; }
+  body.shot #canvas { border: 0; border-radius: 0; margin: 0; width: 1400px; height: 900px; }
+  body.shot #framebox { overflow: visible; }
+  body.shot #canvas { transform: none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>Purble Place reconstruction — web build</h1>
+  <p class="small">
+    This page is the reconstruction's own viewer compiled to WebAssembly. It contains no game
+    art, no sound and no Microsoft code: the game reads the resource files from an installation
+    of Purble Place that <strong>you</strong> select. Nothing is uploaded; the files are read in
+    the browser and written into the page's own memory.
+  </p>
+
+  <section id="picker" class="panel">
+    <h2>1. Select the game files</h2>
+    <p>
+      Pick these files from a Purble Place installation (the three DLLs usually sit next to
+      <code>PurblePlace.exe</code>, and the <code>.mui</code> is in its <code>en-US</code> folder):
+    </p>
+    <table>
+      <thead><tr><th>File</th><th>Required</th><th>Found</th></tr></thead>
+      <tbody id="wanted"></tbody>
+    </table>
+    <div class="row" style="margin-top:12px">
+      <label class="filebtn">Choose files<input type="file" id="files" multiple></label>
+      <label class="filebtn">Choose the game folder<input type="file" id="dir" webkitdirectory directory multiple></label>
+      <button id="start" class="primary" disabled>2. Start the game</button>
+    </div>
+    <div id="drop">or drop the files (or the whole game folder) here</div>
+    <p class="small" id="pick-status"></p>
+
+    <h2 style="margin-top:22px">2. Sound (optional)</h2>
+    <p>
+      The shipped effects are WMA, which only Windows can decode, so the game is silent until it
+      is given a sound pack: one <code>WAV</code> per sound, made once by the desktop build.
+    </p>
+    <pre class="cmd">pple-res audio-pack PurblePlace.dll PurblePlace2.dll CardGames.dll --out audio</pre>
+    <div class="row">
+      <label class="filebtn">Choose the sound pack folder<input type="file" id="audio" webkitdirectory directory multiple></label>
+    </div>
+    <p class="small" id="audio-status">No sound pack selected; the game will play silently.</p>
+  </section>
+
+  <section id="stage" hidden>
+    <div id="framebox"><canvas id="canvas" tabindex="-1"></canvas></div>
+    <div id="hint">Click the picture first if the keyboard does not answer. ESC leaves a game and quits from the menu.</div>
+    <div class="row" id="after" hidden style="justify-content:center;margin-top:10px">
+      <button id="again">Load the page again to play another round</button>
+    </div>
+  </section>
+
+  <h2>Console</h2>
+  <pre id="log"></pre>
+</div>
+
+<script>
+  // ---- what the game needs, and how each file is recognised -------------------------------
+  var WANTED = [
+    { key: 'PurblePlace.dll',        match: 'purbleplace.dll',      required: true,
+      note: 'the main resource module' },
+    { key: 'PurblePlace2.dll',       match: 'purbleplace2.dll',     required: true,
+      note: 'the rest of the Pairs and Cakes data' },
+    { key: 'CardGames.dll',          match: 'cardgames.dll',        required: true,
+      note: 'the card and table art' },
+    { key: 'en-US/PurblePlace.exe.mui', match: 'purbleplace.exe.mui', required: false,
+      note: 'localised labels; without it the XML English text is used' }
+  ];
+  var ASSET_DIR = '/assets';
+  var AUDIO_DIR = '/audio';
+  var FONT = '/fonts/NotoSans-Regular.ttf';
+  var params = new URLSearchParams(location.search);
+  // ?shot=1 renders one frame through the viewer's own --shot path and paints it on the canvas
+  // instead of running the live loop.  It is the web counterpart of the desktop capture hook,
+  // and it is what makes a headless browser check comparable with a desktop capture.
+  var SHOT = params.get('shot') === '1';
+  if (SHOT) document.body.classList.add('shot');
+
+  var logEl = document.getElementById('log');
+  function logLine(text) {
+    logEl.textContent += text + '\n';
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  var chosen = {};        // match name -> {name, size, file|bytes}
+  var audioFiles = [];    // [{name, file}] from the sound pack folder, in picker order
+  var audioLoaded = 0;    // how many WAVs actually reached the page's file system
+  var runtimeReady = false;
+  var sessionStarted = false;
+  // A machine-readable state for the headless browser check (web/smoke-browser.mjs), which
+  // polls it over the DevTools protocol instead of guessing at timings.
+  window.ppleState = 'loading';
+
+  function renderWanted() {
+    var body = document.getElementById('wanted');
+    body.innerHTML = '';
+    WANTED.forEach(function (w) {
+      var have = chosen[w.match];
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>' + w.key + '<div class="small">' + w.note + '</div></td>' +
+                     '<td>' + (w.required ? 'yes' : '<span class="opt">optional</span>') + '</td>' +
+                     '<td>' + (have ? '<span class="ok">' + have.name + '</span>'
+                                    : '<span class="no">not selected</span>') + '</td>';
+      body.appendChild(tr);
+    });
+    var missing = WANTED.filter(function (w) { return w.required && !chosen[w.match]; });
+    document.getElementById('start').disabled = missing.length > 0 || !runtimeReady;
+    document.getElementById('pick-status').textContent = missing.length
+      ? 'Still needed: ' + missing.map(function (w) { return w.key; }).join(', ')
+      : (runtimeReady ? 'Ready. Starting copies the files into the page and runs the game.'
+                      : 'Files are ready; waiting for the WebAssembly runtime.');
+  }
+
+  function acceptFiles(fileList) {
+    var added = [];
+    Array.prototype.forEach.call(fileList, function (file) {
+      var base = file.name.toLowerCase();
+      var want = WANTED.find(function (w) { return w.match === base; });
+      if (want && !chosen[want.match]) {
+        chosen[want.match] = { name: file.name, size: file.size, file: file };
+        added.push(file.name + ' (' + (file.size / 1048576).toFixed(1) + ' MB)');
+      }
+    });
+    added.forEach(function (line) { logLine('picked ' + line); });
+    if (added.length === 0) logLine('picked nothing this time');
+    renderWanted();
+  }
+
+  document.getElementById('files').addEventListener('change', function (e) {
+    acceptFiles(e.target.files);
+  });
+  document.getElementById('dir').addEventListener('change', function (e) {
+    acceptFiles(e.target.files);
+  });
+  document.getElementById('audio').addEventListener('change', function (e) {
+    acceptAudio(e.target.files);
+  });
+
+  // The sound pack: every .wav the desktop tool wrote, wherever it sits inside the chosen folder.
+  function acceptAudio(fileList) {
+    var added = 0;
+    Array.prototype.forEach.call(fileList, function (file) {
+      if (!/\.wav$/i.test(file.name)) return;
+      audioFiles.push({ name: file.name, file: file });
+      added++;
+    });
+    logLine('sound pack: ' + added + ' wav file(s) added, ' + audioFiles.length + ' in total');
+    renderAudioStatus();
+  }
+
+  function renderAudioStatus() {
+    document.getElementById('audio-status').textContent = audioFiles.length
+      ? audioFiles.length + ' sound(s) ready; they are copied into the page when the game starts.'
+      : 'No sound pack selected; the game will play silently.';
+  }
+  var drop = document.getElementById('drop');
+  ['dragenter', 'dragover'].forEach(function (t) {
+    drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.add('hot'); });
+  });
+  ['dragleave', 'drop'].forEach(function (t) {
+    drop.addEventListener(t, function (e) { e.preventDefault(); drop.classList.remove('hot'); });
+  });
+  drop.addEventListener('drop', function (e) {
+    if (e.dataTransfer && e.dataTransfer.files) acceptFiles(e.dataTransfer.files);
+  });
+
+  // ---- the wasm session -------------------------------------------------------------------
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    noInitialRun: true,
+    print: function (text) { logLine(text); },
+    printErr: function (text) { logLine(text); },
+    onRuntimeInitialized: function () {
+      runtimeReady = true;
+      window.ppleState = 'ready';
+      logLine('runtime ready');
+      renderWanted();
+      maybeAutoStart();
+    }
+  };
+
+  function readFile(file) {
+    return new Promise(function (resolve, reject) {
+      var reader = new FileReader();
+      reader.onload = function () { resolve(new Uint8Array(reader.result)); };
+      reader.onerror = function () { reject(reader.error); };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
+  function ensureAssetDir() {
+    // FS.writeFile does not create the folder it writes into.
+    if (!Module.FS.analyzePath(ASSET_DIR).exists) Module.FS.mkdir(ASSET_DIR);
+    if (!Module.FS.analyzePath(AUDIO_DIR).exists) Module.FS.mkdir(AUDIO_DIR);
+  }
+
+  // The canvas keeps the size the page gave it and SDL adopted; only its display is scaled, so
+  // the game's pixels stay one to one with what the desktop viewer draws.  A --shot capture is
+  // deliberately left at its own size, because it is compared with a desktop capture.
+  var CANVAS_W = 1120, CANVAS_H = 720;
+  function fitCanvas() {
+    if (SHOT) return;
+    var canvas = document.getElementById('canvas');
+    var box = document.getElementById('framebox');
+    var scale = Math.min(1, (window.innerWidth - 32) / CANVAS_W,
+                         (window.innerHeight - 200) / CANVAS_H);
+    canvas.style.transform = scale < 1 ? 'scale(' + scale + ')' : 'none';
+    box.style.height = Math.round(CANVAS_H * scale) + 'px';
+  }
+  window.addEventListener('resize', fitCanvas);
+
+  async function startSession() {
+    if (sessionStarted) return;
+    sessionStarted = true;
+    document.getElementById('start').disabled = true;
+    try {
+      ensureAssetDir();
+      for (var i = 0; i < WANTED.length; i++) {
+        var w = WANTED[i];
+        // A picked file is a File and has to be read; an auto-fetched one already carries its
+        // bytes.  Either way the bytes are kept, so a retry does not read 41 MB again.
+        var entry = chosen[w.match];
+        if (!entry) continue;
+        var bytes = entry.bytes;
+        if (!bytes) {
+          logLine('copying ' + entry.name + ' (' + (entry.size / 1048576).toFixed(1) + ' MB)...');
+          bytes = await readFile(entry.file);
+          entry.bytes = bytes;
+        }
+        Module.FS.writeFile(ASSET_DIR + '/' + w.key.split('/').pop(), bytes);
+      }
+      // The sound pack, one WAV per event, written where --audio-dir points.
+      for (var a = 0; a < audioFiles.length; a++) {
+        if (a % 20 === 0) logLine('sounds ' + a + '/' + audioFiles.length + '...');
+        var wav = audioFiles[a];
+        Module.FS.writeFile(AUDIO_DIR + '/' + wav.name,
+                            wav.bytes || (wav.bytes = await readFile(wav.file)));
+        audioLoaded++;
+      }
+      if (audioLoaded) logLine('sounds: ' + audioLoaded + ' ready');
+    } catch (err) {
+      logLine('reading the files failed: ' + err);
+      sessionStarted = false;
+      document.getElementById('start').disabled = false;
+      return;
+    }
+    // Module.callMain supplies argv[0] itself (Emscripten's thisProgram), so this list is argv[1:].
+    // SDL adopts the canvas's CSS size as the window, so these match the stylesheet's size.
+    var args = [
+      ASSET_DIR + '/PurblePlace.dll',
+      ASSET_DIR + '/PurblePlace2.dll',
+      ASSET_DIR + '/CardGames.dll',
+      '--width', String(CANVAS_W), '--height', String(CANVAS_H),
+      '--menu',
+      '--font', FONT];
+    if (audioLoaded) args.push('--audio-dir', AUDIO_DIR);
+    if (chosen['purbleplace.exe.mui']) args.push('--mui', ASSET_DIR + '/PurblePlace.exe.mui');
+    if (SHOT) {
+      // A static board with no deal animation, captured after 600 ms: the same command the
+      // desktop check runs, so the two frames can be compared pixel for pixel.
+      args = [
+        ASSET_DIR + '/PurblePlace.dll',
+        ASSET_DIR + '/PurblePlace2.dll',
+        ASSET_DIR + '/CardGames.dll',
+        '--width', '1400', '--height', '900',
+        '--scene', 'UI\\CONCENTRATION\\CONCENTRATIONGAME.XML',
+        '--pairs', 'Beginner,0,0',
+        '--no-deal',
+        '--mute',
+        '--font', FONT,
+        '--shot', '/shot.ppm',
+        '--shot-delay', '600'];
+      if (chosen['purbleplace.exe.mui']) args.push('--mui', ASSET_DIR + '/PurblePlace.exe.mui');
+      if (audioLoaded) args.push('--audio-dir', AUDIO_DIR);
+    }
+    logLine('starting: ' + args.join(' '));
+    document.getElementById('picker').hidden = true;
+    document.getElementById('stage').hidden = false;
+    Module.canvas.focus();
+    window.ppleState = 'running';
+    Module.callMain(args);
+    fitCanvas();
+  }
+  document.getElementById('start').addEventListener('click', startSession);
+  document.getElementById('again').addEventListener('click', function () { location.reload(); });
+  Module.canvas.addEventListener('mousedown', function () { Module.canvas.focus(); });
+
+  // A P6 PPM: "P6\n<w> <h>\n255\n" then RGB bytes, which is what the viewer's capture writes.
+  function drawPpm(bytes) {
+    var header = '';
+    var at = 0;
+    while (at < bytes.length && header.split('\n').length < 4) {
+      header += String.fromCharCode(bytes[at++]);
+    }
+    var parts = header.split(/\s+/);
+    if (parts[0] !== 'P6') throw new Error('not a P6 PPM: ' + parts[0]);
+    var w = parseInt(parts[1], 10);
+    var h = parseInt(parts[2], 10);
+    var pixels = bytes.subarray(at);
+    if (pixels.length < w * h * 3) throw new Error('short PPM: ' + pixels.length + ' of ' + (w * h * 3));
+    var canvas = document.getElementById('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    var context = canvas.getContext('2d');
+    var image = context.createImageData(w, h);
+    for (var i = 0, n = w * h; i < n; i++) {
+      image.data[i * 4 + 0] = pixels[i * 3 + 0];
+      image.data[i * 4 + 1] = pixels[i * 3 + 1];
+      image.data[i * 4 + 2] = pixels[i * 3 + 2];
+      image.data[i * 4 + 3] = 255;
+    }
+    context.putImageData(image, 0, 0);
+    document.title = 'shot ' + w + 'x' + h;
+    logLine('capture drawn ' + w + 'x' + h);
+  }
+
+  // The C++ side says when the session is over (see loop.cpp), so the page can offer a reload.
+  window.ppleSessionEnded = function () {
+    logLine('session ended');
+    if (SHOT) {
+      try {
+        drawPpm(Module.FS.readFile('/shot.ppm'));
+        window.ppleState = 'shot-ready';
+      } catch (err) {
+        logLine('capture failed: ' + err.message);
+        window.ppleState = 'shot-failed';
+      }
+      return;
+    }
+    window.ppleState = 'ended';
+    document.getElementById('after').hidden = false;
+  };
+
+  // ---- ?auto=1&assets=<prefix>: a served deployment, or the headless check ---------------
+  async function fetchInto(name, url) {
+    var response = await fetch(url);
+    if (!response.ok) throw new Error(url + ': HTTP ' + response.status);
+    return new Uint8Array(await response.arrayBuffer());
+  }
+  // The served sound pack: manifest.txt lists the events the desktop tool wrote, and each one is
+  // fetched by name.  A missing pack is not an error, the game simply stays silent.
+  async function fetchSoundPack(prefix) {
+    var manifest;
+    try {
+      manifest = await fetchInto('manifest.txt', prefix + 'audio/manifest.txt');
+    } catch (err) {
+      logLine('auto: no sound pack at ' + prefix + 'audio/ — the game will be silent');
+      return;
+    }
+    var names = new TextDecoder().decode(manifest).split('\n')
+      .map(function (line) { return line.trim(); })
+      .filter(function (line) { return line.length > 0; });
+    logLine('auto: sound pack lists ' + names.length + ' event(s)');
+    for (var i = 0; i < names.length; i++) {
+      var bytes = await fetchInto(names[i] + '.wav', prefix + 'audio/' + names[i] + '.wav');
+      Module.FS.writeFile(AUDIO_DIR + '/' + names[i] + '.wav', bytes);
+      audioLoaded++;
+      if ((i + 1) % 20 === 0) logLine('auto: sounds ' + (i + 1) + '/' + names.length + '...');
+    }
+    logLine('auto: sounds ready: ' + audioLoaded + ' event(s)');
+  }
+
+  async function maybeAutoStart() {
+    if (params.get('auto') !== '1') return;
+    var prefix = params.get('assets') || 'game/';
+    if (!prefix.endsWith('/')) prefix += '/';
+    logLine('auto: fetching the game files from ' + prefix);
+    try {
+      ensureAssetDir();
+      for (var i = 0; i < WANTED.length; i++) {
+        var w = WANTED[i];
+        var file = w.key.split('/').pop();
+        var bytes;
+        try {
+          bytes = await fetchInto(file, prefix + (w.match === 'purbleplace.exe.mui' ? 'en-US/' : '') + file);
+        } catch (err) {
+          if (w.required) throw err;
+          logLine('auto: ' + w.key + ' is not there, continuing without it');
+          continue;
+        }
+        Module.FS.writeFile(ASSET_DIR + '/' + file, bytes);
+        chosen[w.match] = { name: file, size: bytes.length, bytes: bytes };
+      }
+      renderWanted();
+      await fetchSoundPack(prefix);
+      startSession();
+    } catch (err) {
+      logLine('auto: ' + (err && err.message ? err.message : String(err)) +
+              ' — select the files by hand instead');
+      renderWanted();
+    }
+  }
+
+  renderWanted();
+  renderAudioStatus();
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>

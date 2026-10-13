@@ -17,9 +17,9 @@ checks normal clicks, inventory pixels, saved tokens and token use/expiry in bot
 
 | Responsibility | File and entry points |
 |---|---|
-| Process entry | [view_main.cpp](../view_main.cpp): constructs `App`, calls `run` |
+| Process entry | [view_main.cpp](../view_main.cpp): constructs `App`, calls `run` (a long-lived `App` in the browser build, because the main loop unwinds `main`) |
 | Arguments, DLL/MUI loading, SDL setup, initial screen | [app.cpp](app.cpp): `App::run` |
-| Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown | [loop.cpp](loop.cpp): `run_loop`, `set_sheet_dpi`, `rebuild_current_screen` |
+| Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown | [loop.cpp](loop.cpp): `run_loop` (setup and dispatch), `frame_step` (one frame; the browser calls it from `emscripten_set_main_loop`), `finish_loop`, `set_sheet_dpi`, `rebuild_current_screen` |
 | Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
 | Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append`, `start_cakes`, `cakes_dump_draws` |
@@ -33,11 +33,12 @@ checks normal clicks, inventory pixels, saved tokens and token use/expiry in bot
 | ResourceAnimation parsing/evaluation, cue times and integer drop integration (SDL-free) | [animation.cpp](../animation.cpp), [animation.hpp](../../include/pple/animation.hpp); tests in [animation_test.cpp](../../tests/animation_test.cpp) |
 | Comfy Cakes: the Purble Chef's states, movies and tips | [cakes_chef.cpp](cakes_chef.cpp): `cakes_load_chef`, `cakes_chef_show`, `cakes_chef_advance`, `cakes_draw_chef` |
 | Resource resolution, image decoding, sprite XML, file/PPM I/O, localiser | [resources.hpp](resources.hpp), [resources.cpp](resources.cpp): `Bundle`, `resolve_sprite`, `decode_payload`, `capture` |
+| JPEG decoding for the browser build (libjpeg port; the desktop uses SDL3_image) | [jpeg.cpp](jpeg.cpp): `jpeg_decode_rgba` |
 | Sheet texture cache, colour/alpha composition, coverage, the double-DPI (x2) resources | [textures.cpp](textures.cpp): `load_sheet_texture`, `load_sheet_surface`, `load_split_list`, `src_scale_for`, `clear_sheet_textures` |
 | Scene XML draw list, labels, draw-list release | [scene.cpp](scene.cpp): `build_scene`, `append_label`, `release_draws` |
 | Skeletal movie evaluation and part placement | [movie.cpp](movie.cpp): `build_movie`, `append_movie` |
 | Individual image/sprite browser | [browser.cpp](browser.cpp): `load_current` |
-| Audio manifest, PCM playback, shared cached Pairs/Cakes sounds | [audio.hpp](audio.hpp), [audio.cpp](audio.cpp): `initialise_pair_audio`, `initialise_cake_audio`, `play_click_sfx`, `play_cake_sfx`; Cakes dispatch tests in [cakes_audio_regression.py](../../tests/cakes_audio_regression.py) |
+| Audio manifest, PCM playback, shared cached Pairs/Cakes sounds | [audio.hpp](audio.hpp), [audio.cpp](audio.cpp): `initialise_pair_audio`, `initialise_cake_audio`, `play_click_sfx`, `play_cake_sfx`, `load_audio_pcm`, `set_sfx_audio_dir`; Cakes dispatch tests in [cakes_audio_regression.py](../../tests/cakes_audio_regression.py) |
 | Fonts and diagnostic HUD | [hud.cpp](hud.cpp): `font_for`, `rebuild_hud`, `refresh_hud` |
 | Pairs setup orchestration, deal/reset, solve/click hooks, scene visibility | [pairs_setup.cpp](pairs_setup.cpp): `build_pairs` |
 | Per-level card back, jar points/coins, arc and burst configuration, animation reset | [level_art.cpp](level_art.cpp): `build_pair_level_art` |
@@ -65,6 +66,33 @@ Sheet textures belong to the session cache. Draw items only borrow them; scene
 rebuilds release directly-created label textures but preserve cached sheets.
 The immutable `pairs_scene_layer` is retained between card refreshes. Do not add
 resource/XML loads or full `build_pairs` calls to the per-tick card refresh.
+
+## The browser build's seams
+
+One source list builds both viewers (see [CMakeLists.txt](../CMakeLists.txt)): `pple-view` for the
+desktop and `pple-view-web` for Emscripten. Six guarded places differ, and nothing else:
+
+* audio decode — [wma.cpp](../wma.cpp) (Media Foundation) or [wma_stub.cpp](../wma_stub.cpp)
+  (silent), with `--audio-dir` pointing at the WAV pack `pple-res audio-pack` writes; the reader
+  is `pple::wav_read` in [wav.cpp](../wav.cpp);
+* JPEG sheets — SDL3_image, or [jpeg.cpp](jpeg.cpp) through Emscripten's libjpeg port
+  (`PPLE_HAVE_SDL_IMAGE` in [resources.cpp](resources.cpp) and [textures.cpp](textures.cpp));
+* the frame loop — `while (loop.running) frame_step()` or `emscripten_set_main_loop` calling
+  `frame_step` ([loop.cpp](loop.cpp));
+* the entry point — a stack `App` or a long-lived one ([view_main.cpp](../view_main.cpp));
+* the keyboard element hint ([app.cpp](app.cpp));
+* `LoopState` in [app.hpp](app.hpp), the loop's clocks, which the browser cannot keep in a local.
+
+`App::run_loop` is setup and dispatch, `frame_step` is one frame, and `finish_loop` releases the
+session — the browser reaches the last of those from the main-loop cancel path, not from a
+`return`. Do not move session state back into `frame_step` locals.
+
+The page itself is [web/shell.html](../web/shell.html): it asks the player for the game DLLs (and
+an optional sound pack), writes them into the Emscripten file system and calls `main` with
+`Module.callMain`, which supplies `argv[0]` itself — the page passes `argv[1:]`. `?auto=1&assets=`
+serves a copy, `?shot=1` paints one `--shot` frame on the canvas, and `window.ppleState` is what
+the headless browser check waits on. The fonts under [web/fonts](../web/fonts) are OFL and
+committed; the game files never are.
 
 ## The double-DPI (x2) art
 

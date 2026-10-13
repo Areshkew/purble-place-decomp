@@ -1,7 +1,11 @@
 #pragma once
 
 #include <SDL3/SDL.h>
+// The desktop viewer decodes the shipped .jpg sheets with SDL3_image; the web build has no
+// SDL3_image and decodes them with Emscripten's libjpeg port instead (viewer/jpeg.cpp).
+#ifdef PPLE_HAVE_SDL_IMAGE
 #include <SDL3_image/SDL_image.h>
+#endif
 #include <SDL3_ttf/SDL_ttf.h>
 #include <algorithm>
 #include <cmath>
@@ -138,6 +142,11 @@ const char* kind_name(Kind k);
 Kind classify(std::span<const std::uint8_t> d);
 bool surface_to_rgba(SDL_Surface* surface, Decoded& out);
 Decoded decode_payload(std::span<const std::uint8_t> payload, Kind kind);
+#ifndef PPLE_HAVE_SDL_IMAGE
+// The web build's JPEG decoder (viewer/jpeg.cpp), used where the desktop build calls
+// IMG_Load_IO.  It fills rgba/width/height and reports failures through out.note.
+bool jpeg_decode_rgba(std::span<const std::uint8_t> data, Decoded& out);
+#endif
 std::vector<std::uint8_t> slurp_file(const std::string& path);
 bool write_file(const std::string& path, const std::vector<std::uint8_t>& bytes);
 bool write_ppm(const std::string& path, const Decoded& image);

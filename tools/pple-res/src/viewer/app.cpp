@@ -25,6 +25,9 @@ namespace pple::viewer {
                  "  --play NAME       decode and play an AUDIO.XML event key or a resource name\n"
                  "  --volume N        playback volume, 0..100 (default 100)\n"
                  "  --mute            silence Pairs and Comfy Cakes sound effects\n"
+                 "  --audio-dir PATH  play <Event>.wav from this pack instead of decoding the WMA\n"
+                 "                    resources; the browser build needs it, because Media Foundation\n"
+                 "                    is the only decoder this project has.  See web/README.md\n"
                  "  --pairs-state PATH  save the round when the player returns to the menu, and\n"
                  "                      resume it (with its board thumbnail) when the file holds one\n"
                  "  --pairs-click I,J  flip these cell indices, through the mouse handler\n"                 "  --frame N         frame index within the sprite (default 0)\n"                 "  --state N         which <Animation> of a Button node to show (default 0;\n"                 "                     the engine starts at 0 and moves to 1 on <enter>, 2 on <down>)\n"                 "  --list            list viewable resources and exit\n"                 "  --shot FILE.ppm   render one frame offscreen, write it, exit\n"                 "  --width N --height N   window size (default 1400x900)\n"                 "  --font PATH       TTF for the HUD (default C:\\Windows\\Fonts\\arial.ttf)\n"                 "  --all             include resources this viewer cannot decode\n\n"                 "  keys: LEFT/RIGHT or PGUP/PGDN navigate, SPACE toggles integer scaling,\n"                 "        in --menu/--pairs: click a hot-spot, N new game, R reshuffle, ESC quits\n"                 "        (ESC in the Concentration screen returns to the menu)\n");
@@ -99,6 +102,7 @@ int App::run(int argc, char** argv) {
         else if (a == "--play" && i + 1 < args.size()) play_name = args[++i];
         else if (a == "--volume" && i + 1 < args.size()) play_volume = static_cast<float>(std::atof(args[++i].c_str())) / 100.0f;
         else if (a == "--mute") mute = true;
+        else if (a == "--audio-dir" && i + 1 < args.size()) audio_dir = args[++i];
         else if (a == "--pairs-click" && i + 1 < args.size()) pairs_click = args[++i];
         else if (a == "--pairs-save" && i + 1 < args.size()) pairs_save_path = args[++i];
         else if (a == "--pairs-state" && i + 1 < args.size()) pairs_state_path = args[++i];
@@ -125,6 +129,9 @@ int App::run(int argc, char** argv) {
         usage();
         return 1;
     }
+
+    // Before any screen is built: the sound pack location is session state, not per-screen.
+    set_sfx_audio_dir(audio_dir);
 
     if (!mui_path.empty()) {
         std::string mui_error;
@@ -191,7 +198,7 @@ int App::run(int argc, char** argv) {
         }
         pple::PcmAudio audio;
         std::string error;
-        if (!pple::wma_decode(bundle.read(*slot), audio, error)) {
+        if (!load_audio_pcm(bundle, *slot, play_name, audio, error)) {
             std::fprintf(stderr, "decode failed: %s\n", error.c_str());
             return 1;
         }
@@ -231,6 +238,11 @@ int App::run(int argc, char** argv) {
         std::printf("-- %zu viewable items, %zu non-image resources skipped\n", items.size(), skipped);
         return 0;
     }
+#ifdef __EMSCRIPTEN__
+    // SDL takes keyboard events from the element this hint names; the web shell focuses the
+    // canvas when the session starts, so the game owns the keyboard without a click on the page.
+    SDL_SetHint(SDL_HINT_EMSCRIPTEN_KEYBOARD_ELEMENT, "#canvas");
+#endif
     if (!SDL_Init(SDL_INIT_VIDEO)) {
         std::fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
         return 1;

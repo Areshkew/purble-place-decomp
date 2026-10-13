@@ -2,6 +2,17 @@
 
 #include <cctype>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+// The page reacts to the end of a session (it offers a reload, because the viewer's SDL state
+// is per page load).  The C++ side owns the moment the session really stops, so it is the side
+// that tells the page.
+EM_JS(void, pple_web_session_ended, (), {
+    if (typeof window.ppleSessionEnded === 'function') window.ppleSessionEnded();
+});
+#endif
+
 namespace pple::viewer {
 
 // Switch the whole session between the 1x and the x2 art.  Everything that borrows a sheet
@@ -55,28 +66,31 @@ void App::rebuild_current_screen() {
     }
 }
 
+// The desktop loop paces itself with SDL_Delay; in the browser the page's animation frame is the
+// clock, and a blocking delay there would freeze the tab instead of yielding to it.
+namespace {
+void frame_pause(int ms) {
+#ifndef __EMSCRIPTEN__
+    SDL_Delay(static_cast<Uint32>(ms));
+#else
+    (void)ms;
+#endif
+}
+}  // namespace
+
 int App::run_loop() {
-    bool running = true;
     // --script-click "x,y;x,y" injects clicks in scene coordinates through the same handler the
     // mouse uses, so menu -> game -> menu and the flip animation can be verified without a mouse.
     // A "wait:MS" entry waits that long before the next click, which is what the Professor's
     // intro needs: his entrance plays for about a second before the first bubble appears.
     // A "move:x,y" entry is a mouse move rather than a click, so a hover can be verified the
     // same way.
-    struct ScriptedClick {
-        bool wait = false;
-        bool move = false;
-        float x = 0.0f, y = 0.0f;
-        int ms = 0;
-        SDL_Keycode key = 0; // key:1/2/3/n/r exercises the real SDL keyboard handler
-    };
-    std::vector<ScriptedClick> script_clicks;
     if (!script_click_spec.empty()) {
         std::size_t at = 0;
         while (at < script_click_spec.size()) {
             const std::size_t semi = script_click_spec.find(';', at);
             const std::string item = script_click_spec.substr(at, semi - at);
-            ScriptedClick step;
+            LoopState::ScriptedClick step;
             if (item.rfind("wait:", 0) == 0) {
                 step.wait = true;
                 step.ms = std::atoi(item.substr(5).c_str());
@@ -92,14 +106,14 @@ int App::run_loop() {
                     step.y = static_cast<float>(std::atof(body.substr(comma + 1).c_str()));
                 }
             }
-            script_clicks.push_back(step);
+            loop.script_clicks.push_back(step);
             at = semi == std::string::npos ? script_click_spec.size() : semi + 1;
         }
-        std::printf("script: %zu click(s)\n", script_clicks.size());
+        std::printf("script: %zu click(s)\n", loop.script_clicks.size());
     }
-    std::size_t script_next = 0;
-    Uint64 script_last = SDL_GetTicks();
-    Uint64 script_wait_until = 0;
+    loop.script_next = 0;
+    loop.script_last = SDL_GetTicks();
+    loop.script_wait_until = 0;
     // --bench-build N: time N whole build_pairs calls with every sheet already cached.  That is
     // the cost the reveal timer used to pay on every one of its 30 Hz ticks.
     if (bench_build > 0 && pairs_ready) {
@@ -119,30 +133,56 @@ int App::run_loop() {
         return 0;
     }
     // --bench: render this many frames as fast as possible and report the card-layer cost.
-    std::size_t bench_done = 0;
-    const Uint64 bench_start = SDL_GetPerformanceCounter();
-    Uint64 last_tick = SDL_GetTicks();
-    float pairs_accumulator = 0.0f;
-    while (running) {
+    loop.bench_done = 0;
+    loop.bench_start = SDL_GetPerformanceCounter();
+    loop.last_tick = SDL_GetTicks();
+    loop.pairs_accumulator = 0.0f;
+    loop.running = true;
+    loop.exit_code = 0;
+#ifdef __EMSCRIPTEN__
+    // The page owns the clock: it calls frame() once per animation frame and, when frame() says
+    // the session is over, cancels the loop and tears the session down.  simulate_infinite_loop
+    // unwinds this C stack, so the App is a long-lived object (view_main.cpp), not a run() local.
+    emscripten_set_main_loop_arg(
+        [](void* self) {
+            App& app = *static_cast<App*>(self);
+            if (!app.frame_step()) {
+                emscripten_cancel_main_loop();
+                app.finish_loop();
+            }
+        },
+        this, 0, 1);
+    return 0;
+#else
+    while (loop.running) {
+        if (!frame_step()) break;
+    }
+    finish_loop();
+    return loop.exit_code;
+#endif
+}
+
+bool App::frame_step() {
+    {
         SDL_Event event;
         while (SDL_PollEvent(&event)) {
             if (event.type == SDL_EVENT_QUIT) {
-                running = false;
+                loop.running = false;
             } else
             if (event.type == SDL_EVENT_MOUSE_MOTION && view_scale > 0.0f) {
                 // Every screen is hoverable now, not just the menu: the difficulty chooser, the
                 // end-of-round panel and the board all take their focus from the pointer.
-                running = click_scene((event.motion.x - view_ox) / view_scale,
-                                      (event.motion.y - view_oy) / view_scale, true);
+                loop.running = click_scene((event.motion.x - view_ox) / view_scale,
+                                           (event.motion.y - view_oy) / view_scale, true);
             } else
             if (event.type == SDL_EVENT_WINDOW_MOUSE_LEAVE) {
                 // The pointer left the window, so nothing is hovered any more.
-                running = click_scene(-1.0f, -1.0f, true);
+                loop.running = click_scene(-1.0f, -1.0f, true);
             } else
             if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN &&
                 event.button.button == SDL_BUTTON_LEFT && view_scale > 0.0f) {
-                running = click_scene((event.button.x - view_ox) / view_scale,
-                                      (event.button.y - view_oy) / view_scale, false);
+                loop.running = click_scene((event.button.x - view_ox) / view_scale,
+                                           (event.button.y - view_oy) / view_scale, false);
             } else
             if (event.type == SDL_EVENT_KEY_DOWN) {
                 const SDL_Keycode key = event.key.key;
@@ -164,7 +204,7 @@ int App::run_loop() {
                         std::printf("shop: ESC -> main menu\n");
                         game_to_menu();
                     } else {
-                        running = false;
+                        loop.running = false;
                     }
                 } else
                 if (key == SDLK_RETURN && screen == Screen::Menu && resume_state_valid) {
@@ -269,13 +309,13 @@ int App::run_loop() {
         // Purble Pairs runs on the engine's fixed 30 Hz step.
         if (pairs_ready) {
             const Uint64 now = SDL_GetTicks();
-            const float elapsed = static_cast<float>(now - last_tick) / 1000.0f;
-            last_tick = now;
-            pairs_accumulator += elapsed;
+            const float elapsed = static_cast<float>(now - loop.last_tick) / 1000.0f;
+            loop.last_tick = now;
+            loop.pairs_accumulator += elapsed;
             bool ticked = false;
             bool flipped = false;
-            while (pairs_accumulator >= (1.0f / 30.0f)) {
-                pairs_accumulator -= (1.0f / 30.0f);
+            while (loop.pairs_accumulator >= (1.0f / 30.0f)) {
+                loop.pairs_accumulator -= (1.0f / 30.0f);
                 // The card deal-in: every card's IntroImage grows for 45 ticks after its own
                 // delay, and Board::Update only makes the board playable once the last one has
                 // arrived.
@@ -367,16 +407,16 @@ int App::run_loop() {
             }
         } else
         {
-            last_tick = SDL_GetTicks();
+            loop.last_tick = SDL_GetTicks();
         }
         if (bench_frames > 0) {
-            ++bench_done;
-            if (bench_done >= static_cast<std::size_t>(bench_frames)) {
+            ++loop.bench_done;
+            if (loop.bench_done >= static_cast<std::size_t>(bench_frames)) {
                 const Uint64 t1 = SDL_GetPerformanceCounter();
-                const double total_ms = 1000.0 * static_cast<double>(t1 - bench_start) /
+                const double total_ms = 1000.0 * static_cast<double>(t1 - loop.bench_start) /
                                         static_cast<double>(SDL_GetPerformanceFrequency());
-                std::printf("bench: %zu frames in %.1f ms (%.3f ms/frame)\n", bench_done, total_ms,
-                            total_ms / static_cast<double>(bench_done));
+                std::printf("bench: %zu frames in %.1f ms (%.3f ms/frame)\n", loop.bench_done, total_ms,
+                            total_ms / static_cast<double>(loop.bench_done));
                 std::printf("bench: card layer %zu call(s), %.4f ms total, %.4f ms/call, "
                             "%.4f ms/call primed (first call %.4f ms)\n",
                             refresh_calls, refresh_total_ms,
@@ -389,9 +429,9 @@ int App::run_loop() {
                 std::printf("bench: full build_pairs %zu call(s), %.3f ms total, %.3f ms/call\n",
                             build_calls, build_ms,
                             build_calls == 0 ? 0.0 : build_ms / static_cast<double>(build_calls));
-                running = false;
+                loop.running = false;
             }
-            if (!offscreen) SDL_Delay(0);
+            if (!offscreen) frame_pause(0);
         }
         SDL_SetRenderDrawColor(renderer, 24, 24, 32, 255);
         SDL_RenderClear(renderer);
@@ -445,30 +485,32 @@ int App::run_loop() {
             view_oy = oy;
             // One scripted entry per frame, spaced so a flip or a rebuild can settle; a "wait:MS"
             // entry only moves the clock the spacing is measured from.
-            if (script_next < script_clicks.size()) {
+            if (loop.script_next < loop.script_clicks.size()) {
                 const Uint64 now = SDL_GetTicks();
-                if (now >= script_wait_until && (script_next == 0 || now - script_last >= 150)) {
-                    script_last = now;
-                    const ScriptedClick step = script_clicks[script_next++];
+                if (now >= loop.script_wait_until &&
+                    (loop.script_next == 0 || now - loop.script_last >= 150)) {
+                    loop.script_last = now;
+                    const LoopState::ScriptedClick step = loop.script_clicks[loop.script_next++];
                     if (step.wait) {
                         // Keep ticking/rendering during waits; sleeping here freezes every movie.
-                        script_wait_until = now + static_cast<Uint64>(std::max(0, step.ms - 150));
+                        loop.script_wait_until = now + static_cast<Uint64>(std::max(0, step.ms - 150));
                     } else if (step.key != 0) {
                         SDL_Event key_event{};
                         key_event.type = SDL_EVENT_KEY_DOWN;
                         key_event.key.key = step.key;
                         key_event.key.down = true;
                         SDL_PushEvent(&key_event);
-                        std::printf("script key %zu: %c\n", script_next - 1, static_cast<char>(step.key));
+                        std::printf("script key %zu: %c\n", loop.script_next - 1,
+                                    static_cast<char>(step.key));
                     } else {
                         std::printf("script %s %zu: scene %.0f,%.0f\n",
-                                    step.move ? "move" : "click", script_next - 1,
+                                    step.move ? "move" : "click", loop.script_next - 1,
                                     static_cast<double>(step.x), static_cast<double>(step.y));
                         const Screen before = screen;
-                        running = click_scene(step.x, step.y, step.move);
+                        loop.running = click_scene(step.x, step.y, step.move);
                         // The viewport and base_draws above belong to the old screen.
                         // Recompute both before presenting/capturing a navigation result.
-                        if (screen != before) continue;
+                        if (screen != before) return true;
                     }
                 }
             }
@@ -578,37 +620,43 @@ int App::run_loop() {
             }
         }
         if (offscreen) {
-            if (script_next < script_clicks.size() || SDL_GetTicks() < script_wait_until) {
+            if (loop.script_next < loop.script_clicks.size() ||
+                SDL_GetTicks() < loop.script_wait_until) {
                 // Still working through --script-click: keep rendering, capture on the last one.
                 SDL_RenderPresent(renderer);
-                SDL_Delay(16);
-                continue;
+                frame_pause(16);
+                return true;
             }
             // --shot-delay lets a flip or an animation reach a known point before the capture.
-            if (shot_delay_ms > 0 && SDL_GetTicks() - script_last < static_cast<Uint64>(shot_delay_ms)) {
+            if (shot_delay_ms > 0 &&
+                SDL_GetTicks() - loop.script_last < static_cast<Uint64>(shot_delay_ms)) {
                 SDL_RenderPresent(renderer);
-                SDL_Delay(8);
-                continue;
+                frame_pause(8);
+                return true;
             }
             // The dump describes exactly what is about to be captured, so a frame with a
             // machine mid-animation is read back as it was drawn.
             if (screen == Screen::ComfyCakes) cakes_dump_draws();
             const bool ok = capture(renderer, shot_path);
             SDL_RenderPresent(renderer);
-            running = false;
+            loop.running = false;
             if (!ok) {
-                SDL_DestroyTexture(texture);
-                SDL_DestroyRenderer(renderer);
-                SDL_DestroyWindow(window);
-                SDL_Quit();
-                return 1;
+                loop.exit_code = 1;
+                return false;  // finish_loop(), at the caller, releases the session either way
             }
         } else
         {
             SDL_RenderPresent(renderer);
-            SDL_Delay(8);
+            frame_pause(8);
         }
     }
+    return loop.running;
+}
+
+// Releases everything the interactive session owns.  The desktop build reaches it after the
+// loop returns; the browser build reaches it from the main-loop cancel path, which is why the
+// teardown is a method rather than the loop's tail.
+void App::finish_loop() {
     std::printf("hidpi: %zu sheet(s) drawn from the x2 resources, %zu fallback(s) to 1x\n",
                 hidpi_sheets, hidpi_fallbacks);
     for (SDL_Texture* t : hud_textures) SDL_DestroyTexture(t);
@@ -621,7 +669,9 @@ int App::run_loop() {
     SDL_DestroyRenderer(renderer);
     SDL_DestroyWindow(window);
     SDL_Quit();
-    return 0;
+#ifdef __EMSCRIPTEN__
+    pple_web_session_ended();
+#endif
 }
 
 } // namespace pple::viewer

@@ -46,4 +46,9 @@ bool wma_decode(std::span<const std::uint8_t> data, PcmAudio& out, std::string& 
 // Writes the decoded audio as a plain RIFF/WAVE file, so a decode can be checked by ear.
 bool wav_write(const std::string& path, const PcmAudio& audio);
 
+// Reads a 16-bit PCM RIFF/WAVE buffer — what wav_write produces and what `pple-res audio-pack`
+// writes for the web build, which has no Media Foundation and therefore cannot decode the
+// shipped WMA resources itself (see the web/README.md).
+bool wav_read(std::span<const std::uint8_t> data, PcmAudio& out, std::string& error);
+
 }  // namespace pple

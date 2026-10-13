@@ -10,6 +10,33 @@
 
 namespace pple::viewer {
 
+// The interactive loop's own bookkeeping.  It is a member rather than a run_loop() local
+// because the browser build calls the loop body once per animation frame through
+// emscripten_set_main_loop instead of running a `while` — nothing here may live on a C stack
+// frame that outlives a frame.
+struct LoopState {
+    // --script-click "x,y;x,y" injects clicks in scene coordinates through the same handler the
+    // mouse uses (see loop.cpp).  A "wait:MS" entry only moves the clock the spacing is measured
+    // from; "move:x,y" injects a mouse move; "key:1" injects a key press.
+    struct ScriptedClick {
+        bool wait = false;
+        bool move = false;
+        float x = 0.0f, y = 0.0f;
+        int ms = 0;
+        SDL_Keycode key = 0;
+    };
+    std::vector<ScriptedClick> script_clicks;
+    std::size_t script_next = 0;
+    Uint64 script_last = 0;
+    Uint64 script_wait_until = 0;
+    std::size_t bench_done = 0;
+    Uint64 bench_start = 0;
+    Uint64 last_tick = 0;
+    float pairs_accumulator = 0.0f;
+    bool running = true;
+    int exit_code = 0;
+};
+
 // Owns the former main() state. Methods are grouped by responsibility in .cpp files.
 // SDL object lifetime and the resource-fetch adapter remain explicit in run()/run_loop().
 class App {
@@ -25,6 +52,14 @@ public:
     enum class SheetDpi { Base, Double };
 private:
     int run_loop();
+    // One frame of the interactive session: it returns false when the session is over (the
+    // player quit, or a --shot capture was written).  The desktop build loops on it; the
+    // browser build is driven by the page (see run_loop and finish_loop).
+    bool frame_step();
+    // Releases everything run_loop() owns.  The browser build reaches it from the cancel path
+    // rather than from a `return`, so it is a method and not the loop's tail.
+    void finish_loop();
+    LoopState loop;
     double refresh_total_ms = 0.0;
     double refresh_first_ms = 0.0;
     double build_ms = 0.0;
@@ -282,6 +317,10 @@ private:
     std::string pairs_click;
     std::string shot_path;
     std::string font_path = "C:\\Windows\\Fonts\\arial.ttf";
+    // The browser build's sound pack directory (--audio-dir): the WAV pack `pple-res audio-pack`
+    // writes, one <Event>.wav per sound.  The desktop build ignores it and decodes the WMA
+    // resources itself.
+    std::string audio_dir;
     std::string save_path;
     int width = 1400, height = 900;
     std::size_t frame = 0;

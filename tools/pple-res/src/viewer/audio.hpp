@@ -15,4 +15,12 @@ void play_shop_sfx(const std::string& event);
 void initialise_shop_audio(const Bundle& bundle, bool mute);
 void play_click_sfx(const pple::ClickResult& result);
 void initialise_pair_audio(const Bundle& bundle, bool mute);
+// Where the browser build looks for the WAV pack `pple-res audio-pack` writes, one <Event>.wav
+// per sound (--audio-dir).  It is ignored on the desktop, which decodes the WMA resources
+// directly; with no directory set the web build uses /audio and simply stays silent.
+void set_sfx_audio_dir(const std::string& dir);
+// The PCM for one audio resource, from whichever decoder this platform has: Media Foundation on
+// the desktop, the WAV pack in the browser.  `event` names the pack entry.
+bool load_audio_pcm(const Bundle& bundle, const Bundle::Slot& slot, const std::string& event,
+                    pple::PcmAudio& out, std::string& error);
 } // namespace pple::viewer
