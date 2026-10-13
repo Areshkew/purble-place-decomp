@@ -1,0 +1,84 @@
+# Builds the browser viewer with Emscripten and publishes it to GitHub Pages, so
+# https://areshkew.github.io/purble-place-decomp/ is the current page for the current main.
+#
+# The deployed site is the "select your own game files" build.  Purble Place's resource DLLs and
+# its .mui are Microsoft's files: they are not in this repository and they are not part of the
+# artifact, so the player picks their own copy in the browser and it never leaves their machine.
+# See tools/pple-res/web/README.md.
+name: Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deployment at a time; a newer push supersedes a build that is still running.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # Pinned to the Emscripten the web build was verified with, so the published page and
+  # build-wasm.ps1 produce the same runtime.  Bump this and the README together.
+  EM_VERSION: 6.0.12
+  # The setup action caches this folder, and with it the compiled SDL3/SDL3_ttf/libjpeg ports,
+  # which are the slow part of the first build.
+  EM_CACHE_FOLDER: emsdk-cache
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Emscripten ${{ env.EM_VERSION }}
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: ${{ env.EM_VERSION }}
+          actions-cache-folder: ${{ env.EM_CACHE_FOLDER }}
+
+      # The same source list and the same CMake options as build-wasm.ps1.  SDL3, SDL3_ttf and
+      # libjpeg come from Emscripten's own ports, so no third-party tree is needed here.
+      - name: Configure
+        run: |
+          emcmake cmake -S tools/pple-res -B build/web -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DPPLE_BUILD_VIEW=ON
+
+      - name: Build the page
+        run: cmake --build build/web
+
+      # The link writes pple-view-web.html beside the .js/.wasm/.data it loads.  The site root is
+      # that directory with the page renamed, so its relative URLs keep resolving, and the game
+      # files the page used to fetch from game/ in a local run are simply absent.
+      - name: Stage the site
+        run: |
+          mkdir -p _site
+          cp build/web/pple-view-web.html _site/index.html
+          cp build/web/pple-view-web.js _site/
+          cp build/web/pple-view-web.wasm _site/
+          cp build/web/pple-view-web.data _site/
+          touch _site/.nojekyll
+
+      - name: Report what will be published
+        run: ls -l _site
+
+      - uses: actions/configure-pages@v6
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v5

@@ -16,6 +16,10 @@ and libjpeg come from Emscripten's own ports, and the shipped `.jpg` sheets are 
 resource DLLs are **not** part of the build — the page asks the player for them and writes them
 into the Emscripten file system before `main` runs, so no game data is ever committed here.
 
+That build is published at <https://areshkew.github.io/purble-place-decomp/> by
+[.github/workflows/pages.yml](../../.github/workflows/pages.yml) on every push to `main`. The
+published page is the file-picker path, because the site carries no game files.
+
 ```powershell
 # emsdk is the whole toolchain; the script downloads nothing.
 git clone https://github.com/emscripten-core/emsdk D:\Development\emsdk

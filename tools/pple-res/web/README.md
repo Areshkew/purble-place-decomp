@@ -11,6 +11,31 @@
   user gesture (stable across headless full-screen/focus changes); `--key Escape` sends a key.
 - [smoke-node.mjs](smoke-node.mjs): seven local-asset wasm data checks, no renderer.
 - [fonts](fonts/): preloaded Noto Sans and its license.
+- [.github/workflows/pages.yml](../../../.github/workflows/pages.yml): the published page. Builds
+  the same target with Emscripten and deploys it to GitHub Pages.
+
+## The published page
+
+<https://areshkew.github.io/purble-place-decomp/> is this build, rebuilt and published by
+[pages.yml](../../../.github/workflows/pages.yml) on every push to `main` (and on
+`workflow_dispatch`). GitHub Pages has no game files, so the published page is the file-picker
+path: the player selects their own `PurblePlace.dll`, `PurblePlace2.dll`, `CardGames.dll` and
+`.mui`, and those files stay in the browser.
+
+The workflow runs the same CMake commands as [build-wasm.ps1](build-wasm.ps1), with the
+Emscripten version it pins as `EM_VERSION`, and then copies `pple-view-web.html` to `index.html`
+with the `.js`/`.wasm`/`.data` beside it. Nothing else is published: no game files, no sound
+pack, no `game/` folder. To stage the same four files locally:
+
+```powershell
+.\tools\pple-res\web\build-wasm.ps1          # writes build\web
+python -m http.server 8099 --directory build\web   # same page, same relative URLs
+```
+
+The generated page loads `pple-view-web.js` from a relative URL and lets Emscripten resolve the
+`.wasm` and `.data` beside it, so serving from a sub-path such as `/purble-place-decomp/` works
+unchanged. `?auto=1&assets=` remains a local/served convenience for the headless checks; Pages
+never uses it, because it would mean publishing the game's files.
 
 ## Normal play and diagnostics
 
