@@ -26,6 +26,9 @@ const width = Number(arg('width', '1400'));
 const height = Number(arg('height', '900'));
 const settle = Number(arg('settle', '4000'));
 const timeout = Number(arg('timeout', '180000'));
+const profileOut = arg('profile');
+const measure = Number(arg('measure', '5000'));
+const checkPerf = process.argv.includes('--check-perf');
 // --click x,y (viewport CSS pixels) may be repeated; they are sent as real mouse events, so the
 // game's own hit testing decides what they mean.
 const clicks = [];
@@ -119,6 +122,46 @@ try {
   }
   if (clicks.length) await sleep(settle);
 
+  if (profileOut && state === wanted && mode === 'live') {
+    await evaluate(`window.ppleFrames = []; window.ppleMeasure = true;
+      (function sample(last) { requestAnimationFrame(function(now) {
+        if (last) window.ppleFrames.push(now - last);
+        if (window.ppleMeasure) sample(now);
+      }); })(0);`);
+    await cdp.send('Profiler.enable');
+    await cdp.send('Profiler.start');
+    const measuredAt = Date.now();
+    await sleep(measure);
+    const profile = await cdp.send('Profiler.stop');
+    await evaluate('window.ppleMeasure = false');
+    const frames = await evaluate('window.ppleFrames');
+    frames.sort((a, b) => a - b);
+    const cpu = profile.result.profile;
+    const nodes = new Map(cpu.nodes.map(n => [n.id, n]));
+    const parents = new Map();
+    cpu.nodes.forEach(n => n.children?.forEach(c => parents.set(c, n.id)));
+    let loopUs = 0, clockUs = 0;
+    cpu.samples.forEach((id, i) => {
+      let inLoop = false, inClock = false;
+      while (id) {
+        const name = nodes.get(id).callFrame.functionName;
+        inLoop ||= name === 'MainLoop_runner';
+        inClock ||= name === '_emscripten_get_now';
+        id = parents.get(id);
+      }
+      if (inLoop) {
+        loopUs += cpu.timeDeltas[i];
+        if (inClock) clockUs += cpu.timeDeltas[i];
+      }
+    });
+    const stats = { count: frames.length, fps: frames.length * 1000 / (Date.now() - measuredAt),
+      median: frames[Math.floor(frames.length / 2)], p95: frames[Math.floor(frames.length * .95)],
+      max: frames.at(-1), loopMs: loopUs / 1000, clockMs: clockUs / 1000 };
+    writeFileSync(profileOut, JSON.stringify({ frames: stats, profile: cpu }));
+    console.log('frame performance: ' + JSON.stringify(stats));
+    if (checkPerf && (frames.length < 30 || clockUs > loopUs * .2))
+      throw new Error('frame pacing regression: too few frames or a clock-heavy main loop');
+  }
   const log = await evaluate("document.getElementById('log').textContent") || '';
   const title = await evaluate('document.title');
   const shot = await cdp.send('Page.captureScreenshot', {

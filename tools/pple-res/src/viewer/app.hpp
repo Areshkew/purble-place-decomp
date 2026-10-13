@@ -34,6 +34,7 @@ struct LoopState {
     Uint64 last_tick = 0;
     float pairs_accumulator = 0.0f;
     bool running = true;
+    bool web_pacing_ready = false;
     int exit_code = 0;
 };
 

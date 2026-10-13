@@ -57,6 +57,17 @@ Measured numbers and the honest gaps (PNG decoding differs from libpng by ±1 pe
 web path; the pack is fetched whole; no IDBFS save state; no high-pixel-density canvas) are in
 section 50 of `D:\Development\re\notes\purbleplace.md`.
 
+### Browser frame pacing
+
+VSync is enabled only after the browser main loop and first SDL event pump exist.
+Enabling it during startup made SDL fall back to simulated VSync, blocking the page
+with a clock-polling wait even though requestAnimationFrame already paces drawing.
+Desktop pacing is unchanged. `--bench` on web also stays rAF-paced.
+
+`smoke-browser.mjs --profile TRACE.json --measure 8000 --check-perf` records frame
+intervals and a DevTools CPU profile, and rejects a clock-heavy main loop. Headless
+software-rendered browser FPS is not a measurement of interactive GPU performance.
+
 ## Eye-card reveal reward (section 47)
 
 Matching the card carrying the golden eye now adds one usable sneak-peek token, capped at

@@ -260,6 +260,16 @@ bool App::frame_step() {
                 }
             }
         }
+#ifdef __EMSCRIPTEN__
+        if (!loop.web_pacing_ready) {
+            // SDL's GLES backend can only verify the swap interval after the main loop
+            // exists AND its first event pump has run. Setting VSync during startup
+            // fails that check and enables SDL's simulated VSync (a blocking spin wait).
+            // Always use rAF here, including --bench: setTimeout(0) would flood the tab.
+            SDL_SetRenderVSync(renderer, 1);
+            loop.web_pacing_ready = true;
+        }
+#endif
         int out_w = 0, out_h = 0;
         SDL_GetRenderOutputSize(renderer, &out_w, &out_h);
         // A click that advanced the level or let the Mixer reshuffle re-deals the art here, once

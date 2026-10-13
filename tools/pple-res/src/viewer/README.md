@@ -19,7 +19,7 @@ checks normal clicks, inventory pixels, saved tokens and token use/expiry in bot
 |---|---|
 | Process entry | [view_main.cpp](../view_main.cpp): constructs `App`, calls `run` (a long-lived `App` in the browser build, because the main loop unwinds `main`) |
 | Arguments, DLL/MUI loading, SDL setup, initial screen | [app.cpp](app.cpp): `App::run` |
-| Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown | [loop.cpp](loop.cpp): `run_loop` (setup and dispatch), `frame_step` (one frame; the browser calls it from `emscripten_set_main_loop`), `finish_loop`, `set_sheet_dpi`, `rebuild_current_screen` |
+| Events, 30 Hz updates, frame drawing, scripts, captures, benchmarks, teardown (web VSync only after the first event pump; rAF owns pacing) | [loop.cpp](loop.cpp): `run_loop` (setup and dispatch), `frame_step` (one frame; the browser calls it from `emscripten_set_main_loop`), `finish_loop`, `set_sheet_dpi`, `rebuild_current_screen` |
 | Mouse/script hit testing, hover (focus) and screen navigation | [input.cpp](input.cpp): `click_scene`, `update_hover` |
 | Menu, loading screen, drifting clouds | [menu.cpp](menu.cpp): `build_menu`, `build_loading`, `load_menu_clouds` |
 | Comfy Cakes: the room, its draw order, the engine's own clones | [cakes_screen.cpp](cakes_screen.cpp): `build_cakes`, `cakes_append`, `start_cakes`, `cakes_dump_draws` |

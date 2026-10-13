@@ -261,7 +261,9 @@ int App::run(int argc, char** argv) {
         SDL_Quit();
         return 1;
     }
+#ifndef __EMSCRIPTEN__
     SDL_SetRenderVSync(renderer, bench_frames > 0 ? 0 : 1);
+#endif
     std::printf("renderer: %s\n", SDL_GetRendererName(renderer));
 
     // The starting DPI mode.  The loop re-decides on every frame -- a resize switches it -- so
