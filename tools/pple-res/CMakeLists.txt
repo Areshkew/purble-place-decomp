@@ -216,7 +216,12 @@ if(EMSCRIPTEN AND PPLE_BUILD_VIEW)
   set(PPLE_WASM_MEMORY -sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864 -sSTACK_SIZE=5242880)
   add_executable(pple-view-web ${PPLE_VIEW_SOURCES} src/viewer/jpeg.cpp)
   target_link_libraries(pple-view-web PRIVATE pple_core ${PPLE_AUDIO_TARGET})
-  target_compile_options(pple-view-web PRIVATE -Wall -Wextra -Wpedantic -sUSE_LIBJPEG=1)
+  # A port has to be named on the compile line as well as the link line below.  emcc installs a
+  # port's headers into the sysroot for whichever step asks for it first, so a machine with a cold
+  # port cache failed at the first compile with "SDL3/SDL.h file not found" when SDL3 and SDL3_ttf
+  # were only linked.  libjpeg was already named in both places; these two were not.
+  target_compile_options(pple-view-web PRIVATE
+    -Wall -Wextra -Wpedantic -sUSE_SDL=3 -sUSE_SDL_TTF=3 -sUSE_LIBJPEG=1)
   target_link_options(pple-view-web PRIVATE
     -sUSE_SDL=3
     -sUSE_SDL_TTF=3
