@@ -30,6 +30,8 @@ never modified; the tools read the game's own files from your own installation a
   was recovered from, and 5 CTest suites plus per-screen regression runs check it against the
   shipped data.
 
+![The reconstructed main menu: the classroom background, the four building hot-spots, the drifting clouds and the Exit button](docs/screenshots/menu.png)
+
 ## See it running
 
 The fastest look at the finished result is the published browser build:
@@ -42,7 +44,21 @@ the site ships no Microsoft files: select your own `PurblePlace.dll`, `PurblePla
 `CardGames.dll` and `en-US\PurblePlace.exe.mui`, and the main menu appears with its four houses,
 its drifting clouds and each building's own hover art.
 
-**What you will see, screen by screen:**
+**Captures of this build** — the main menu above, then Purble Pairs, Purble Shop and Comfy Cakes:
+
+| | |
+|---|---|
+| ![Purble Pairs on Intermediate, every card art revealed, with the coin jar, the progress meter and the time bar](docs/screenshots/pairs.png) | ![Purble Shop on Intermediate: the assembled guess purble on the stage, the cabinet and the guess history strip](docs/screenshots/shop.png) |
+
+![Comfy Cakes on Intermediate: the six tool machines with their ingredient effects, the conveyor belt and wax paper, the target cake on the TV and the Purble Chef](docs/screenshots/cakes.png)
+
+These are captures of this build running with the game's own resources from a local installation,
+rendered at the size of the engine's double-DPI (`x2`) art, 1600x992 — the browser build lays out
+identically, it just draws smaller. The artwork in them is Microsoft's; only these rendered frames
+are part of the repository, never a resource file. `--menu`, `--pairs-reveal`, `--shop-guess` and an
+ordinary round of `--cakes` produce the four frames, all with `--no-debug --hidpi --shot`.
+
+**What each screen is:**
 
 | Screen | What it is |
 |---|---|
@@ -50,33 +66,6 @@ its drifting clouds and each building's own hover art.
 | Purble Pairs | A dealt board of the game's own card art, the jar and its coin animations, the Professor's tips, the progress meter and, on timed difficulties, the segmented time bar |
 | Comfy Cakes | The kitchen with six tool machines, the conveyor belt, the TV showing the target cake, the Purble Chef, and the dispatch chute with its box and trash can |
 | Purble Shop | The Build-a-Purble room: the cabinet and its shelves, the curtain over the mystery head, the guess purble, the deduction check boxes and the guess history strip |
-
-<!--
-  SCREENSHOT SLOTS — maintainer note, deliberately not rendered on GitHub.
-
-  This repository commits no gameplay captures: every pixel of a capture is Microsoft's artwork,
-  and the project's stated rule is that none of the game's art is in the tree (see AGENTS.md and
-  .github/workflows/pages.yml). The demo page above is the visual proof until that call is
-  revisited.
-
-  If the captures are ever committed, the four images this section would feature are
-
-    docs/screenshots/menu.png    the main menu, its four houses and the drifting clouds
-    docs/screenshots/pairs.png   Purble Pairs, Advanced: the board, the jar, the time bar
-    docs/screenshots/cakes.png   Comfy Cakes, Beginner: the belt, the TV target and the Chef
-    docs/screenshots/shop.png    Purble Shop, Intermediate: the cabinet and the guess purble
-
-  written as one two-column Markdown image table with alt text naming the screen. A game-area
-  capture is one command, with your own installation path in $d:
-
-    .\build\pple-res\pple-view.exe "$d\PurblePlace.dll" "$d\PurblePlace2.dll" "$d\CardGames.dll" `
-      --menu --mui "$d\en-US\PurblePlace.exe.mui" --mute --shot menu.ppm
-
-  --shot writes a PPM at one pixel per game pixel with the diagnostic strip above it; crop the
-  strip off (its height is printed in the run's "HUD strip N px" line) and convert with
-  C:\re\traces\cpp\ppm2png.py, or add --no-debug to drop the strip from the capture. Do not
-  hotlink C:\re\traces\cpp, which is not part of the repository.
--->
 
 ## What is this project?
 
@@ -394,6 +383,7 @@ ctest --test-dir build/pple-res --output-on-failure
 
 | Path | What lives there |
 |---|---|
+| `docs/screenshots` | The four frames the README shows, captured from this build at the engine's `x2` art size with `--no-debug --hidpi --shot` |
 | `tools/pple-res/src`, `include/pple` | The core: PE resource reader, CAB/MSZIP, DEFLATE, PNG, XML, sprite scenes, skeletal movies, the animation timeline, the three game models (`concentration.cpp`, `cakes.cpp`, `shop.cpp`), MUI, RGMH, SHA-256 — about 20.6k lines, standard library only |
 | `tools/pple-res/src/viewer` | The SDL3 viewer, split by screen and ownership: menu and loading, Pairs setup/render/effects/state, Comfy Cakes room, play, tools, transport, clock and Chef, Purble Shop room and flow, shared overlays, tips, hover and input. Start with its [module map](tools/pple-res/src/viewer/README.md) |
 | `tools/pple-res/tests` | The CTest suites plus the local-assets regression scripts that drive the viewer in both art modes |
@@ -466,9 +456,11 @@ directory, a game-folder path and a fresh trace directory.
 
 ### Legal
 
-- **No Microsoft assets are distributed here.** No DLL, `.mui`, image, audio file, cabinet
-  archive or other game resource is in this repository, and none is part of the published page.
-  You must own a copy of Purble Place and point the tools at it.
+- **No Microsoft resource files are distributed here.** No DLL, `.mui`, sheet, audio file,
+  cabinet archive or other game resource is in this repository, and none is part of the published
+  page — the tools read the copy you own. The four captures under `docs/screenshots/` are rendered
+  frames of this reconstruction running with those files, kept as documentation of the result;
+  they are the only place the original artwork appears in the repository.
 - **No original source code is distributed or reproduced here**, and the shipped binaries are not
   patched or modified by anything in this project. Recovered function names and offsets appear as
   analysis labels and documentation.
